@@ -2,15 +2,26 @@ import SwiftUI
 
 struct LeftPanelView: View {
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 18) {
             Spacer()
+
+            HStack {
+                OpenClawNeonWidget()
+                    .frame(width: 235, height: 130)
+                    .rotationEffect(.degrees(-6))
+                Spacer()
+            }
+            .padding(.leading, 4)
+
+            Spacer()
+                .frame(height: 6)
 
             // Hero: Analog Clock (Size 3 — Large)
             AnalogClockView()
                 .frame(width: 320, height: 320)
 
             Spacer()
-                .frame(height: 16)
+                .frame(height: 22)
 
             // Bitcoin Widget (Size 1 — Small)
             BitcoinWidget()
