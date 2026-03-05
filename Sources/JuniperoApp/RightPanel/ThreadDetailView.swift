@@ -6,6 +6,7 @@ import AppKit
 struct ThreadDetailView: View {
     @EnvironmentObject var threadStore: ThreadStore
     let threadId: UUID
+    @FocusState private var isReplyFocused: Bool
 
     private var thread: ChatThread? {
         threadStore.threads.first(where: { $0.id == threadId })
@@ -133,6 +134,7 @@ struct ThreadDetailView: View {
                     .font(.system(size: 13))
                     .foregroundColor(Color.black.opacity(0.95))
                     .lineLimit(1...5)
+                    .focused($isReplyFocused)
                     .padding(10)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
@@ -176,6 +178,15 @@ struct ThreadDetailView: View {
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
         .onAppear {
             threadStore.markThreadRead(threadId)
+            DispatchQueue.main.async {
+                isReplyFocused = true
+            }
+        }
+        .onChange(of: threadStore.selectedThreadId) { selected in
+            guard selected == threadId else { return }
+            DispatchQueue.main.async {
+                isReplyFocused = true
+            }
         }
     }
 
@@ -183,6 +194,9 @@ struct ThreadDetailView: View {
         let text = replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         threadStore.sendMessage(in: threadId, text: text)
+        DispatchQueue.main.async {
+            isReplyFocused = true
+        }
     }
 
     private var replyTextBinding: Binding<String> {

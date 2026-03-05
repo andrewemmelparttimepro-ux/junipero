@@ -329,6 +329,7 @@ struct MSNHeaderBar: View {
 private struct PopupComposerCard: View {
     @EnvironmentObject var threadStore: ThreadStore
     @Binding var draftText: String
+    @FocusState private var isInputFocused: Bool
     let onClose: () -> Void
     let onSend: () -> Void
 
@@ -357,6 +358,7 @@ private struct PopupComposerCard: View {
                         .fill(Color.white.opacity(0.98))
                 )
                 .lineLimit(1...5)
+                .focused($isInputFocused)
                 .onSubmit {
                     onSend()
                 }
@@ -403,5 +405,10 @@ private struct PopupComposerCard: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 0.6)
         )
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
+        .onAppear {
+            DispatchQueue.main.async {
+                isInputFocused = true
+            }
+        }
     }
 }
