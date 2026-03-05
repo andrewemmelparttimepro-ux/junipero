@@ -90,6 +90,8 @@ struct RightPanelView: View {
 struct MSNHeaderBar: View {
     @EnvironmentObject var threadStore: ThreadStore
     @EnvironmentObject var bootstrap: JuniperoBootstrap
+    @EnvironmentObject var updateManager: UpdateManager
+    @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
 
     var body: some View {
         HStack {
@@ -204,6 +206,10 @@ struct MSNHeaderBar: View {
             actionButton("Test") {
                 Task { await bootstrap.runFullHealthTest() }
             }
+            actionButton("Updates") {
+                sparkleUpdater.checkForUpdates()
+                Task { await updateManager.checkForUpdates() }
+            }
             capabilityMenu
             if threadStore.unreadThreadCount > 0 {
                 Text(threadStore.unreadThreadCount > 1 ? "\(threadStore.unreadThreadCount) NEW" : "NEW")
@@ -237,6 +243,10 @@ struct MSNHeaderBar: View {
                 Button("Heal") { Task { await bootstrap.refreshRuntimeStatus() } }
                 Button("Support") { Task { await bootstrap.exportSupportBundle() } }
                 Button("Full Test") { Task { await bootstrap.runFullHealthTest() } }
+                Button("Check Updates") {
+                    sparkleUpdater.checkForUpdates()
+                    Task { await updateManager.checkForUpdates() }
+                }
                 Divider()
                 Button("I'm an idiot") { bootstrap.setLiabilityMode(.idiot) }
                 Button("It's my fault") { bootstrap.setLiabilityMode(.myFault) }

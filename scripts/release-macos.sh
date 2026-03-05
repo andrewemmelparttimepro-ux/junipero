@@ -60,6 +60,16 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$PRODUCT_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
+# Embed Sparkle framework when present (SwiftPM artifact path)
+SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -name Sparkle.framework -type d | head -n 1 || true)"
+if [[ -n "${SPARKLE_FRAMEWORK:-}" && -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "==> Embedding Sparkle framework"
+  mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+  rsync -a "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
+  # Ensure executable can load frameworks from Contents/Frameworks.
+  install_name_tool -add_rpath @loader_path/../Frameworks "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE" 2>/dev/null || true
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
