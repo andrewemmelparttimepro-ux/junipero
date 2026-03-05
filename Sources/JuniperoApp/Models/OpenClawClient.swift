@@ -388,13 +388,14 @@ actor OpenClawClient {
     }
 
     private func sendViaOllama(messages: [InputMessage], config: OpenClawConfig) async throws -> (text: String, model: String, latencyMs: Int) {
+        var modelToUse = config.ollamaModel
         let endpointString = config.ollamaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/chat"
         guard let url = URL(string: endpointString) else {
             throw OpenClawClientError.invalidURL(endpointString)
         }
 
         var lastError: Error?
-        let maxAttempts = 2
+        let maxAttempts = 3
         for attempt in 1...maxAttempts {
             do {
                 var request = URLRequest(url: url)
@@ -402,7 +403,7 @@ actor OpenClawClient {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
                 let payload: [String: Any] = [
-                    "model": config.ollamaModel,
+                    "model": modelToUse,
                     "stream": false,
                     "messages": messages.map { ["role": $0.role, "content": $0.content] }
                 ]
@@ -417,6 +418,17 @@ actor OpenClawClient {
                 }
                 if !(200..<300).contains(http.statusCode) {
                     let message = Self.extractErrorMessage(from: data)
+                    if http.statusCode == 404,
+                        message.localizedCaseInsensitiveContains("model"),
+                        message.localizedCaseInsensitiveContains("not found"),
+                        let discovered = try? await discoverInstalledOllamaModel(baseURL: config.ollamaBaseURL),
+                        !discovered.isEmpty,
+                        discovered != modelToUse
+                    {
+                        await ChatDiagnostics.shared.log("ollama model missing (\(modelToUse)); auto-switching to \(discovered)")
+                        modelToUse = discovered
+                        continue
+                    }
                     throw OpenClawClientError.serverStatus(http.statusCode, message)
                 }
 
@@ -432,7 +444,7 @@ actor OpenClawClient {
                 if clean.isEmpty {
                     throw OpenClawClientError.emptyResponse
                 }
-                return (clean, "ollama/\(config.ollamaModel)", latency)
+                return (clean, "ollama/\(modelToUse)", latency)
             } catch {
                 lastError = error
                 if Self.shouldCooldown(error) {
@@ -447,6 +459,36 @@ actor OpenClawClient {
             }
         }
         throw lastError ?? OpenClawClientError.decodeFailed
+    }
+
+    private func discoverInstalledOllamaModel(baseURL: String) async throws -> String {
+        let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/tags"
+        guard let url = URL(string: endpoint) else {
+            throw OpenClawClientError.invalidURL(endpoint)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw OpenClawClientError.decodeFailed
+        }
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let models = root["models"] as? [[String: Any]]
+        else {
+            throw OpenClawClientError.decodeFailed
+        }
+
+        let names = models.compactMap { $0["name"] as? String }
+        let preferred = ["qwen2.5-coder:7b", "qwen2.5:7b", "llama3.1:8b", "qwen2.5-coder", "llama3.1"]
+        for candidate in preferred where names.contains(candidate) {
+            return candidate
+        }
+        guard let first = names.first else {
+            throw OpenClawClientError.emptyResponse
+        }
+        return first
     }
 
     private func buildRequest(url: URL, messages: [InputMessage], config: OpenClawConfig, modelOverride: String?) throws -> URLRequest {
