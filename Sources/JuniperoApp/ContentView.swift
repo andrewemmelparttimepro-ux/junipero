@@ -5,20 +5,22 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Linen/cream background
+            // San Junipero-inspired dusk background.
             LinearGradient(
                 colors: [
-                    Color(red: 0.98, green: 0.96, blue: 0.93),
-                    Color(red: 0.96, green: 0.94, blue: 0.90),
-                    Color(red: 0.97, green: 0.95, blue: 0.91),
+                    Color(red: 0.03, green: 0.05, blue: 0.16),
+                    Color(red: 0.06, green: 0.10, blue: 0.24),
+                    Color(red: 0.11, green: 0.07, blue: 0.24),
+                    Color(red: 0.09, green: 0.16, blue: 0.31),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
-            // Subtle linen texture overlay
-            LinenTexture()
+            AtmosphereHaze()
+                .ignoresSafeArea()
+            RetroGridOverlay()
                 .ignoresSafeArea()
 
             if threadStore.allThreadsMode {
@@ -58,22 +60,66 @@ struct ContentView: View {
     }
 }
 
-// Subtle linen texture effect
-struct LinenTexture: View {
+struct AtmosphereHaze: View {
     var body: some View {
-        Rectangle()
-            .fill(
+        ZStack {
+            RadialGradient(
+                colors: [
+                    Color(red: 0.10, green: 0.62, blue: 0.92).opacity(0.30),
+                    Color.clear
+                ],
+                center: .topLeading,
+                startRadius: 10,
+                endRadius: 540
+            )
+            .offset(x: -120, y: -120)
+
+            RadialGradient(
+                colors: [
+                    Color(red: 0.98, green: 0.22, blue: 0.58).opacity(0.22),
+                    Color.clear
+                ],
+                center: .bottomTrailing,
+                startRadius: 10,
+                endRadius: 520
+            )
+            .offset(x: 90, y: 110)
+        }
+    }
+}
+
+struct RetroGridOverlay: View {
+    var body: some View {
+        GeometryReader { geo in
+            let step: CGFloat = 34
+            Path { path in
+                var y: CGFloat = 0
+                while y <= geo.size.height {
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: geo.size.width, y: y))
+                    y += step
+                }
+                var x: CGFloat = 0
+                while x <= geo.size.width {
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: geo.size.height))
+                    x += step
+                }
+            }
+            .stroke(Color.white.opacity(0.035), lineWidth: 0.7)
+            .overlay(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(0.02),
-                        Color.brown.opacity(0.02),
-                        Color.white.opacity(0.01),
+                        Color.white.opacity(0.06),
+                        Color.clear,
+                        Color.white.opacity(0.04),
                     ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
+                .blendMode(.softLight)
             )
-            .blendMode(.multiply)
+        }
     }
 }
 
