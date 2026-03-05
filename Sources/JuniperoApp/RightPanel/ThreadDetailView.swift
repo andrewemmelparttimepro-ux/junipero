@@ -203,11 +203,10 @@ struct ThreadDetailView: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
         )
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
-        .dropDestination(for: URL.self) { urls, _ in
-            threadStore.handleDroppedURLs(urls, threadId: threadId)
-            return true
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
+        .background {
+            FileDropCatcher(isTargeted: $isDropTargeted) { urls in
+                threadStore.handleDroppedURLs(urls, threadId: threadId)
+            }
         }
         .onAppear {
             threadStore.markThreadRead(threadId)
@@ -317,7 +316,7 @@ private struct MessageBubble: View {
     @ViewBuilder
     private func bubble(text: String, isUser: Bool) -> some View {
         let displayText = MSNEmoji.convert(text)
-        Text(displayText)
+        Text(linkified(displayText))
             .font(.system(size: 13))
             .foregroundColor(Color.black.opacity(0.93))
             .textSelection(.enabled)
@@ -370,6 +369,21 @@ private struct MessageBubble: View {
                     .offset(y: 14)
                 }
             }
+    }
+
+    private func linkified(_ text: String) -> AttributedString {
+        let mutable = NSMutableAttributedString(string: text)
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            detector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
+                guard let result, let url = result.url else { return }
+                mutable.addAttribute(.link, value: url, range: result.range)
+            }
+        }
+        if let attributed = try? AttributedString(mutable, including: \.foundation) {
+            return attributed
+        }
+        return AttributedString(text)
     }
 
     private func copyToClipboard(_ text: String) {
