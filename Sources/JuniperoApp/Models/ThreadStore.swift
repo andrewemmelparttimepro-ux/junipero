@@ -478,31 +478,33 @@ final class ThreadStore: ObservableObject {
         Task {
             let urls = await Self.extractDroppedURLs(from: providers)
             guard !urls.isEmpty else { return }
-
-            var added: [ChatAttachment] = []
-            for url in urls {
-                if let attachment = Self.ingestAttachment(from: url) {
-                    added.append(attachment)
-                }
-            }
-            guard !added.isEmpty else {
-                await MainActor.run {
-                    self.lastErrorText = "Couldn't attach dropped files."
-                }
-                return
-            }
-
             await MainActor.run {
-                if let threadId {
-                    var items = self.threadAttachments[threadId] ?? []
-                    items.append(contentsOf: added)
-                    self.threadAttachments[threadId] = Self.dedupAttachments(items)
-                } else {
-                    self.popupAttachments = Self.dedupAttachments(self.popupAttachments + added)
-                }
-                self.scheduleDraftSnapshotSave()
+                self.handleDroppedURLs(urls, threadId: threadId)
             }
         }
+    }
+
+    func handleDroppedURLs(_ urls: [URL], threadId: UUID?) {
+        var added: [ChatAttachment] = []
+        for url in urls {
+            if let attachment = Self.ingestAttachment(from: url) {
+                added.append(attachment)
+            }
+        }
+        guard !added.isEmpty else {
+            lastErrorText = "Couldn't attach dropped files. Max size is 25 MB each."
+            return
+        }
+
+        if let threadId {
+            var items = threadAttachments[threadId] ?? []
+            items.append(contentsOf: added)
+            threadAttachments[threadId] = Self.dedupAttachments(items)
+        } else {
+            popupAttachments = Self.dedupAttachments(popupAttachments + added)
+        }
+        lastErrorText = nil
+        scheduleDraftSnapshotSave()
     }
 
     func markThreadRead(_ threadId: UUID) {

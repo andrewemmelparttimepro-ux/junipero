@@ -444,6 +444,12 @@ private struct PopupComposerCard: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 0.6)
         )
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
+        .dropDestination(for: URL.self) { urls, _ in
+            threadStore.handleDroppedURLs(urls, threadId: nil)
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
         .onAppear {
             DispatchQueue.main.async {
                 isInputFocused = true

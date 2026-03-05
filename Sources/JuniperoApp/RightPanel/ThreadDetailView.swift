@@ -203,6 +203,12 @@ struct ThreadDetailView: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
         )
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
+        .dropDestination(for: URL.self) { urls, _ in
+            threadStore.handleDroppedURLs(urls, threadId: threadId)
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
         .onAppear {
             threadStore.markThreadRead(threadId)
             DispatchQueue.main.async {
