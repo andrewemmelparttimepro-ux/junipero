@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct AnalogClockView: View {
     @State private var currentTime = Date()
@@ -12,47 +15,39 @@ struct AnalogClockView: View {
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
             ZStack {
-                // Premium ice-blue ring.
                 Circle()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.62, green: 0.76, blue: 0.96),
-                                Color(red: 0.72, green: 0.84, blue: 0.98),
-                                Color(red: 0.52, green: 0.68, blue: 0.92),
+                                Color(red: 0.67, green: 0.79, blue: 0.96),
+                                Color(red: 0.56, green: 0.72, blue: 0.93),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .frame(width: size, height: size)
-                    .shadow(color: Color(red: 0.24, green: 0.56, blue: 0.92).opacity(0.40), radius: 16, x: 0, y: 8)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    )
+                    .shadow(color: Color(red: 0.52, green: 0.74, blue: 0.98).opacity(0.35), radius: 12, x: 0, y: 6)
 
-                // Inner bezel.
                 Circle()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.20, green: 0.36, blue: 0.66),
-                                Color(red: 0.10, green: 0.22, blue: 0.46),
+                                Color(red: 0.22, green: 0.34, blue: 0.60),
+                                Color(red: 0.12, green: 0.22, blue: 0.44),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: size * 0.92, height: size * 0.92)
+                    .frame(width: size * 0.93, height: size * 0.93)
 
-                // Clock face.
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.08, green: 0.14, blue: 0.34),
-                                Color(red: 0.03, green: 0.07, blue: 0.22),
+                                Color(red: 0.08, green: 0.14, blue: 0.36),
+                                Color(red: 0.03, green: 0.07, blue: 0.20),
                                 Color(red: 0.01, green: 0.03, blue: 0.12),
                             ],
                             center: .center,
@@ -62,40 +57,34 @@ struct AnalogClockView: View {
                     )
                     .frame(width: size * 0.88, height: size * 0.88)
 
-                // Glass reflection.
-                Ellipse()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.06),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .center
+                // If a reference image is dropped in ~/.junipero/clock-reference.(png|jpg|jpeg), use it for exact art.
+                if let reference = ClockReferenceLoader.load() {
+                    Image(nsImage: reference)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: size * 0.68, height: size * 0.68)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.8))
+                        .shadow(color: Color(red: 0.31, green: 0.92, blue: 0.96).opacity(0.30), radius: 8)
+                } else {
+                    NeonLobsterGlyph()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.34, green: 0.94, blue: 0.98),
+                                    Color(red: 0.98, green: 0.34, blue: 0.48),
+                                    Color(red: 0.34, green: 0.94, blue: 0.98),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            style: StrokeStyle(lineWidth: 2.0, lineCap: .round, lineJoin: .round)
                         )
-                    )
-                    .frame(width: size * 0.75, height: size * 0.45)
-                    .offset(y: -size * 0.12)
+                        .frame(width: size * 0.58, height: size * 0.58)
+                        .shadow(color: Color(red: 0.31, green: 0.92, blue: 0.96).opacity(0.55), radius: 6)
+                        .shadow(color: Color(red: 0.98, green: 0.35, blue: 0.50).opacity(0.35), radius: 8)
+                }
 
-                // Neon crest in the center (messenger-era neon palette).
-                NeonCrest()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.32, green: 0.94, blue: 0.96),
-                                Color(red: 0.96, green: 0.24, blue: 0.52),
-                                Color(red: 0.30, green: 0.90, blue: 0.98),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
-                    )
-                    .frame(width: size * 0.52, height: size * 0.52)
-                    .shadow(color: Color(red: 0.30, green: 0.96, blue: 0.96).opacity(0.55), radius: 6)
-                    .shadow(color: Color(red: 0.98, green: 0.30, blue: 0.56).opacity(0.30), radius: 10)
-
-                // Hour markers
                 ForEach(0..<12) { i in
                     let angle = Double(i) * 30.0 - 90.0
                     let isMainHour = i % 3 == 0
@@ -119,14 +108,13 @@ struct AnalogClockView: View {
                     }
                     .stroke(
                         isMainHour
-                            ? Color(red: 0.72, green: 0.98, blue: 1.0)
-                            : Color(red: 0.58, green: 0.74, blue: 0.92),
+                            ? Color(red: 0.80, green: 0.95, blue: 1.0)
+                            : Color(red: 0.56, green: 0.72, blue: 0.90),
                         style: StrokeStyle(lineWidth: markerWidth, lineCap: .round)
                     )
-                    .shadow(color: isMainHour ? Color(red: 0.44, green: 0.92, blue: 1.0).opacity(0.55) : .clear, radius: 4)
+                    .shadow(color: isMainHour ? Color(red: 0.50, green: 0.90, blue: 1.0).opacity(0.45) : .clear, radius: 3)
                 }
 
-                // Minute tick marks
                 ForEach(0..<60) { i in
                     if i % 5 != 0 {
                         let angle = Double(i) * 6.0 - 90.0
@@ -146,7 +134,7 @@ struct AnalogClockView: View {
                                 y: center.y + outerRadius * sinAngle
                             ))
                         }
-                        .stroke(Color.white.opacity(0.17), style: StrokeStyle(lineWidth: 0.5, lineCap: .round))
+                        .stroke(Color.white.opacity(0.2), style: StrokeStyle(lineWidth: 0.5, lineCap: .round))
                     }
                 }
 
@@ -162,51 +150,46 @@ struct AnalogClockView: View {
                     .padding(.horizontal, size * 0.03)
                     .padding(.vertical, size * 0.01)
                     .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.20))
+                        Capsule().fill(Color.black.opacity(0.22))
                     )
                     .offset(y: size * 0.19)
 
-                // Hour hand
                 ClockHand(
                     angle: hourAngle,
                     length: size * 0.22,
                     width: 4.5,
-                    color: Color(red: 0.88, green: 0.96, blue: 1.0),
+                    color: Color(red: 0.86, green: 0.94, blue: 1.0),
                     center: center,
                     tailLength: size * 0.05
                 )
                 .shadow(color: .black.opacity(0.5), radius: 3, x: 1, y: 1)
 
-                // Minute hand
                 ClockHand(
                     angle: minuteAngle,
                     length: size * 0.32,
                     width: 3.0,
-                    color: Color(red: 0.84, green: 0.92, blue: 1.0),
+                    color: Color(red: 0.80, green: 0.90, blue: 0.98),
                     center: center,
                     tailLength: size * 0.07
                 )
                 .shadow(color: .black.opacity(0.5), radius: 2, x: 1, y: 1)
 
-                // Second hand
                 ClockHand(
                     angle: secondAngle,
                     length: size * 0.35,
                     width: 1.2,
-                    color: Color(red: 0.96, green: 0.26, blue: 0.42),
+                    color: Color(red: 0.94, green: 0.30, blue: 0.32),
                     center: center,
                     tailLength: size * 0.08
                 )
-                .shadow(color: Color(red: 0.96, green: 0.26, blue: 0.42).opacity(0.35), radius: 2)
+                .shadow(color: Color(red: 0.94, green: 0.30, blue: 0.32).opacity(0.3), radius: 2)
 
-                // Center cap
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.82, green: 0.94, blue: 1.0),
-                                Color(red: 0.48, green: 0.66, blue: 0.88),
+                                Color(red: 0.80, green: 0.92, blue: 1.0),
+                                Color(red: 0.48, green: 0.64, blue: 0.86),
                             ],
                             center: .center,
                             startRadius: 0,
@@ -216,9 +199,8 @@ struct AnalogClockView: View {
                     .frame(width: size * 0.05, height: size * 0.05)
                     .shadow(color: .black.opacity(0.3), radius: 2)
 
-                // Inner center dot
                 Circle()
-                    .fill(Color(red: 0.98, green: 0.26, blue: 0.46))
+                    .fill(Color(red: 0.94, green: 0.30, blue: 0.32))
                     .frame(width: size * 0.015, height: size * 0.015)
             }
         }
@@ -253,26 +235,52 @@ struct AnalogClockView: View {
     }
 }
 
-struct NeonCrest: Shape {
+private enum ClockReferenceLoader {
+    static func load() -> NSImage? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let base = home.appendingPathComponent(".junipero", isDirectory: true)
+        let candidates = [
+            "clock-reference.png",
+            "clock-reference.jpg",
+            "clock-reference.jpeg"
+        ]
+        for name in candidates {
+            let path = base.appendingPathComponent(name).path
+            if let image = NSImage(contentsOfFile: path) {
+                return image
+            }
+        }
+        return nil
+    }
+}
+
+struct NeonLobsterGlyph: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
         let c = CGPoint(x: rect.midX, y: rect.midY)
         let w = rect.width
         let h = rect.height
 
-        p.addEllipse(in: CGRect(x: c.x - w * 0.14, y: c.y - h * 0.12, width: w * 0.28, height: h * 0.32))
-        p.addArc(center: CGPoint(x: c.x - w * 0.16, y: c.y - h * 0.20), radius: w * 0.12, startAngle: .degrees(20), endAngle: .degrees(240), clockwise: false)
-        p.addArc(center: CGPoint(x: c.x + w * 0.16, y: c.y - h * 0.20), radius: w * 0.12, startAngle: .degrees(-60), endAngle: .degrees(160), clockwise: false)
-        p.move(to: CGPoint(x: c.x, y: c.y - h * 0.20))
-        p.addLine(to: CGPoint(x: c.x, y: c.y + h * 0.24))
-        p.move(to: CGPoint(x: c.x - w * 0.07, y: c.y + h * 0.08))
-        p.addLine(to: CGPoint(x: c.x + w * 0.07, y: c.y + h * 0.08))
-        p.move(to: CGPoint(x: c.x - w * 0.22, y: c.y - h * 0.05))
-        p.addLine(to: CGPoint(x: c.x + w * 0.22, y: c.y - h * 0.05))
-        p.move(to: CGPoint(x: c.x - w * 0.24, y: c.y + h * 0.02))
-        p.addLine(to: CGPoint(x: c.x + w * 0.24, y: c.y + h * 0.02))
-        p.move(to: CGPoint(x: c.x - w * 0.18, y: c.y + h * 0.18))
-        p.addLine(to: CGPoint(x: c.x + w * 0.18, y: c.y + h * 0.18))
+        p.addEllipse(in: CGRect(x: c.x - w * 0.12, y: c.y - h * 0.08, width: w * 0.24, height: h * 0.28))
+        p.addRoundedRect(in: CGRect(x: c.x - w * 0.09, y: c.y + h * 0.08, width: w * 0.18, height: h * 0.28), cornerSize: CGSize(width: 6, height: 6))
+
+        p.move(to: CGPoint(x: c.x - w * 0.08, y: c.y + h * 0.12))
+        p.addLine(to: CGPoint(x: c.x + w * 0.08, y: c.y + h * 0.12))
+        p.move(to: CGPoint(x: c.x - w * 0.08, y: c.y + h * 0.20))
+        p.addLine(to: CGPoint(x: c.x + w * 0.08, y: c.y + h * 0.20))
+        p.move(to: CGPoint(x: c.x - w * 0.08, y: c.y + h * 0.28))
+        p.addLine(to: CGPoint(x: c.x + w * 0.08, y: c.y + h * 0.28))
+
+        p.addArc(center: CGPoint(x: c.x - w * 0.22, y: c.y - h * 0.14), radius: w * 0.14, startAngle: .degrees(28), endAngle: .degrees(240), clockwise: false)
+        p.addArc(center: CGPoint(x: c.x + w * 0.22, y: c.y - h * 0.14), radius: w * 0.14, startAngle: .degrees(-60), endAngle: .degrees(152), clockwise: false)
+
+        p.addArc(center: CGPoint(x: c.x - w * 0.28, y: c.y - h * 0.22), radius: w * 0.10, startAngle: .degrees(20), endAngle: .degrees(220), clockwise: false)
+        p.addArc(center: CGPoint(x: c.x + w * 0.28, y: c.y - h * 0.22), radius: w * 0.10, startAngle: .degrees(-40), endAngle: .degrees(160), clockwise: false)
+
+        p.move(to: CGPoint(x: c.x - w * 0.08, y: c.y - h * 0.28))
+        p.addLine(to: CGPoint(x: c.x - w * 0.02, y: c.y - h * 0.18))
+        p.move(to: CGPoint(x: c.x + w * 0.08, y: c.y - h * 0.28))
+        p.addLine(to: CGPoint(x: c.x + w * 0.02, y: c.y - h * 0.18))
 
         return p
     }
@@ -291,11 +299,9 @@ struct ClockHand: View {
             let cosAngle = cos(angle * .pi / 180)
             let sinAngle = sin(angle * .pi / 180)
 
-            // Tail (opposite direction)
             let tailX = center.x - tailLength * cosAngle
             let tailY = center.y - tailLength * sinAngle
 
-            // Tip
             let tipX = center.x + length * cosAngle
             let tipY = center.y + length * sinAngle
 
