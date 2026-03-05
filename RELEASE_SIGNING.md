@@ -23,6 +23,7 @@ From repo root:
 ```bash
 export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
 export NOTARY_PROFILE="junipero-notary"
+export APPCAST_URL="https://raw.githubusercontent.com/andrewemmelparttimepro-ux/junipero/main/appcast.xml"
 ./scripts/release-macos.sh
 ```
 
@@ -46,5 +47,10 @@ Short answer: not for seamless public distribution.
 - Share unsigned/ad-hoc builds for technical testers.
 - Users can right-click `Open` and bypass warnings manually.
 - Users can build from source locally.
+
+## Sparkle In-App Updates
+- Packaged builds now write `SUFeedURL` into app `Info.plist` (from `APPCAST_URL`).
+- Keep `appcast.xml` published at that URL and update it each release.
+- For production-grade one-click updates, publish Sparkle-signed enclosures (`sparkle:edSignature`) generated from your Sparkle private key.
 
 These options are fine for testing, not for polished public release.

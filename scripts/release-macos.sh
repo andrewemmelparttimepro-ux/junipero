@@ -18,6 +18,8 @@ APP_EXECUTABLE="${APP_EXECUTABLE:-Junipero}"
 SWIFT_PRODUCT="${SWIFT_PRODUCT:-JuniperoApp}"
 DEVELOPER_ID_APP_CERT="${DEVELOPER_ID_APP_CERT:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+APPCAST_URL="${APPCAST_URL:-}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 
 if [[ -z "$DEVELOPER_ID_APP_CERT" ]]; then
   echo "Missing DEVELOPER_ID_APP_CERT env var."
@@ -43,6 +45,7 @@ APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
 APP_ZIP="$RELEASE_DIR/$APP_NAME-notarize.zip"
 DMG_PATH="$RELEASE_DIR/$APP_NAME-$VERSION.dmg"
 PRODUCT_PATH="$ROOT_DIR/.build/release/$SWIFT_PRODUCT"
+DMG_STAGE="$BUILD_DIR/dmg-stage"
 
 rm -rf "$BUILD_DIR" "$RELEASE_DIR"
 mkdir -p "$BUILD_DIR" "$RELEASE_DIR"
@@ -88,6 +91,16 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+if [[ -n "$APPCAST_URL" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $APPCAST_URL" "$APP_BUNDLE/Contents/Info.plist" || \
+    /usr/libexec/PlistBuddy -c "Set :SUFeedURL $APPCAST_URL" "$APP_BUNDLE/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" "$APP_BUNDLE/Contents/Info.plist" || true
+fi
+if [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist" || \
+    /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist"
+fi
+
 echo "==> Signing app"
 codesign --force --deep --options runtime --timestamp --sign "$DEVELOPER_ID_APP_CERT" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
@@ -99,7 +112,10 @@ xcrun stapler staple "$APP_BUNDLE"
 xcrun stapler validate "$APP_BUNDLE"
 
 echo "==> Building DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH"
+mkdir -p "$DMG_STAGE"
+cp -R "$APP_BUNDLE" "$DMG_STAGE/"
+ln -s /Applications "$DMG_STAGE/Applications"
+hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_PATH"
 
 echo "==> Signing DMG"
 codesign --force --timestamp --sign "$DEVELOPER_ID_APP_CERT" "$DMG_PATH"

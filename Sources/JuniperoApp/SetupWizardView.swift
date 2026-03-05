@@ -49,10 +49,18 @@ struct SetupWizardView: View {
                 .foregroundColor(.white.opacity(0.9))
 
             if bootstrap.enableOllamaFallback {
+                Toggle("Prefer Local First (through OpenClaw)", isOn: $bootstrap.preferLocalFirst)
+                    .toggleStyle(.switch)
+                    .foregroundColor(.white.opacity(0.88))
+
                 Toggle("Auto-download kimi-k2.5 if missing", isOn: $bootstrap.autoInstallKimi)
                     .toggleStyle(.switch)
                     .foregroundColor(.white.opacity(0.85))
             }
+
+            Toggle("Always route chat through OpenClaw", isOn: $bootstrap.alwaysRouteThroughOpenClaw)
+                .toggleStyle(.switch)
+                .foregroundColor(.white.opacity(0.9))
 
             if let error = bootstrap.errorText {
                 Text(error)

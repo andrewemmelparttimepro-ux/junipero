@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+    xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Junipero Updates</title>
+    <link>https://github.com/andrewemmelparttimepro-ux/junipero/releases</link>
+    <description>Junipero release feed</description>
+    <language>en</language>
+
+    <!--
+      Replace this item during release with the latest version + signed enclosure.
+      For production Sparkle installs, publish a valid sparkle:edSignature using your Sparkle private key.
+    -->
+    <item>
+      <title>Junipero 1.0.0</title>
+      <description>Initial appcast placeholder item.</description>
+      <pubDate>Thu, 05 Mar 2026 19:25:00 +0000</pubDate>
+      <enclosure
+        url="https://github.com/andrewemmelparttimepro-ux/junipero/releases/latest/download/Junipero.dmg"
+        type="application/octet-stream"
+        sparkle:version="1.0.0"
+        sparkle:shortVersionString="1.0.0"
+        sparkle:minimumSystemVersion="13.0"
+      />
+    </item>
+  </channel>
+</rss>

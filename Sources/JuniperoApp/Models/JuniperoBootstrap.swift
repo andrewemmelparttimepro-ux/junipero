@@ -38,6 +38,8 @@ final class JuniperoBootstrap: ObservableObject {
     @Published var setupMode: SetupMode = .freeLocal
     @Published var providerToken: String = ""
     @Published var providerModel: String = "anthropic/claude-sonnet-4-6"
+    @Published var preferLocalFirst: Bool = true
+    @Published var alwaysRouteThroughOpenClaw: Bool = true
     @Published var enableOllamaFallback: Bool = true
     @Published var autoInstallKimi: Bool = false
     @Published var selectedOllamaModel: String = "kimi-k2.5"
@@ -168,7 +170,7 @@ final class JuniperoBootstrap: ObservableObject {
         statusText = "Running diagnostics…"
 
         let openclawVersion = await ShellCommand.run("openclaw --version")
-        let gatewayHealth = await ShellCommand.run("openclaw gateway health")
+        let gatewayHealthy = await isGatewayHealthy()
         let ollamaVersion = await ShellCommand.run("ollama --version")
         let ollamaList = await ShellCommand.run("ollama list")
 
@@ -178,7 +180,7 @@ final class JuniperoBootstrap: ObservableObject {
         } else {
             lines.append("OpenClaw CLI: missing or broken")
         }
-        lines.append("OpenClaw gateway: \(gatewayHealth.exitCode == 0 ? "healthy" : "unhealthy")")
+        lines.append("OpenClaw gateway: \(gatewayHealthy ? "healthy" : "unhealthy")")
         lines.append("Ollama: \(ollamaVersion.exitCode == 0 ? "installed" : "not installed")")
         if ollamaList.exitCode == 0 {
             if let preferred = preferredModel(from: ollamaList.stdout) {
@@ -211,8 +213,8 @@ final class JuniperoBootstrap: ObservableObject {
         let openclawVersion = await ShellCommand.run("openclaw --version")
         if openclawVersion.exitCode == 0 { passes += 1; report.append("CLI PASS") } else { fails += 1; report.append("CLI FAIL") }
 
-        let gatewayHealth = await ShellCommand.run("openclaw gateway health >/dev/null 2>&1")
-        if gatewayHealth.exitCode == 0 { passes += 1; report.append("Gateway PASS") } else { fails += 1; report.append("Gateway FAIL") }
+        let gatewayHealthy = await isGatewayHealthy()
+        if gatewayHealthy { passes += 1; report.append("Gateway PASS") } else { fails += 1; report.append("Gateway FAIL") }
 
         let writeTestURL = juniperoDir.appendingPathComponent(".smoke-write-test")
         do {
@@ -444,6 +446,8 @@ final class JuniperoBootstrap: ObservableObject {
             model: providerModel,
             token: nil,
             timeoutSeconds: 45,
+            preferLocalFirst: enableOllamaFallback && preferLocalFirst,
+            alwaysRouteThroughOpenClaw: alwaysRouteThroughOpenClaw,
             ollamaFallbackEnabled: enableOllamaFallback,
             ollamaBaseURL: "http://127.0.0.1:11434",
             ollamaModel: selectedOllamaModel
@@ -481,8 +485,7 @@ final class JuniperoBootstrap: ObservableObject {
     }
 
     func refreshRuntimeStatus() async {
-        let gateway = await ShellCommand.run("openclaw gateway health >/dev/null 2>&1")
-        openClawHealthy = (gateway.exitCode == 0)
+        openClawHealthy = await isGatewayHealthy()
 
         if !openClawHealthy {
             await ChatDiagnostics.shared.log("monitor: gateway unhealthy, attempting heal")
@@ -490,8 +493,7 @@ final class JuniperoBootstrap: ObservableObject {
             if heal.exitCode != 0 {
                 _ = await ShellCommand.run("openclaw gateway run --force >/tmp/junipero-openclaw.log 2>&1 &")
             }
-            let verify = await ShellCommand.run("openclaw gateway health >/dev/null 2>&1")
-            openClawHealthy = (verify.exitCode == 0)
+            openClawHealthy = await isGatewayHealthy()
         }
 
         if enableOllamaFallback {
@@ -555,6 +557,26 @@ final class JuniperoBootstrap: ObservableObject {
         try status.stdout.data(using: .utf8)?.write(to: dir.appendingPathComponent("gateway-status.txt"), options: .atomic)
         let ollama = await ShellCommand.run("ollama list")
         try ollama.stdout.data(using: .utf8)?.write(to: dir.appendingPathComponent("ollama-list.txt"), options: .atomic)
+    }
+
+    private func isGatewayHealthy() async -> Bool {
+        let health = await ShellCommand.run("openclaw gateway health >/dev/null 2>&1")
+        if health.exitCode == 0 {
+            return true
+        }
+
+        // Fallback: some gateway builds return transient websocket probe failures while RPC is healthy.
+        let status = await ShellCommand.run("openclaw gateway status")
+        if status.exitCode == 0 {
+            let text = "\(status.stdout)\n\(status.stderr)".lowercased()
+            if text.contains("runtime: running") && text.contains("rpc probe: ok") {
+                return true
+            }
+        }
+
+        // Last fallback: HTTP surface reachable means gateway is up for app traffic.
+        let ping = await ShellCommand.run("curl -fsS --max-time 2 http://127.0.0.1:18789/ >/dev/null 2>&1")
+        return ping.exitCode == 0
     }
 
     private func isoStamp() -> String {
