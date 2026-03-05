@@ -18,21 +18,20 @@ struct AnalogClockView: View {
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.40, green: 0.56, blue: 0.84),
-                                Color(red: 0.58, green: 0.70, blue: 0.94),
-                                Color(red: 0.30, green: 0.44, blue: 0.76),
-                                Color(red: 0.52, green: 0.66, blue: 0.90),
-                                Color(red: 0.40, green: 0.56, blue: 0.84),
+                                Color(red: 0.55, green: 0.70, blue: 0.93),
+                                Color(red: 0.62, green: 0.76, blue: 0.96),
+                                Color(red: 0.50, green: 0.66, blue: 0.90),
+                                Color(red: 0.60, green: 0.74, blue: 0.95),
+                                Color(red: 0.55, green: 0.70, blue: 0.93),
                             ],
                             center: .center
                         )
                     )
                     .frame(width: size, height: size)
-                    .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 6)
+                    .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 5)
                     .overlay(
                         Circle()
-                            .stroke(Color(red: 0.42, green: 0.88, blue: 0.98).opacity(0.55), lineWidth: 2)
-                            .blur(radius: 1)
+                            .stroke(Color(red: 0.42, green: 0.88, blue: 0.98).opacity(0.28), lineWidth: 2)
                     )
 
                 // Inner bezel
@@ -40,8 +39,8 @@ struct AnalogClockView: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.22, green: 0.36, blue: 0.62),
-                                Color(red: 0.12, green: 0.24, blue: 0.48),
+                                Color(red: 0.19, green: 0.32, blue: 0.58),
+                                Color(red: 0.11, green: 0.22, blue: 0.45),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -54,9 +53,9 @@ struct AnalogClockView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.09, green: 0.14, blue: 0.30),
-                                Color(red: 0.04, green: 0.08, blue: 0.22),
-                                Color(red: 0.02, green: 0.04, blue: 0.14),
+                                Color(red: 0.08, green: 0.13, blue: 0.30),
+                                Color(red: 0.03, green: 0.06, blue: 0.20),
+                                Color(red: 0.01, green: 0.03, blue: 0.12),
                             ],
                             center: .center,
                             startRadius: 0,
@@ -64,21 +63,6 @@ struct AnalogClockView: View {
                         )
                     )
                     .frame(width: size * 0.88, height: size * 0.88)
-
-                // Subtle glass reflection on face
-                Ellipse()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.06),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .center
-                        )
-                    )
-                    .frame(width: size * 0.75, height: size * 0.45)
-                    .offset(y: -size * 0.12)
 
                 // Hour markers
                 ForEach(0..<12) { i in
@@ -105,10 +89,10 @@ struct AnalogClockView: View {
                     .stroke(
                         isMainHour
                             ? Color(red: 0.80, green: 0.95, blue: 1.0)
-                            : Color(red: 0.54, green: 0.70, blue: 0.90),
+                            : Color(red: 0.50, green: 0.66, blue: 0.88),
                         style: StrokeStyle(lineWidth: markerWidth, lineCap: .round)
                     )
-                    .shadow(color: isMainHour ? Color(red: 0.50, green: 0.90, blue: 1.0).opacity(0.45) : .clear, radius: 3)
+                    .shadow(color: isMainHour ? Color(red: 0.50, green: 0.90, blue: 1.0).opacity(0.28) : .clear, radius: 2)
                 }
 
                 // Minute tick marks
@@ -137,17 +121,17 @@ struct AnalogClockView: View {
 
                 // "O'BRIEN" text at top
                 Text("JUNIPERO")
-                    .font(.system(size: size * 0.04, weight: .light, design: .serif))
-                    .tracking(4)
+                    .font(.system(size: size * 0.09, weight: .semibold, design: .serif))
+                    .tracking(5)
                     .foregroundColor(Color(red: 0.76, green: 0.90, blue: 0.98))
-                    .offset(y: -size * 0.20)
+                    .offset(y: -size * 0.18)
 
                 // "CHICAGO" text at bottom
                 Text("SAN JUNIPERO")
-                    .font(.system(size: size * 0.025, weight: .light, design: .default))
-                    .tracking(3)
+                    .font(.system(size: size * 0.042, weight: .regular, design: .default))
+                    .tracking(5)
                     .foregroundColor(Color(red: 0.52, green: 0.66, blue: 0.84))
-                    .offset(y: size * 0.22)
+                    .offset(y: size * 0.21)
 
                 // Hour hand
                 ClockHand(
