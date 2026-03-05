@@ -395,6 +395,10 @@ actor OpenClawClient {
             }
         }
 
+        if let keychainToken = KeychainStore.loadProviderToken(), !keychainToken.isEmpty {
+            config.token = keychainToken
+        }
+
         if let discoveredToken = readOpenClawGatewayToken(), !discoveredToken.isEmpty {
             config.token = discoveredToken
         }

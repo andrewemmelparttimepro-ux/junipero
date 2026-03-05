@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct ThreadDetailView: View {
     @EnvironmentObject var threadStore: ThreadStore
@@ -210,6 +213,7 @@ struct ThreadDetailView: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    @State private var copied = false
 
     var body: some View {
         HStack {
@@ -225,11 +229,14 @@ private struct MessageBubble: View {
 
     @ViewBuilder
     private func bubble(text: String, isUser: Bool) -> some View {
-        Text(MSNEmoji.convert(text))
+        let displayText = MSNEmoji.convert(text)
+        Text(displayText)
             .font(.system(size: 13))
             .foregroundColor(Color.black.opacity(0.93))
+            .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .padding(.top, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(
@@ -238,5 +245,42 @@ private struct MessageBubble: View {
                             : Color.white.opacity(0.95)
                     )
             )
+            .overlay(alignment: .topTrailing) {
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        copyToClipboard(displayText)
+                    } label: {
+                        Image(systemName: copied ? "checkmark" : "clipboard")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Color.black.opacity(0.75))
+                            .padding(5)
+                            .background(
+                                Circle()
+                                    .fill(Color.white.opacity(0.92))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(6)
+                }
+            }
+            .contextMenu {
+                Button("Copy") {
+                    copyToClipboard(displayText)
+                }
+            }
+    }
+
+    private func copyToClipboard(_ text: String) {
+#if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
+        copied = true
+        Task {
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            await MainActor.run {
+                copied = false
+            }
+        }
     }
 }

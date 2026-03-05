@@ -89,6 +89,7 @@ struct RightPanelView: View {
 
 struct MSNHeaderBar: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var bootstrap: JuniperoBootstrap
 
     var body: some View {
         HStack {
@@ -120,6 +121,15 @@ struct MSNHeaderBar: View {
 
             Spacer()
 
+            Text(bootstrap.statusText)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .lineLimit(1)
+            Circle()
+                .fill(runtimeDotColor)
+                .frame(width: 7, height: 7)
+                .padding(.horizontal, 6)
+
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     threadStore.allThreadsMode.toggle()
@@ -134,6 +144,70 @@ struct MSNHeaderBar: View {
                     .background(
                         Capsule()
                             .fill(Color.white.opacity(threadStore.allThreadsMode ? 0.28 : 0.15))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 10)
+
+            Button(action: {
+                bootstrap.showSetup = true
+            }) {
+                Text("Setup")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.14))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 10)
+
+            Button(action: {
+                Task { await bootstrap.refreshRuntimeStatus() }
+            }) {
+                Text("Heal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.14))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 10)
+
+            Button(action: {
+                Task { await bootstrap.exportSupportBundle() }
+            }) {
+                Text("Support")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.14))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 10)
+
+            Button(action: {
+                Task { await bootstrap.runFullHealthTest() }
+            }) {
+                Text("Full Test")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.14))
                     )
             }
             .buttonStyle(.plain)
@@ -185,6 +259,16 @@ struct MSNHeaderBar: View {
         case .unknown:
             return Color.white.opacity(0.6)
         }
+    }
+
+    private var runtimeDotColor: Color {
+        if bootstrap.openClawHealthy && (!bootstrap.enableOllamaFallback || bootstrap.ollamaHealthy) {
+            return Color(red: 0.30, green: 0.85, blue: 0.30)
+        }
+        if bootstrap.openClawHealthy {
+            return Color(red: 0.95, green: 0.70, blue: 0.20)
+        }
+        return Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 }
 
