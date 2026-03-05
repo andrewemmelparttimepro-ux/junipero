@@ -35,6 +35,7 @@ struct ChatThread: Identifiable, Codable {
     var errorMessage: String?
     var modelUsed: String?
     var latencyMs: Int?
+    var unreadCount: Int
 
     init(
         id: UUID = UUID(),
@@ -45,7 +46,8 @@ struct ChatThread: Identifiable, Codable {
         state: ChatDeliveryState = .success,
         errorMessage: String? = nil,
         modelUsed: String? = nil,
-        latencyMs: Int? = nil
+        latencyMs: Int? = nil,
+        unreadCount: Int = 0
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -56,6 +58,7 @@ struct ChatThread: Identifiable, Codable {
         self.errorMessage = errorMessage
         self.modelUsed = modelUsed
         self.latencyMs = latencyMs
+        self.unreadCount = unreadCount
     }
 
     enum CodingKeys: String, CodingKey {
@@ -68,6 +71,7 @@ struct ChatThread: Identifiable, Codable {
         case errorMessage
         case modelUsed
         case latencyMs
+        case unreadCount
         // Legacy keys (single-turn schema)
         case timestamp
         case userMessage
@@ -83,6 +87,7 @@ struct ChatThread: Identifiable, Codable {
         self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
         self.modelUsed = try container.decodeIfPresent(String.self, forKey: .modelUsed)
         self.latencyMs = try container.decodeIfPresent(Int.self, forKey: .latencyMs)
+        self.unreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
 
         if let decodedMessages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages), !decodedMessages.isEmpty {
             self.messages = decodedMessages
@@ -118,6 +123,7 @@ struct ChatThread: Identifiable, Codable {
         try container.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try container.encodeIfPresent(modelUsed, forKey: .modelUsed)
         try container.encodeIfPresent(latencyMs, forKey: .latencyMs)
+        try container.encode(unreadCount, forKey: .unreadCount)
     }
 
     var latestUserText: String {

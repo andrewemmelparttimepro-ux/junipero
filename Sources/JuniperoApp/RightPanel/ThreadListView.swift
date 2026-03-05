@@ -91,6 +91,7 @@ struct ThreadListView: View {
                                 .onTapGesture {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         threadStore.selectedThreadId = thread.id
+                                        threadStore.markThreadRead(thread.id)
                                     }
                                 }
                                 .transition(.move(edge: .top).combined(with: .opacity))

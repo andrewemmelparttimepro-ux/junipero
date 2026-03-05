@@ -22,15 +22,16 @@ final class ThreadStore: ObservableObject {
     private let draftEventLogURL: URL
     private let storageDir: URL
     private let maxStoredThreads = 200
-    private let maxMessageLength = 4000
-    private let maxInputHistoryMessages = 36
-    private let maxTotalInputChars = 16_000
-    private let maxQueuedPerThread = 6
+    private var maxMessageLength = 4000
+    private var maxInputHistoryMessages = 36
+    private var maxTotalInputChars = 16_000
+    private var maxQueuedPerThread = 6
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
     private let client = OpenClawClient()
     private var threadDrafts: [UUID: String] = [:]
     private var queuedUserMessages: [UUID: [String]] = [:]
     private var draftSnapshotTask: Task<Void, Never>?
+    private var preferenceObserver: NSObjectProtocol?
 
     private struct DraftState: Codable {
         var popupDraftText: String
@@ -71,12 +72,32 @@ final class ThreadStore: ObservableObject {
         self.draftStateURL = storageDir.appendingPathComponent("drafts.json")
         self.draftEventLogURL = storageDir.appendingPathComponent("draft-events.log")
         try? FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
+        applyGuardrailPreset()
+        preferenceObserver = NotificationCenter.default.addObserver(
+            forName: JuniperoPreferencesStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applyGuardrailPreset()
+            }
+        }
         loadThreads()
         loadDraftState()
     }
 
+    deinit {
+        if let preferenceObserver {
+            NotificationCenter.default.removeObserver(preferenceObserver)
+        }
+    }
+
     var isSending: Bool {
         inFlightCount > 0
+    }
+
+    var unreadThreadCount: Int {
+        threads.filter { $0.unreadCount > 0 }.count
     }
 
     func queuedCount(for threadId: UUID) -> Int {
@@ -89,6 +110,7 @@ final class ThreadStore: ObservableObject {
     }
 
     func sendMessage(_ text: String) {
+        JuniperoPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
         guard !trimmed.isEmpty else { return }
 
@@ -109,6 +131,7 @@ final class ThreadStore: ObservableObject {
     }
 
     func sendMessage(in threadId: UUID, text: String) {
+        JuniperoPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
         guard !trimmed.isEmpty else { return }
         guard let index = threads.firstIndex(where: { $0.id == threadId }) else { return }
@@ -128,6 +151,7 @@ final class ThreadStore: ObservableObject {
         threads[index].isLoading = true
         threads[index].state = .pending
         threads[index].errorMessage = nil
+        threads[index].unreadCount = 0
         moveThreadToTop(threadId)
         selectedThreadId = threadId
         saveThreads()
@@ -224,6 +248,11 @@ final class ThreadStore: ObservableObject {
         threads[index].errorMessage = nil
         threads[index].modelUsed = model
         threads[index].latencyMs = latencyMs
+        if selectedThreadId == id {
+            threads[index].unreadCount = 0
+        } else {
+            threads[index].unreadCount += 1
+        }
         moveThreadToTop(id)
         saveThreads()
         drainQueuedMessage(for: id)
@@ -301,6 +330,22 @@ final class ThreadStore: ObservableObject {
         String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxMessageLength))
     }
 
+    private func applyGuardrailPreset() {
+        let prefs = JuniperoPreferencesStore.load()
+        switch prefs.effectiveLiabilityMode {
+        case .idiot:
+            maxMessageLength = 4000
+            maxInputHistoryMessages = 36
+            maxTotalInputChars = 16_000
+            maxQueuedPerThread = 6
+        case .myFault:
+            maxMessageLength = 12_000
+            maxInputHistoryMessages = 80
+            maxTotalInputChars = 64_000
+            maxQueuedPerThread = 24
+        }
+    }
+
     private func normalizeError(_ error: Error) -> String {
         let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach O'Brien."
         let lower = raw.lowercased()
@@ -332,6 +377,13 @@ final class ThreadStore: ObservableObject {
 
     func draftText(for threadId: UUID) -> String {
         threadDrafts[threadId] ?? ""
+    }
+
+    func markThreadRead(_ threadId: UUID) {
+        guard let index = threads.firstIndex(where: { $0.id == threadId }) else { return }
+        guard threads[index].unreadCount > 0 else { return }
+        threads[index].unreadCount = 0
+        saveThreads()
     }
 
     func updatePopupDraft(_ text: String) {

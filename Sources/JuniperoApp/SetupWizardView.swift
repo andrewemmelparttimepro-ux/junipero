@@ -69,6 +69,30 @@ struct SetupWizardView: View {
                 .foregroundColor(Color.white.opacity(0.74))
                 .lineLimit(3)
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Capability Mode")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.9))
+                Picker("Capability Mode", selection: Binding(
+                    get: { bootstrap.liabilityMode },
+                    set: { bootstrap.setLiabilityMode($0) }
+                )) {
+                    Text("I'm an idiot").tag(LiabilityMode.idiot)
+                    Text("It's my fault").tag(LiabilityMode.myFault)
+                }
+                .pickerStyle(.segmented)
+                .disabled(!bootstrap.canDisableGuardrails)
+
+                Text(bootstrap.probationStatusText)
+                    .font(.system(size: 11))
+                    .foregroundColor(bootstrap.canDisableGuardrails ? Color(red: 0.68, green: 0.95, blue: 0.66) : Color.white.opacity(0.74))
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.white.opacity(0.10))
+            )
+
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(JuniperoBootstrap.SetupStep.allCases) { step in
                     HStack(spacing: 8) {

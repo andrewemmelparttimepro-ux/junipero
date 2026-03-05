@@ -174,6 +174,9 @@ struct ThreadDetailView: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
         )
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
+        .onAppear {
+            threadStore.markThreadRead(threadId)
+        }
     }
 
     private func sendReply() {

@@ -49,6 +49,18 @@ swift build
 swift run
 ```
 
+## Release (Signed + Notarized)
+
+See [RELEASE_SIGNING.md](RELEASE_SIGNING.md) for end-to-end macOS signing/notarization.
+
+Once credentials are configured:
+
+```bash
+export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
+export NOTARY_PROFILE="junipero-notary"
+./scripts/release-macos.sh
+```
+
 ## License
 
 Private — Andrew Emmel / BoredRoom

@@ -13,30 +13,35 @@ struct AnalogClockView: View {
             let _ = size / 2 // radius available if needed
 
             ZStack {
-                // Outer ring — brushed metal look
+                // Outer ring — blue chrome
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.75, green: 0.73, blue: 0.70),
-                                Color(red: 0.85, green: 0.83, blue: 0.80),
-                                Color(red: 0.70, green: 0.68, blue: 0.65),
-                                Color(red: 0.80, green: 0.78, blue: 0.75),
-                                Color(red: 0.75, green: 0.73, blue: 0.70),
+                                Color(red: 0.40, green: 0.56, blue: 0.84),
+                                Color(red: 0.58, green: 0.70, blue: 0.94),
+                                Color(red: 0.30, green: 0.44, blue: 0.76),
+                                Color(red: 0.52, green: 0.66, blue: 0.90),
+                                Color(red: 0.40, green: 0.56, blue: 0.84),
                             ],
                             center: .center
                         )
                     )
                     .frame(width: size, height: size)
                     .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 6)
+                    .overlay(
+                        Circle()
+                            .stroke(Color(red: 0.42, green: 0.88, blue: 0.98).opacity(0.55), lineWidth: 2)
+                            .blur(radius: 1)
+                    )
 
                 // Inner bezel
                 Circle()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.65, green: 0.63, blue: 0.60),
-                                Color(red: 0.55, green: 0.53, blue: 0.50),
+                                Color(red: 0.22, green: 0.36, blue: 0.62),
+                                Color(red: 0.12, green: 0.24, blue: 0.48),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -49,9 +54,9 @@ struct AnalogClockView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.12, green: 0.12, blue: 0.14),
-                                Color(red: 0.06, green: 0.06, blue: 0.08),
-                                Color(red: 0.03, green: 0.03, blue: 0.05),
+                                Color(red: 0.09, green: 0.14, blue: 0.30),
+                                Color(red: 0.04, green: 0.08, blue: 0.22),
+                                Color(red: 0.02, green: 0.04, blue: 0.14),
                             ],
                             center: .center,
                             startRadius: 0,
@@ -99,11 +104,11 @@ struct AnalogClockView: View {
                     }
                     .stroke(
                         isMainHour
-                            ? Color(red: 0.90, green: 0.85, blue: 0.70)
-                            : Color(red: 0.75, green: 0.73, blue: 0.68),
+                            ? Color(red: 0.80, green: 0.95, blue: 1.0)
+                            : Color(red: 0.54, green: 0.70, blue: 0.90),
                         style: StrokeStyle(lineWidth: markerWidth, lineCap: .round)
                     )
-                    .shadow(color: isMainHour ? Color(red: 0.90, green: 0.85, blue: 0.70).opacity(0.5) : .clear, radius: 3)
+                    .shadow(color: isMainHour ? Color(red: 0.50, green: 0.90, blue: 1.0).opacity(0.45) : .clear, radius: 3)
                 }
 
                 // Minute tick marks
@@ -134,14 +139,14 @@ struct AnalogClockView: View {
                 Text("JUNIPERO")
                     .font(.system(size: size * 0.04, weight: .light, design: .serif))
                     .tracking(4)
-                    .foregroundColor(Color(red: 0.75, green: 0.70, blue: 0.60))
+                    .foregroundColor(Color(red: 0.76, green: 0.90, blue: 0.98))
                     .offset(y: -size * 0.20)
 
                 // "CHICAGO" text at bottom
                 Text("SAN JUNIPERO")
                     .font(.system(size: size * 0.025, weight: .light, design: .default))
                     .tracking(3)
-                    .foregroundColor(Color(red: 0.50, green: 0.48, blue: 0.45))
+                    .foregroundColor(Color(red: 0.52, green: 0.66, blue: 0.84))
                     .offset(y: size * 0.22)
 
                 // Hour hand
@@ -149,7 +154,7 @@ struct AnalogClockView: View {
                     angle: hourAngle,
                     length: size * 0.22,
                     width: 4.5,
-                    color: Color(red: 0.88, green: 0.83, blue: 0.72),
+                    color: Color(red: 0.86, green: 0.94, blue: 1.0),
                     center: center,
                     tailLength: size * 0.05
                 )
@@ -160,7 +165,7 @@ struct AnalogClockView: View {
                     angle: minuteAngle,
                     length: size * 0.32,
                     width: 3.0,
-                    color: Color(red: 0.88, green: 0.83, blue: 0.72),
+                    color: Color(red: 0.80, green: 0.90, blue: 0.98),
                     center: center,
                     tailLength: size * 0.07
                 )
@@ -171,19 +176,19 @@ struct AnalogClockView: View {
                     angle: secondAngle,
                     length: size * 0.35,
                     width: 1.2,
-                    color: Color(red: 0.85, green: 0.25, blue: 0.20),
+                    color: Color(red: 0.92, green: 0.30, blue: 0.26),
                     center: center,
                     tailLength: size * 0.08
                 )
-                .shadow(color: Color(red: 0.85, green: 0.25, blue: 0.20).opacity(0.3), radius: 2)
+                .shadow(color: Color(red: 0.92, green: 0.30, blue: 0.26).opacity(0.3), radius: 2)
 
                 // Center cap
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.90, green: 0.85, blue: 0.75),
-                                Color(red: 0.70, green: 0.65, blue: 0.55),
+                                Color(red: 0.80, green: 0.92, blue: 1.0),
+                                Color(red: 0.48, green: 0.64, blue: 0.86),
                             ],
                             center: .center,
                             startRadius: 0,
@@ -195,7 +200,7 @@ struct AnalogClockView: View {
 
                 // Inner center dot
                 Circle()
-                    .fill(Color(red: 0.85, green: 0.25, blue: 0.20))
+                    .fill(Color(red: 0.92, green: 0.30, blue: 0.26))
                     .frame(width: size * 0.015, height: size * 0.015)
             }
         }

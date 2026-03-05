@@ -51,12 +51,16 @@ final class JuniperoBootstrap: ObservableObject {
     @Published var missingOllamaModel: Bool = false
     @Published var lastSupportBundlePath: String?
     @Published private(set) var stepStates: [SetupStep: StepState] = [:]
+    @Published var liabilityMode: LiabilityMode = .idiot
+    @Published var probationInteractionCount: Int = 0
+    @Published var probationStatusText: String = "Probation active"
 
     private let juniperoDir: URL
     private let configURL: URL
     private let setupURL: URL
     private var didStart = false
     private var monitorTask: Task<Void, Never>?
+    private var preferencesObserver: NSObjectProtocol?
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -64,6 +68,22 @@ final class JuniperoBootstrap: ObservableObject {
         self.configURL = juniperoDir.appendingPathComponent("config.json")
         self.setupURL = juniperoDir.appendingPathComponent("setup.json")
         self.stepStates = Dictionary(uniqueKeysWithValues: SetupStep.allCases.map { ($0, .pending) })
+        syncPreferences()
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: JuniperoPreferencesStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncPreferences()
+            }
+        }
+    }
+
+    deinit {
+        if let preferencesObserver {
+            NotificationCenter.default.removeObserver(preferencesObserver)
+        }
     }
 
     func startIfNeeded() async {
@@ -125,6 +145,20 @@ final class JuniperoBootstrap: ObservableObject {
     func deferSetup() {
         showSetup = false
         statusText = "Runtime not configured yet"
+    }
+
+    var canDisableGuardrails: Bool {
+        JuniperoPreferencesStore.load().probationComplete
+    }
+
+    func setLiabilityMode(_ mode: LiabilityMode) {
+        var prefs = JuniperoPreferencesStore.load()
+        if !prefs.probationComplete {
+            prefs.liabilityMode = .idiot
+        } else {
+            prefs.liabilityMode = mode
+        }
+        JuniperoPreferencesStore.save(prefs)
     }
 
     func runGuidedDiagnostics() async {
@@ -539,5 +573,19 @@ final class JuniperoBootstrap: ObservableObject {
 
     private func setStep(_ step: SetupStep, _ state: StepState) {
         stepStates[step] = state
+    }
+
+    private func syncPreferences() {
+        let prefs = JuniperoPreferencesStore.load()
+        liabilityMode = prefs.effectiveLiabilityMode
+        probationInteractionCount = prefs.interactionCount
+        if prefs.probationComplete {
+            probationStatusText = "Probation complete. Advanced mode unlocked."
+        } else {
+            let remainingInteractions = max(0, 8 - prefs.interactionCount)
+            let remainingSeconds = max(0, Int(21_600 - Date().timeIntervalSince(prefs.probationStartedAt)))
+            let remainingHours = max(0, (remainingSeconds + 3599) / 3600)
+            probationStatusText = "Probation: \(remainingInteractions) more chats or ~\(remainingHours)h of use."
+        }
     }
 }

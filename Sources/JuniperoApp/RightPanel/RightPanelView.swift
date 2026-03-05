@@ -108,6 +108,8 @@ struct MSNHeaderBar: View {
                     Text("O'Brien")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
                     HStack(spacing: 4) {
                         Circle()
                             .fill(statusColor)
@@ -115,108 +117,18 @@ struct MSNHeaderBar: View {
                         Text(statusText)
                             .font(.system(size: 10))
                             .foregroundColor(.white.opacity(0.7))
+                            .lineLimit(1)
                     }
                 }
             }
+            .frame(width: 128, alignment: .leading)
 
             Spacer()
 
-            Text(bootstrap.statusText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
-                .lineLimit(1)
-            Circle()
-                .fill(runtimeDotColor)
-                .frame(width: 7, height: 7)
-                .padding(.horizontal, 6)
-
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    threadStore.allThreadsMode.toggle()
-                    threadStore.selectedThreadId = nil
-                }
-            }) {
-                Text(threadStore.allThreadsMode ? "Exit All Threads" : "All Threads")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(threadStore.allThreadsMode ? 0.28 : 0.15))
-                    )
+            ViewThatFits(in: .horizontal) {
+                fullHeaderControls
+                compactHeaderControls
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-
-            Button(action: {
-                bootstrap.showSetup = true
-            }) {
-                Text("Setup")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.14))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-
-            Button(action: {
-                Task { await bootstrap.refreshRuntimeStatus() }
-            }) {
-                Text("Heal")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.14))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-
-            Button(action: {
-                Task { await bootstrap.exportSupportBundle() }
-            }) {
-                Text("Support")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.14))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-
-            Button(action: {
-                Task { await bootstrap.runFullHealthTest() }
-            }) {
-                Text("Full Test")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.14))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-
-            // Thread count
-            Text("\(threadStore.threads.count) conversations")
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.5))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -269,6 +181,148 @@ struct MSNHeaderBar: View {
             return Color(red: 0.95, green: 0.70, blue: 0.20)
         }
         return Color(red: 0.85, green: 0.25, blue: 0.20)
+    }
+
+    private var fullHeaderControls: some View {
+        HStack(spacing: 8) {
+            runtimeBadge(maxWidth: 140)
+            actionButton(threadStore.allThreadsMode ? "Exit Threads" : "Threads", selected: threadStore.allThreadsMode) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    threadStore.allThreadsMode.toggle()
+                    threadStore.selectedThreadId = nil
+                }
+            }
+            actionButton("Setup") {
+                bootstrap.showSetup = true
+            }
+            actionButton("Heal") {
+                Task { await bootstrap.refreshRuntimeStatus() }
+            }
+            actionButton("Support") {
+                Task { await bootstrap.exportSupportBundle() }
+            }
+            actionButton("Test") {
+                Task { await bootstrap.runFullHealthTest() }
+            }
+            capabilityMenu
+            if threadStore.unreadThreadCount > 0 {
+                Text(threadStore.unreadThreadCount > 1 ? "\(threadStore.unreadThreadCount) NEW" : "NEW")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundColor(Color(red: 0.08, green: 0.28, blue: 0.06))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(Color(red: 0.56, green: 0.98, blue: 0.46))
+                    )
+            }
+            Text("\(threadStore.threads.count) conv")
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.5))
+                .lineLimit(1)
+        }
+    }
+
+    private var compactHeaderControls: some View {
+        HStack(spacing: 8) {
+            runtimeBadge(maxWidth: 110)
+            actionButton(threadStore.allThreadsMode ? "Threads" : "Threads", selected: threadStore.allThreadsMode) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    threadStore.allThreadsMode.toggle()
+                    threadStore.selectedThreadId = nil
+                }
+            }
+            Menu {
+                Button("Setup") { bootstrap.showSetup = true }
+                Button("Heal") { Task { await bootstrap.refreshRuntimeStatus() } }
+                Button("Support") { Task { await bootstrap.exportSupportBundle() } }
+                Button("Full Test") { Task { await bootstrap.runFullHealthTest() } }
+                Divider()
+                Button("I'm an idiot") { bootstrap.setLiabilityMode(.idiot) }
+                Button("It's my fault") { bootstrap.setLiabilityMode(.myFault) }
+                    .disabled(!bootstrap.canDisableGuardrails)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Tools")
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(0.92))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.14))
+                )
+            }
+            .buttonStyle(.plain)
+            if threadStore.unreadThreadCount > 0 {
+                Text(threadStore.unreadThreadCount > 1 ? "\(threadStore.unreadThreadCount)" : "NEW")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundColor(Color(red: 0.08, green: 0.28, blue: 0.06))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(Color(red: 0.56, green: 0.98, blue: 0.46))
+                    )
+            }
+        }
+    }
+
+    private var capabilityMenu: some View {
+        Menu {
+            Button("I'm an idiot") { bootstrap.setLiabilityMode(.idiot) }
+            Button("It's my fault") { bootstrap.setLiabilityMode(.myFault) }
+                .disabled(!bootstrap.canDisableGuardrails)
+        } label: {
+            Text(bootstrap.liabilityMode == .myFault ? "My Fault" : "Idiot")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(
+                            bootstrap.liabilityMode == .myFault
+                                ? Color(red: 0.60, green: 0.24, blue: 0.22).opacity(0.6)
+                                : Color.white.opacity(0.14)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func runtimeBadge(maxWidth: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Text(bootstrap.statusText)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Circle()
+                .fill(runtimeDotColor)
+                .frame(width: 7, height: 7)
+        }
+        .frame(maxWidth: maxWidth, alignment: .leading)
+    }
+
+    private func actionButton(_ title: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(selected ? 0.28 : 0.14))
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 

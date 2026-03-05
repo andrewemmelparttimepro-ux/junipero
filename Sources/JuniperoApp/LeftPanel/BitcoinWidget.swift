@@ -9,13 +9,14 @@ struct BitcoinWidget: View {
 
     var body: some View {
         ZStack {
-            // Obsidian glass background
+            // MSN-blue glass background
             RoundedRectangle(cornerRadius: 16)
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.12, green: 0.12, blue: 0.14).opacity(0.85),
-                            Color(red: 0.06, green: 0.06, blue: 0.08).opacity(0.90),
+                            Color(red: 0.19, green: 0.34, blue: 0.62).opacity(0.90),
+                            Color(red: 0.10, green: 0.22, blue: 0.48).opacity(0.94),
+                            Color(red: 0.06, green: 0.16, blue: 0.38).opacity(0.96),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -23,20 +24,34 @@ struct BitcoinWidget: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.16),
+                                    Color.white.opacity(0.05),
+                                    Color.clear,
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.15),
-                                    Color.white.opacity(0.03),
+                                    Color(red: 0.62, green: 0.84, blue: 1.0).opacity(0.55),
+                                    Color.white.opacity(0.10),
                                     Color.clear
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 0.5
+                            lineWidth: 0.8
                         )
                 )
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                .shadow(color: Color(red: 0.16, green: 0.46, blue: 0.96).opacity(0.30), radius: 10, x: 0, y: 5)
 
             VStack(spacing: 6) {
                 // Header
@@ -47,7 +62,7 @@ struct BitcoinWidget: View {
                     Text("BITCOIN")
                         .font(.system(size: 10, weight: .medium, design: .default))
                         .tracking(2)
-                        .foregroundColor(Color.white.opacity(0.5))
+                        .foregroundColor(Color(red: 0.86, green: 0.94, blue: 1.0).opacity(0.75))
                     Spacer()
                 }
 
@@ -62,10 +77,10 @@ struct BitcoinWidget: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text("$")
                             .font(.system(size: 14, weight: .light))
-                            .foregroundColor(Color.white.opacity(0.6))
+                            .foregroundColor(Color(red: 0.82, green: 0.90, blue: 1.0).opacity(0.8))
                         Text(formattedPrice)
                             .font(.system(size: 24, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.white.opacity(0.96))
                     }
 
                     // 24h change
