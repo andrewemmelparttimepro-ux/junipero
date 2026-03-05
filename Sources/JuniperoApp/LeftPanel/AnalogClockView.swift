@@ -250,6 +250,12 @@ private enum ClockReferenceLoader {
                 return image
             }
         }
+
+        if let bundledPath = Bundle.main.path(forResource: "clock-reference-default", ofType: "png"),
+            let image = NSImage(contentsOfFile: bundledPath)
+        {
+            return image
+        }
         return nil
     }
 }

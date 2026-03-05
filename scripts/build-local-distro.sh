@@ -42,6 +42,12 @@ echo "==> Assembling app bundle"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$UNIVERSAL_DIR/$APP_EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
+# Bundle default clock art for fresh installs.
+DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/JuniperoApp/Resources/clock-reference-default.png"
+if [[ -f "$DEFAULT_CLOCK_ASSET" ]]; then
+  cp "$DEFAULT_CLOCK_ASSET" "$APP_BUNDLE/Contents/Resources/clock-reference-default.png"
+fi
+
 # Embed Sparkle framework when present (SwiftPM artifact path)
 SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -name Sparkle.framework -type d | head -n 1 || true)"
 if [[ -n "${SPARKLE_FRAMEWORK:-}" && -d "$SPARKLE_FRAMEWORK" ]]; then
