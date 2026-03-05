@@ -42,7 +42,7 @@ final class JuniperoBootstrap: ObservableObject {
     @Published var alwaysRouteThroughOpenClaw: Bool = true
     @Published var enableOllamaFallback: Bool = true
     @Published var autoInstallKimi: Bool = false
-    @Published var selectedOllamaModel: String = "kimi-k2.5"
+    @Published var selectedOllamaModel: String = "qwen2.5-coder:7b"
     @Published var showSetup: Bool = false
     @Published var isWorking: Bool = false
     @Published var statusText: String = "Checking AI runtime…"
@@ -426,7 +426,7 @@ final class JuniperoBootstrap: ObservableObject {
             return String(first)
         }
 
-        let preferred = ["kimi-k2.5", "qwen2.5-coder:7b", "llama3.1:8b"]
+        let preferred = ["qwen2.5-coder:7b", "llama3.1:8b", "kimi-k2.5"]
         for item in preferred where names.contains(item) {
             return item
         }

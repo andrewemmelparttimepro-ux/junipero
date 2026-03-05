@@ -2,11 +2,13 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 #endif
+import UniformTypeIdentifiers
 
 struct ThreadDetailView: View {
     @EnvironmentObject var threadStore: ThreadStore
     let threadId: UUID
     @FocusState private var isReplyFocused: Bool
+    @State private var isDropTargeted = false
 
     private var thread: ChatThread? {
         threadStore.threads.first(where: { $0.id == threadId })
@@ -143,6 +145,31 @@ struct ThreadDetailView: View {
                     .onSubmit {
                         sendReply()
                     }
+                    .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+                        threadStore.handleFileDrop(providers: providers, threadId: threadId)
+                        return true
+                    }
+
+                if isDropTargeted {
+                    Text("Drop files to attach")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.95))
+                        )
+                }
+
+                if !threadStore.attachments(for: threadId).isEmpty {
+                    ThreadAttachmentStrip(
+                        attachments: threadStore.attachments(for: threadId),
+                        onRemove: { id in
+                            threadStore.removeAttachment(threadId: threadId, attachmentId: id)
+                        }
+                    )
+                }
 
                 Button(action: sendReply) {
                     Text("Send")
@@ -156,7 +183,7 @@ struct ThreadDetailView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && threadStore.attachments(for: threadId).isEmpty)
             }
             .padding(12)
             .background(
@@ -192,8 +219,9 @@ struct ThreadDetailView: View {
 
     private func sendReply() {
         let text = replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        threadStore.sendMessage(in: threadId, text: text)
+        let attachments = threadStore.attachments(for: threadId)
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+        threadStore.sendMessage(in: threadId, text: text, attachments: attachments)
         DispatchQueue.main.async {
             isReplyFocused = true
         }
@@ -225,6 +253,42 @@ struct ThreadDetailView: View {
 
     private var queuedCount: Int {
         threadStore.queuedCount(for: threadId)
+    }
+}
+
+private struct ThreadAttachmentStrip: View {
+    let attachments: [ChatAttachment]
+    let onRemove: (UUID) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 10, weight: .bold))
+                        Text(attachment.fileName)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                        Button {
+                            onRemove(attachment.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.94))
+                    )
+                }
+            }
+        }
+        .frame(height: 30)
     }
 }
 
@@ -283,6 +347,21 @@ private struct MessageBubble: View {
             .contextMenu {
                 Button("Copy") {
                     copyToClipboard(displayText)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if !message.attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(message.attachments) { attachment in
+                            Text("📎 \(attachment.fileName)")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Color.black.opacity(0.65))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
+                    .offset(y: 14)
                 }
             }
     }

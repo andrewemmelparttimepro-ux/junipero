@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RightPanelView: View {
     @EnvironmentObject var threadStore: ThreadStore
@@ -82,8 +83,9 @@ struct RightPanelView: View {
 
     private func sendFromPopup() {
         let trimmed = threadStore.popupDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        threadStore.sendMessage(trimmed)
+        let attachments = threadStore.popupAttachments
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        threadStore.sendMessage(trimmed, attachments: attachments)
     }
 }
 
@@ -340,6 +342,7 @@ private struct PopupComposerCard: View {
     @EnvironmentObject var threadStore: ThreadStore
     @Binding var draftText: String
     @FocusState private var isInputFocused: Bool
+    @State private var isDropTargeted = false
     let onClose: () -> Void
     let onSend: () -> Void
 
@@ -372,6 +375,32 @@ private struct PopupComposerCard: View {
                 .onSubmit {
                     onSend()
                 }
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+                    threadStore.handleFileDrop(providers: providers, threadId: nil)
+                    return true
+                }
+
+            if isDropTargeted {
+                Text("Drop files to attach")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color(red: 0.14, green: 0.30, blue: 0.56))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.92))
+                    )
+            }
+
+            if !threadStore.popupAttachments.isEmpty {
+                AttachmentStrip(
+                    attachments: threadStore.popupAttachments,
+                    onRemove: { id in
+                        threadStore.removeAttachment(threadId: nil, attachmentId: id)
+                    }
+                )
+            }
 
             HStack {
                 if threadStore.isSending {
@@ -392,7 +421,7 @@ private struct PopupComposerCard: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && threadStore.popupAttachments.isEmpty)
             }
         }
         .padding(12)
@@ -420,5 +449,41 @@ private struct PopupComposerCard: View {
                 isInputFocused = true
             }
         }
+    }
+}
+
+private struct AttachmentStrip: View {
+    let attachments: [ChatAttachment]
+    let onRemove: (UUID) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 10, weight: .bold))
+                        Text(attachment.fileName)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                        Button {
+                            onRemove(attachment.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.94))
+                    )
+                }
+            }
+        }
+        .frame(height: 30)
     }
 }

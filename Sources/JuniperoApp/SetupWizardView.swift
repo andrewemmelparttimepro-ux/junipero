@@ -53,7 +53,7 @@ struct SetupWizardView: View {
                     .toggleStyle(.switch)
                     .foregroundColor(.white.opacity(0.88))
 
-                Toggle("Auto-download kimi-k2.5 if missing", isOn: $bootstrap.autoInstallKimi)
+                Toggle("Auto-download qwen2.5-coder:7b if missing", isOn: $bootstrap.autoInstallKimi)
                     .toggleStyle(.switch)
                     .foregroundColor(.white.opacity(0.85))
             }

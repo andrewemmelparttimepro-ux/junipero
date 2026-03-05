@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class ThreadStore: ObservableObject {
@@ -16,6 +17,7 @@ final class ThreadStore: ObservableObject {
     @Published var inFlightCount: Int = 0
     @Published var lastErrorText: String?
     @Published var popupDraftText: String = ""
+    @Published var popupAttachments: [ChatAttachment] = []
 
     private let storageURL: URL
     private let draftStateURL: URL
@@ -29,25 +31,38 @@ final class ThreadStore: ObservableObject {
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
     private let client = OpenClawClient()
     private var threadDrafts: [UUID: String] = [:]
+    private var threadAttachments: [UUID: [ChatAttachment]] = [:]
     private var queuedUserMessages: [UUID: [String]] = [:]
     private var draftSnapshotTask: Task<Void, Never>?
     private var preferenceObserver: NSObjectProtocol?
 
     private struct DraftState: Codable {
         var popupDraftText: String
+        var popupAttachments: [ChatAttachment]
         var threadDrafts: [String: String]
+        var threadAttachments: [String: [ChatAttachment]]
         var queuedMessages: [String: [String]]
 
-        init(popupDraftText: String, threadDrafts: [String: String], queuedMessages: [String: [String]]) {
+        init(
+            popupDraftText: String,
+            popupAttachments: [ChatAttachment],
+            threadDrafts: [String: String],
+            threadAttachments: [String: [ChatAttachment]],
+            queuedMessages: [String: [String]]
+        ) {
             self.popupDraftText = popupDraftText
+            self.popupAttachments = popupAttachments
             self.threadDrafts = threadDrafts
+            self.threadAttachments = threadAttachments
             self.queuedMessages = queuedMessages
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             self.popupDraftText = try c.decodeIfPresent(String.self, forKey: .popupDraftText) ?? ""
+            self.popupAttachments = try c.decodeIfPresent([ChatAttachment].self, forKey: .popupAttachments) ?? []
             self.threadDrafts = try c.decodeIfPresent([String: String].self, forKey: .threadDrafts) ?? [:]
+            self.threadAttachments = try c.decodeIfPresent([String: [ChatAttachment]].self, forKey: .threadAttachments) ?? [:]
             self.queuedMessages = try c.decodeIfPresent([String: [String]].self, forKey: .queuedMessages) ?? [:]
         }
     }
@@ -109,13 +124,14 @@ final class ThreadStore: ObservableObject {
         scheduleDraftSnapshotSave()
     }
 
-    func sendMessage(_ text: String) {
+    func sendMessage(_ text: String, attachments: [ChatAttachment] = []) {
         JuniperoPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
-        guard !trimmed.isEmpty else { return }
+        let cleanAttachments = sanitizedAttachments(attachments)
+        guard !trimmed.isEmpty || !cleanAttachments.isEmpty else { return }
 
         var thread = ChatThread(
-            messages: [ChatMessage(role: .user, text: trimmed)],
+            messages: [ChatMessage(role: .user, text: trimmed, attachments: cleanAttachments)],
             isLoading: true,
             state: .pending
         )
@@ -127,26 +143,36 @@ final class ThreadStore: ObservableObject {
         saveThreads()
         runRequest(for: thread.id)
         updatePopupDraft("")
+        clearPopupAttachments()
         Task { await ChatDiagnostics.shared.log("new-thread send thread=\(thread.id.uuidString) chars=\(trimmed.count)") }
     }
 
-    func sendMessage(in threadId: UUID, text: String) {
+    func sendMessage(in threadId: UUID, text: String, attachments: [ChatAttachment] = []) {
         JuniperoPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
-        guard !trimmed.isEmpty else { return }
+        let cleanAttachments = sanitizedAttachments(attachments)
+        guard !trimmed.isEmpty || !cleanAttachments.isEmpty else { return }
         guard let index = threads.firstIndex(where: { $0.id == threadId }) else { return }
         guard !threads[index].isLoading else {
+            var queuedPayload = trimmed
+            if !cleanAttachments.isEmpty {
+                let attachmentBlock = cleanAttachments.map { $0.promptSegment }.joined(separator: "\n\n")
+                queuedPayload = queuedPayload.isEmpty ? attachmentBlock : "\(queuedPayload)\n\n\(attachmentBlock)"
+            }
             var queue = queuedUserMessages[threadId, default: []]
-            queue.append(trimmed)
+            queue.append(queuedPayload)
             queuedUserMessages[threadId] = Array(queue.suffix(maxQueuedPerThread))
             updateThreadDraft(threadId: threadId, text: "")
+            if !cleanAttachments.isEmpty {
+                clearAttachments(for: threadId)
+            }
             lastErrorText = "Queued your message. It will send after the current reply."
             scheduleDraftSnapshotSave()
             Task { await ChatDiagnostics.shared.log("send-queued thread=\(threadId.uuidString) depth=\(queue.count)") }
             return
         }
 
-        threads[index].messages.append(ChatMessage(role: .user, text: trimmed))
+        threads[index].messages.append(ChatMessage(role: .user, text: trimmed, attachments: cleanAttachments))
         threads[index].updatedAt = Date()
         threads[index].isLoading = true
         threads[index].state = .pending
@@ -157,6 +183,7 @@ final class ThreadStore: ObservableObject {
         saveThreads()
         runRequest(for: threadId)
         updateThreadDraft(threadId: threadId, text: "")
+        clearAttachments(for: threadId)
         Task { await ChatDiagnostics.shared.log("thread send thread=\(threadId.uuidString) chars=\(trimmed.count)") }
     }
 
@@ -306,6 +333,14 @@ final class ThreadStore: ObservableObject {
         for msg in history.reversed() {
             let role = msg.role == .assistant ? "assistant" : "user"
             var content = msg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if msg.role == .user, !msg.attachments.isEmpty {
+                let attachmentBlock = msg.attachments.map { $0.promptSegment }.joined(separator: "\n\n")
+                if content.isEmpty {
+                    content = attachmentBlock
+                } else {
+                    content += "\n\n" + attachmentBlock
+                }
+            }
             guard !content.isEmpty else { continue }
             if content.count > 2_000 {
                 content = String(content.suffix(2_000))
@@ -410,6 +445,66 @@ final class ThreadStore: ObservableObject {
         threadDrafts[threadId] ?? ""
     }
 
+    func attachments(for threadId: UUID) -> [ChatAttachment] {
+        threadAttachments[threadId] ?? []
+    }
+
+    func removeAttachment(threadId: UUID?, attachmentId: UUID) {
+        if let threadId {
+            var items = threadAttachments[threadId] ?? []
+            items.removeAll { $0.id == attachmentId }
+            if items.isEmpty {
+                threadAttachments.removeValue(forKey: threadId)
+            } else {
+                threadAttachments[threadId] = items
+            }
+        } else {
+            popupAttachments.removeAll { $0.id == attachmentId }
+        }
+        scheduleDraftSnapshotSave()
+    }
+
+    func clearPopupAttachments() {
+        popupAttachments.removeAll()
+        scheduleDraftSnapshotSave()
+    }
+
+    func clearAttachments(for threadId: UUID) {
+        threadAttachments.removeValue(forKey: threadId)
+        scheduleDraftSnapshotSave()
+    }
+
+    func handleFileDrop(providers: [NSItemProvider], threadId: UUID?) {
+        Task {
+            let urls = await Self.extractDroppedURLs(from: providers)
+            guard !urls.isEmpty else { return }
+
+            var added: [ChatAttachment] = []
+            for url in urls {
+                if let attachment = Self.ingestAttachment(from: url) {
+                    added.append(attachment)
+                }
+            }
+            guard !added.isEmpty else {
+                await MainActor.run {
+                    self.lastErrorText = "Couldn't attach dropped files."
+                }
+                return
+            }
+
+            await MainActor.run {
+                if let threadId {
+                    var items = self.threadAttachments[threadId] ?? []
+                    items.append(contentsOf: added)
+                    self.threadAttachments[threadId] = Self.dedupAttachments(items)
+                } else {
+                    self.popupAttachments = Self.dedupAttachments(self.popupAttachments + added)
+                }
+                self.scheduleDraftSnapshotSave()
+            }
+        }
+    }
+
     func markThreadRead(_ threadId: UUID) {
         guard let index = threads.firstIndex(where: { $0.id == threadId }) else { return }
         guard threads[index].unreadCount > 0 else { return }
@@ -432,6 +527,10 @@ final class ThreadStore: ObservableObject {
         }
         appendDraftEvent(type: .thread, threadId: threadId, text: capped)
         scheduleDraftSnapshotSave()
+    }
+
+    private func sanitizedAttachments(_ items: [ChatAttachment]) -> [ChatAttachment] {
+        Self.dedupAttachments(items).prefix(6).map { $0 }
     }
 
     private func loadThreads() {
@@ -478,7 +577,12 @@ final class ThreadStore: ObservableObject {
                 let data = try Data(contentsOf: draftStateURL)
                 let state = try JSONDecoder().decode(DraftState.self, from: data)
                 self.popupDraftText = state.popupDraftText
+                self.popupAttachments = state.popupAttachments
                 self.threadDrafts = Dictionary(uniqueKeysWithValues: state.threadDrafts.compactMap { key, value in
+                    guard let uuid = UUID(uuidString: key) else { return nil }
+                    return (uuid, value)
+                })
+                self.threadAttachments = Dictionary(uniqueKeysWithValues: state.threadAttachments.compactMap { key, value in
                     guard let uuid = UUID(uuidString: key) else { return nil }
                     return (uuid, value)
                 })
@@ -490,7 +594,9 @@ final class ThreadStore: ObservableObject {
                 })
             } catch {
                 self.popupDraftText = ""
+                self.popupAttachments = []
                 self.threadDrafts = [:]
+                self.threadAttachments = [:]
                 self.queuedUserMessages = [:]
             }
         }
@@ -500,10 +606,13 @@ final class ThreadStore: ObservableObject {
     private func saveDraftState() {
         do {
             let serializableDrafts = Dictionary(uniqueKeysWithValues: threadDrafts.map { ($0.key.uuidString, $0.value) })
+            let serializableAttachments = Dictionary(uniqueKeysWithValues: threadAttachments.map { ($0.key.uuidString, $0.value) })
             let serializableQueues = Dictionary(uniqueKeysWithValues: queuedUserMessages.map { ($0.key.uuidString, $0.value) })
             let state = DraftState(
                 popupDraftText: popupDraftText,
+                popupAttachments: popupAttachments,
                 threadDrafts: serializableDrafts,
+                threadAttachments: serializableAttachments,
                 queuedMessages: serializableQueues
             )
             let data = try JSONEncoder().encode(state)
@@ -567,12 +676,88 @@ final class ThreadStore: ObservableObject {
                 }
             case .clear:
                 popupDraftText = ""
+                popupAttachments = []
                 threadDrafts.removeAll()
+                threadAttachments.removeAll()
             }
         }
     }
 
     private func truncateDraftEventLog() {
         try? Data().write(to: draftEventLogURL, options: .atomic)
+    }
+
+    private static func dedupAttachments(_ items: [ChatAttachment]) -> [ChatAttachment] {
+        var seen = Set<String>()
+        var output: [ChatAttachment] = []
+        for item in items {
+            let key = "\(item.filePath)|\(item.fileSizeBytes)"
+            if seen.insert(key).inserted {
+                output.append(item)
+            }
+        }
+        return output
+    }
+
+    private static func extractDroppedURLs(from providers: [NSItemProvider]) async -> [URL] {
+        var urls: [URL] = []
+        for provider in providers {
+            guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { continue }
+            if let url = await loadFileURL(from: provider) {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
+    private static func loadFileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let data = item as? Data,
+                    let url = NSURL(absoluteURLWithDataRepresentation: data, relativeTo: nil) as URL?
+                {
+                    continuation.resume(returning: url)
+                    return
+                }
+                if let url = item as? URL {
+                    continuation.resume(returning: url)
+                    return
+                }
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    private static func ingestAttachment(from url: URL) -> ChatAttachment? {
+        let path = url.path
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        guard size > 0, size <= 25_000_000 else {
+            return nil
+        }
+
+        let ext = url.pathExtension.lowercased()
+        let textExtensions: Set<String> = [
+            "txt", "md", "json", "jsonl", "csv", "tsv", "log", "yaml", "yml", "xml",
+            "swift", "py", "js", "ts", "tsx", "jsx", "html", "css", "sh", "zsh", "bash", "rb", "go", "rs"
+        ]
+
+        var preview: String?
+        if textExtensions.contains(ext),
+            let handle = try? FileHandle(forReadingFrom: url)
+        {
+            let data = try? handle.read(upToCount: 8000)
+            try? handle.close()
+            if let data, let text = String(data: data, encoding: .utf8) {
+                preview = String(text.prefix(3000))
+            }
+        }
+
+        return ChatAttachment(
+            fileName: url.lastPathComponent,
+            filePath: path,
+            fileSizeBytes: size,
+            previewText: preview
+        )
     }
 }

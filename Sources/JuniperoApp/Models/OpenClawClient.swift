@@ -20,7 +20,7 @@ struct OpenClawConfig: Codable {
         alwaysRouteThroughOpenClaw: true,
         ollamaFallbackEnabled: true,
         ollamaBaseURL: "http://127.0.0.1:11434",
-        ollamaModel: "kimi-k2.5"
+        ollamaModel: "qwen2.5-coder:7b"
     )
 
     enum CodingKeys: String, CodingKey {

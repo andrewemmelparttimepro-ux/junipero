@@ -11,17 +11,71 @@ enum ChatDeliveryState: String, Codable {
     case failed
 }
 
+struct ChatAttachment: Identifiable, Codable, Hashable {
+    let id: UUID
+    let fileName: String
+    let filePath: String
+    let fileSizeBytes: Int64
+    let previewText: String?
+
+    init(
+        id: UUID = UUID(),
+        fileName: String,
+        filePath: String,
+        fileSizeBytes: Int64,
+        previewText: String? = nil
+    ) {
+        self.id = id
+        self.fileName = fileName
+        self.filePath = filePath
+        self.fileSizeBytes = fileSizeBytes
+        self.previewText = previewText
+    }
+
+    var promptSegment: String {
+        var lines: [String] = []
+        lines.append("[Attachment]")
+        lines.append("Name: \(fileName)")
+        lines.append("Path: \(filePath)")
+        lines.append("Size: \(fileSizeBytes) bytes")
+        if let previewText, !previewText.isEmpty {
+            lines.append("Preview:")
+            lines.append(previewText)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 struct ChatMessage: Identifiable, Codable {
     let id: UUID
     let role: ChatRole
     var text: String
+    var attachments: [ChatAttachment]
     let timestamp: Date
 
-    init(id: UUID = UUID(), role: ChatRole, text: String, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), role: ChatRole, text: String, attachments: [ChatAttachment] = [], timestamp: Date = Date()) {
         self.id = id
         self.role = role
         self.text = text
+        self.attachments = attachments
         self.timestamp = timestamp
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case text
+        case attachments
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.role = try container.decode(ChatRole.self, forKey: .role)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+        self.attachments = try container.decodeIfPresent([ChatAttachment].self, forKey: .attachments) ?? []
+        self.timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
     }
 }
 
