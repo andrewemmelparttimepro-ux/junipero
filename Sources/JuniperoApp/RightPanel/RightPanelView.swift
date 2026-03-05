@@ -153,6 +153,12 @@ struct MSNHeaderBar: View {
         if threadStore.isSending {
             return "Thinking"
         }
+        if bootstrap.openClawHealthy {
+            if isAuthIssue {
+                return "Auth Needed"
+            }
+            return "Online"
+        }
         switch threadStore.connectivity {
         case .online:
             return "Online"
@@ -167,6 +173,12 @@ struct MSNHeaderBar: View {
         if threadStore.isSending {
             return Color(red: 0.95, green: 0.70, blue: 0.20)
         }
+        if bootstrap.openClawHealthy {
+            if isAuthIssue {
+                return Color(red: 0.95, green: 0.70, blue: 0.20)
+            }
+            return Color(red: 0.30, green: 0.85, blue: 0.30)
+        }
         switch threadStore.connectivity {
         case .online:
             return Color(red: 0.30, green: 0.85, blue: 0.30)
@@ -175,6 +187,14 @@ struct MSNHeaderBar: View {
         case .unknown:
             return Color.white.opacity(0.6)
         }
+    }
+
+    private var isAuthIssue: Bool {
+        guard let error = threadStore.lastErrorText?.lowercased() else { return false }
+        return error.contains("auth")
+            || error.contains("token")
+            || error.contains("unauthorized")
+            || error.contains("authentication")
     }
 
     private var runtimeDotColor: Color {
