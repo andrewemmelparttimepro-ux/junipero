@@ -79,6 +79,25 @@ export APPCAST_URL="https://raw.githubusercontent.com/andrewemmelparttimepro-ux/
 ./scripts/release-macos.sh
 ```
 
+## Publish In-App Updates (Sparkle)
+
+To make `Check for Updates` install the latest build, publish via:
+
+```bash
+export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
+export NOTARY_PROFILE="junipero-notary"
+export SPARKLE_PUBLIC_ED_KEY="<Sparkle public key>"
+export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/junipero/sparkle_private_ed25519.pem"
+
+VERSION=1.0.1 ./scripts/publish-sparkle-update.sh
+```
+
+This script:
+- builds and notarizes release artifacts
+- generates signed `appcast.xml`
+- commits/pushes appcast to `main`
+- uploads update assets to the GitHub release tag
+
 ## License
 
 Private — Andrew Emmel / BoredRoom

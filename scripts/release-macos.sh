@@ -38,12 +38,13 @@ for cmd in swift xcrun codesign hdiutil ditto; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd"; exit 1; }
 done
 
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")"
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")}"
 BUILD_DIR="$ROOT_DIR/dist/build"
 RELEASE_DIR="$ROOT_DIR/dist/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
 APP_ZIP="$RELEASE_DIR/$APP_NAME-notarize.zip"
 DMG_PATH="$RELEASE_DIR/$APP_NAME-$VERSION.dmg"
+UPDATE_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION-macos.zip"
 PRODUCT_PATH="$ROOT_DIR/.build/release/$SWIFT_PRODUCT"
 DMG_STAGE="$BUILD_DIR/dmg-stage"
 
@@ -117,6 +118,10 @@ xcrun notarytool submit "$APP_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP_BUNDLE"
 xcrun stapler validate "$APP_BUNDLE"
 
+echo "==> Building Sparkle update archive"
+rm -f "$UPDATE_ZIP"
+ditto -c -k --keepParent "$APP_BUNDLE" "$UPDATE_ZIP"
+
 echo "==> Building DMG"
 mkdir -p "$DMG_STAGE"
 cp -R "$APP_BUNDLE" "$DMG_STAGE/"
@@ -138,4 +143,5 @@ spctl -a -vv "$APP_BUNDLE" || true
 echo
 echo "Release complete:"
 echo "  App: $APP_BUNDLE"
+echo "  Update ZIP: $UPDATE_ZIP"
 echo "  DMG: $DMG_PATH"

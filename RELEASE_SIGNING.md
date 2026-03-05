@@ -49,8 +49,30 @@ Short answer: not for seamless public distribution.
 - Users can build from source locally.
 
 ## Sparkle In-App Updates
-- Packaged builds now write `SUFeedURL` into app `Info.plist` (from `APPCAST_URL`).
-- Keep `appcast.xml` published at that URL and update it each release.
-- For production-grade one-click updates, publish Sparkle-signed enclosures (`sparkle:edSignature`) generated from your Sparkle private key.
+- Packaged builds write `SUFeedURL` into app `Info.plist` (from `APPCAST_URL`).
+- Sparkle requires signed appcast enclosures (`sparkle:edSignature`) to install updates from `Check for Updates`.
+
+### One-command publish flow (recommended)
+Use the publisher script to:
+1. Build + sign + notarize release artifacts.
+2. Generate Sparkle-signed `appcast.xml`.
+3. Commit/push updated `appcast.xml`.
+4. Upload release assets to GitHub tag release.
+
+```bash
+export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
+export NOTARY_PROFILE="junipero-notary"
+export SPARKLE_PUBLIC_ED_KEY="<Sparkle public key>"
+export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/junipero/sparkle_private_ed25519.pem"
+
+VERSION=1.0.1 ./scripts/publish-sparkle-update.sh
+```
+
+Optional:
+- `TAG=v1.0.1` override release tag (defaults to `v$VERSION`).
+- `RELEASE_NOTES_FILE=./notes/1.0.1.md` attach notes to GitHub release and appcast item.
+- `OWNER_REPO=andrewemmelparttimepro-ux/junipero` override detected GitHub repo.
+
+After this, in-app `Check for Updates` pulls from `appcast.xml` and installs the new build.
 
 These options are fine for testing, not for polished public release.
