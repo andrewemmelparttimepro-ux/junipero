@@ -37,7 +37,7 @@ final class JuniperoBootstrap: ObservableObject {
 
     @Published var setupMode: SetupMode = .freeLocal
     @Published var providerToken: String = ""
-    @Published var providerModel: String = "anthropic/claude-sonnet-4-6"
+    @Published var providerModel: String = "ollama/qwen2.5-coder:7b"
     @Published var preferLocalFirst: Bool = true
     @Published var alwaysRouteThroughOpenClaw: Bool = true
     @Published var enableOllamaFallback: Bool = true
@@ -119,6 +119,7 @@ final class JuniperoBootstrap: ObservableObject {
         isWorking = true
         errorText = nil
         statusText = "Setting up Junipero runtime…"
+        applySetupModeDefaults()
         resetStepStates()
         setStep(.migrate, .running)
         migrateConfigIfNeeded()
@@ -126,6 +127,7 @@ final class JuniperoBootstrap: ObservableObject {
 
         setStep(.runtime, .running)
         await ensureRuntime(autoInstallModel: autoInstallKimi)
+        await syncOpenClawConfigForFreshSetup()
         setStep(.runtime, openClawHealthy ? .done : .failed)
         setStep(.fallback, (!enableOllamaFallback || ollamaHealthy) ? .done : .failed)
 
@@ -441,14 +443,26 @@ final class JuniperoBootstrap: ObservableObject {
             _ = KeychainStore.deleteProviderToken()
         }
 
+        if setupMode == .freeLocal {
+            let local = selectedOllamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !local.isEmpty {
+                providerModel = "ollama/\(local)"
+            } else {
+                providerModel = "ollama/qwen2.5-coder:7b"
+            }
+            enableOllamaFallback = true
+            preferLocalFirst = true
+            alwaysRouteThroughOpenClaw = true
+        }
+
         let config = OpenClawConfig(
             baseURL: "http://127.0.0.1:18789",
             model: providerModel,
             token: nil,
             timeoutSeconds: 45,
-            preferLocalFirst: enableOllamaFallback && preferLocalFirst,
-            alwaysRouteThroughOpenClaw: alwaysRouteThroughOpenClaw,
-            ollamaFallbackEnabled: enableOllamaFallback,
+            preferLocalFirst: setupMode == .freeLocal ? true : (enableOllamaFallback && preferLocalFirst),
+            alwaysRouteThroughOpenClaw: setupMode == .freeLocal ? true : alwaysRouteThroughOpenClaw,
+            ollamaFallbackEnabled: setupMode == .freeLocal ? true : enableOllamaFallback,
             ollamaBaseURL: "http://127.0.0.1:11434",
             ollamaModel: selectedOllamaModel
         )
@@ -457,6 +471,102 @@ final class JuniperoBootstrap: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(config) {
             try? data.write(to: configURL, options: .atomic)
+        }
+    }
+
+    private func applySetupModeDefaults() {
+        guard setupMode == .freeLocal else { return }
+        enableOllamaFallback = true
+        preferLocalFirst = true
+        alwaysRouteThroughOpenClaw = true
+        let local = selectedOllamaModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        providerModel = local.isEmpty ? "ollama/qwen2.5-coder:7b" : "ollama/\(local)"
+    }
+
+    private func syncOpenClawConfigForFreshSetup() async {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw", isDirectory: true)
+            .appendingPathComponent("openclaw.json")
+
+        guard let data = try? Data(contentsOf: path),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else {
+            return
+        }
+
+        let installed = await installedOllamaModelIDs()
+        let localIDs = installed.isEmpty ? [selectedOllamaModel] : installed
+        if let preferred = localIDs.first(where: { $0 == selectedOllamaModel }) ?? localIDs.first {
+            selectedOllamaModel = preferred
+        }
+
+        var env = root["env"] as? [String: Any] ?? [:]
+        if (env["OLLAMA_API_KEY"] as? String)?.isEmpty != false {
+            env["OLLAMA_API_KEY"] = "ollama-local"
+        }
+        root["env"] = env
+
+        var models = root["models"] as? [String: Any] ?? [:]
+        models["mode"] = (models["mode"] as? String) ?? "merge"
+        var providers = models["providers"] as? [String: Any] ?? [:]
+        var ollama = providers["ollama"] as? [String: Any] ?? [:]
+        ollama["baseUrl"] = "http://127.0.0.1:11434"
+        ollama["api"] = "ollama"
+        ollama["apiKey"] = "ollama-local"
+        ollama["models"] = localIDs.map { modelID in
+            [
+                "id": modelID,
+                "name": modelID,
+                "reasoning": false,
+                "input": ["text"],
+                "cost": [
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0
+                ],
+                "contextWindow": 32768,
+                "maxTokens": 32768
+            ] as [String: Any]
+        }
+        providers["ollama"] = ollama
+        models["providers"] = providers
+        root["models"] = models
+
+        var agents = root["agents"] as? [String: Any] ?? [:]
+        var defaults = agents["defaults"] as? [String: Any] ?? [:]
+        var model = defaults["model"] as? [String: Any] ?? [:]
+        let localRoutes = localIDs.map { "ollama/\($0)" }
+        if setupMode == .freeLocal, let primary = localRoutes.first {
+            model["primary"] = primary
+            model["fallbacks"] = Array(localRoutes.dropFirst())
+        } else {
+            var fallbacks = model["fallbacks"] as? [String] ?? []
+            for route in localRoutes where !fallbacks.contains(route) {
+                fallbacks.append(route)
+            }
+            model["fallbacks"] = fallbacks
+        }
+        defaults["model"] = model
+        agents["defaults"] = defaults
+        root["agents"] = agents
+
+        guard let out = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        try? out.write(to: path, options: .atomic)
+    }
+
+    private func installedOllamaModelIDs() async -> [String] {
+        let list = await ShellCommand.run("ollama list")
+        guard list.exitCode == 0 else { return [] }
+        let rows = list.stdout.split(separator: "\n").map(String.init)
+        guard rows.count > 1 else { return [] }
+        return rows.dropFirst().compactMap { line in
+            let columns = line.split(whereSeparator: \.isWhitespace)
+            guard let id = columns.first else { return nil }
+            let value = String(id).trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
         }
     }
 

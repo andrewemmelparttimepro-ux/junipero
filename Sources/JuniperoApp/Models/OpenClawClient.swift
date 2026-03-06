@@ -704,8 +704,10 @@ actor OpenClawClient {
         guard let data = FileManager.default.contents(atPath: path) else { return [] }
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let defaults = root["defaults"] as? [String: Any],
-            let models = defaults["fallback_models"] as? [String]
+            let agents = root["agents"] as? [String: Any],
+            let defaults = agents["defaults"] as? [String: Any],
+            let model = defaults["model"] as? [String: Any],
+            let models = model["fallbacks"] as? [String]
         else {
             return []
         }
