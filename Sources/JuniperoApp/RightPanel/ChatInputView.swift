@@ -1,9 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatInputView: View {
     @EnvironmentObject var threadStore: ThreadStore
     @State private var messageText = ""
     @FocusState private var isFocused: Bool
+    @State private var isDraggingOver = false
+    @State private var droppedFileInfo: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,23 +51,81 @@ struct ChatInputView: View {
                         .padding(.horizontal, 14)
                 }
 
+                // Dropped file info banner
+                if let fileInfo = droppedFileInfo {
+                    HStack(spacing: 6) {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 10))
+                        Text(fileInfo)
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                        Spacer()
+                        Button(action: { droppedFileInfo = nil }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundColor(Color(red: 0.80, green: 0.95, blue: 1.0))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(6)
+                    .padding(.horizontal, 14)
+                }
+
                 // Text field + Send button
                 HStack(spacing: 10) {
-                    TextField("Type a message...", text: $messageText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundColor(Color.black.opacity(0.95))
-                        .padding(10)
-                        .background(
+                    ZStack {
+                        TextField("Type a message...", text: $messageText, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 14))
+                            .foregroundColor(Color.black.opacity(0.95))
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isDraggingOver
+                                        ? Color(red: 0.75, green: 0.93, blue: 1.0)
+                                        : Color.white
+                                    )
+                                    .shadow(color: isDraggingOver
+                                        ? Color(red: 0.0, green: 0.6, blue: 0.9).opacity(0.6)
+                                        : .black.opacity(0.10),
+                                        radius: isDraggingOver ? 6 : 2, x: 0, y: 1)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(isDraggingOver
+                                                ? Color(red: 0.0, green: 0.70, blue: 1.0)
+                                                : Color.clear,
+                                                lineWidth: 2)
+                                    )
+                            )
+                            .lineLimit(1...4)
+                            .focused($isFocused)
+                            .onSubmit {
+                                sendMessage()
+                            }
+
+                        // Drop overlay indicator
+                        if isDraggingOver {
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white)
-                                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-                        )
-                        .lineLimit(1...4)
-                        .focused($isFocused)
-                        .onSubmit {
-                            sendMessage()
+                                .fill(Color(red: 0.0, green: 0.70, blue: 1.0).opacity(0.12))
+                                .overlay(
+                                    VStack(spacing: 4) {
+                                        Image(systemName: "arrow.down.doc.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(Color(red: 0.0, green: 0.70, blue: 1.0))
+                                        Text("Drop file to attach")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(Color(red: 0.0, green: 0.70, blue: 1.0))
+                                    }
+                                )
+                                .allowsHitTesting(false)
                         }
+                    }
+                    .onDrop(of: [UTType.item], isTargeted: $isDraggingOver) { providers in
+                        handleDrop(providers: providers)
+                    }
 
                     Button(action: sendMessage) {
                         HStack(spacing: 5) {
@@ -98,6 +159,7 @@ struct ChatInputView: View {
                     endPoint: .bottom
                 )
             )
+            .animation(.easeInOut(duration: 0.15), value: isDraggingOver)
         }
     }
 
@@ -108,10 +170,53 @@ struct ChatInputView: View {
     }
 
     private func sendMessage() {
-        let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        var trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || droppedFileInfo != nil else { return }
+
+        // Prepend file path info if a file was dropped
+        if let fileInfo = droppedFileInfo {
+            if trimmed.isEmpty {
+                trimmed = fileInfo
+            } else {
+                trimmed = "\(fileInfo)\n\(trimmed)"
+            }
+            droppedFileInfo = nil
+        }
 
         threadStore.sendMessage(trimmed)
         messageText = ""
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+
+        // Try to load a file URL first
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                DispatchQueue.main.async {
+                    if let data = item as? Data,
+                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        self.droppedFileInfo = url.path
+                    } else if let url = item as? URL {
+                        self.droppedFileInfo = url.path
+                    }
+                }
+            }
+            return true
+        }
+
+        // Fallback: try generic URL
+        if provider.canLoadObject(ofClass: URL.self) {
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                DispatchQueue.main.async {
+                    if let url = url {
+                        self.droppedFileInfo = url.path
+                    }
+                }
+            }
+            return true
+        }
+
+        return false
     }
 }

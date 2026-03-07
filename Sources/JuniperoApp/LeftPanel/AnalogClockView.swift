@@ -10,135 +10,271 @@ struct AnalogClockView: View {
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
-            let _ = size / 2 // radius available if needed
 
             ZStack {
-                // Outer ring — blue chrome
+                // Outer ring — powder blue periwinkle plastic bezel
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.55, green: 0.70, blue: 0.93),
-                                Color(red: 0.62, green: 0.76, blue: 0.96),
-                                Color(red: 0.50, green: 0.66, blue: 0.90),
-                                Color(red: 0.60, green: 0.74, blue: 0.95),
-                                Color(red: 0.55, green: 0.70, blue: 0.93),
+                                Color(red: 0.72, green: 0.82, blue: 0.96),
+                                Color(red: 0.80, green: 0.88, blue: 0.98),
+                                Color(red: 0.65, green: 0.77, blue: 0.93),
+                                Color(red: 0.78, green: 0.86, blue: 0.97),
+                                Color(red: 0.72, green: 0.82, blue: 0.96),
                             ],
                             center: .center
                         )
                     )
                     .frame(width: size, height: size)
-                    .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 5)
+                    .shadow(color: .black.opacity(0.30), radius: 12, x: 0, y: 6)
                     .overlay(
                         Circle()
-                            .stroke(Color(red: 0.42, green: 0.88, blue: 0.98).opacity(0.28), lineWidth: 2)
+                            .stroke(Color.white.opacity(0.50), lineWidth: 2)
                     )
 
-                // Inner bezel
+                // Bezel inner shadow ring
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.19, green: 0.32, blue: 0.58),
-                                Color(red: 0.11, green: 0.22, blue: 0.45),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: size * 0.92, height: size * 0.92)
+                    .fill(Color(red: 0.55, green: 0.68, blue: 0.86))
+                    .frame(width: size * 0.91, height: size * 0.91)
 
-                // Clock face — deep obsidian
+                // Clock face — deep navy/black
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.08, green: 0.13, blue: 0.30),
-                                Color(red: 0.03, green: 0.06, blue: 0.20),
-                                Color(red: 0.01, green: 0.03, blue: 0.12),
+                                Color(red: 0.07, green: 0.10, blue: 0.22),
+                                Color(red: 0.03, green: 0.05, blue: 0.15),
+                                Color(red: 0.01, green: 0.02, blue: 0.09),
                             ],
                             center: .center,
                             startRadius: 0,
                             endRadius: size * 0.44
                         )
                     )
-                    .frame(width: size * 0.88, height: size * 0.88)
+                    .frame(width: size * 0.87, height: size * 0.87)
 
-                // Hour markers
+                // --- NEON CRUSTACEAN ARTWORK ---
+                Canvas { ctx, canvasSize in
+                    let cx = canvasSize.width / 2
+                    let cy = canvasSize.height / 2
+                    let r = min(canvasSize.width, canvasSize.height) / 2
+                    let scale = r * 0.74  // art fills ~74% of face
+
+                    // Glow helper: draw path multiple times with increasing alpha + width
+                    func glowStroke(ctx: inout GraphicsContext, path: Path, color: Color, glowRadius: CGFloat, lineWidth: CGFloat) {
+                        for i in stride(from: glowRadius, through: 0, by: -2) {
+                            var glowCtx = ctx
+                            glowCtx.stroke(path, with: .color(color.opacity(0.04 + 0.02 * (glowRadius - i) / glowRadius)),
+                                           lineWidth: lineWidth + i * 1.5)
+                        }
+                        ctx.stroke(path, with: .color(color), lineWidth: lineWidth)
+                    }
+
+                    let cyan = Color(red: 0.0, green: 0.92, blue: 0.96)
+                    let red  = Color(red: 1.0, green: 0.28, blue: 0.28)
+
+                    // === BODY — central oval ===
+                    let bodyPath = Path(ellipseIn: CGRect(
+                        x: cx - scale * 0.18, y: cy - scale * 0.22,
+                        width: scale * 0.36, height: scale * 0.44
+                    ))
+                    var bodyCtx = ctx
+                    bodyCtx.stroke(bodyPath, with: .color(cyan.opacity(0.9)), lineWidth: 2.2)
+                    // body glow
+                    bodyCtx.stroke(bodyPath, with: .color(cyan.opacity(0.15)), lineWidth: 10)
+                    ctx.stroke(bodyPath, with: .color(cyan.opacity(0.9)), lineWidth: 2.2)
+
+                    // === SEGMENTED BELLY LINES ===
+                    for i in 0..<4 {
+                        let yt = cy - scale * 0.10 + CGFloat(i) * scale * 0.09
+                        let hw = scale * 0.13 * (1 - CGFloat(i) * 0.10)
+                        var seg = Path()
+                        seg.move(to: CGPoint(x: cx - hw, y: yt))
+                        seg.addCurve(to: CGPoint(x: cx + hw, y: yt),
+                                     control1: CGPoint(x: cx - hw * 0.5, y: yt + scale * 0.03),
+                                     control2: CGPoint(x: cx + hw * 0.5, y: yt + scale * 0.03))
+                        ctx.stroke(seg, with: .color(cyan.opacity(0.55)), lineWidth: 1.2)
+                    }
+
+                    // === CLAWS — big outer (left & right) ===
+                    for side in [-1.0, 1.0] {
+                        // Upper big claw
+                        var claw = Path()
+                        let cx1 = cx + side * scale * 0.14
+                        let cy1 = cy - scale * 0.08
+                        claw.move(to: CGPoint(x: cx1, y: cy1))
+                        claw.addCurve(
+                            to: CGPoint(x: cx + side * scale * 0.52, y: cy - scale * 0.38),
+                            control1: CGPoint(x: cx + side * scale * 0.30, y: cy - scale * 0.05),
+                            control2: CGPoint(x: cx + side * scale * 0.46, y: cy - scale * 0.20)
+                        )
+                        ctx.stroke(claw, with: .color(cyan.opacity(0.85)), lineWidth: 2.8)
+                        ctx.stroke(claw, with: .color(cyan.opacity(0.12)), lineWidth: 12)
+
+                        // Claw pincer — top jaw
+                        var pincer1 = Path()
+                        pincer1.move(to: CGPoint(x: cx + side * scale * 0.52, y: cy - scale * 0.38))
+                        pincer1.addCurve(
+                            to: CGPoint(x: cx + side * scale * 0.65, y: cy - scale * 0.48),
+                            control1: CGPoint(x: cx + side * scale * 0.56, y: cy - scale * 0.42),
+                            control2: CGPoint(x: cx + side * scale * 0.62, y: cy - scale * 0.44)
+                        )
+                        ctx.stroke(pincer1, with: .color(cyan.opacity(0.80)), lineWidth: 2.2)
+
+                        // Claw pincer — bottom jaw
+                        var pincer2 = Path()
+                        pincer2.move(to: CGPoint(x: cx + side * scale * 0.52, y: cy - scale * 0.38))
+                        pincer2.addCurve(
+                            to: CGPoint(x: cx + side * scale * 0.60, y: cy - scale * 0.28),
+                            control1: CGPoint(x: cx + side * scale * 0.57, y: cy - scale * 0.34),
+                            control2: CGPoint(x: cx + side * scale * 0.60, y: cy - scale * 0.31)
+                        )
+                        ctx.stroke(pincer2, with: .color(cyan.opacity(0.80)), lineWidth: 2.2)
+
+                        // Mid walking legs (3 per side)
+                        for leg in 0..<3 {
+                            var legPath = Path()
+                            let ly = cy + CGFloat(leg) * scale * 0.10
+                            let lx = cx + side * scale * 0.15
+                            legPath.move(to: CGPoint(x: lx, y: ly))
+                            legPath.addCurve(
+                                to: CGPoint(x: cx + side * scale * (0.45 + CGFloat(leg) * 0.04), y: ly + scale * 0.14),
+                                control1: CGPoint(x: cx + side * scale * 0.28, y: ly + scale * 0.02),
+                                control2: CGPoint(x: cx + side * scale * 0.38, y: ly + scale * 0.08)
+                            )
+                            ctx.stroke(legPath, with: .color(cyan.opacity(0.65)), lineWidth: 1.6)
+                        }
+                    }
+
+                    // === ANTENNAE (2 per side) ===
+                    for side in [-1.0, 1.0] {
+                        // Long antenna
+                        var ant = Path()
+                        ant.move(to: CGPoint(x: cx + side * scale * 0.06, y: cy - scale * 0.22))
+                        ant.addCurve(
+                            to: CGPoint(x: cx + side * scale * 0.55, y: cy - scale * 0.70),
+                            control1: CGPoint(x: cx + side * scale * 0.15, y: cy - scale * 0.40),
+                            control2: CGPoint(x: cx + side * scale * 0.38, y: cy - scale * 0.60)
+                        )
+                        ctx.stroke(ant, with: .color(cyan.opacity(0.75)), lineWidth: 1.3)
+                        ctx.stroke(ant, with: .color(cyan.opacity(0.08)), lineWidth: 6)
+
+                        // Short inner antenna
+                        var ant2 = Path()
+                        ant2.move(to: CGPoint(x: cx + side * scale * 0.04, y: cy - scale * 0.22))
+                        ant2.addCurve(
+                            to: CGPoint(x: cx + side * scale * 0.30, y: cy - scale * 0.55),
+                            control1: CGPoint(x: cx + side * scale * 0.10, y: cy - scale * 0.35),
+                            control2: CGPoint(x: cx + side * scale * 0.22, y: cy - scale * 0.46)
+                        )
+                        ctx.stroke(ant2, with: .color(cyan.opacity(0.55)), lineWidth: 0.9)
+                    }
+
+                    // === SPIKY CROWN ===
+                    let crownPoints: [(CGFloat, CGFloat)] = [
+                        (-0.12, -0.22), (-0.22, -0.38), (-0.08, -0.28),
+                        (0.0, -0.42),
+                        (0.08, -0.28), (0.22, -0.38), (0.12, -0.22)
+                    ]
+                    var crown = Path()
+                    crown.move(to: CGPoint(x: cx + crownPoints[0].0 * scale, y: cy + crownPoints[0].1 * scale))
+                    for (i, pt) in crownPoints.enumerated() {
+                        if i == 0 { continue }
+                        crown.addLine(to: CGPoint(x: cx + pt.0 * scale, y: cy + pt.1 * scale))
+                    }
+                    ctx.stroke(crown, with: .color(cyan.opacity(0.80)), lineWidth: 2.0)
+                    ctx.stroke(crown, with: .color(cyan.opacity(0.12)), lineWidth: 8)
+
+                    // === GLOWING EYES (RED) ===
+                    let eyeOffX = scale * 0.07
+                    let eyeY = cy - scale * 0.04
+                    let eyeR = scale * 0.055
+                    for side in [-1.0, 1.0] {
+                        let ex = cx + side * eyeOffX
+                        let eyePath = Path(ellipseIn: CGRect(x: ex - eyeR, y: eyeY - eyeR * 0.7,
+                                                              width: eyeR * 2, height: eyeR * 1.4))
+                        // Red glow layers
+                        ctx.stroke(eyePath, with: .color(red.opacity(0.08)), lineWidth: 10)
+                        ctx.stroke(eyePath, with: .color(red.opacity(0.18)), lineWidth: 6)
+                        ctx.stroke(eyePath, with: .color(red.opacity(0.50)), lineWidth: 3)
+                        ctx.stroke(eyePath, with: .color(red.opacity(0.95)), lineWidth: 1.5)
+                        // Eye fill
+                        ctx.fill(eyePath, with: .color(red.opacity(0.35)))
+                    }
+
+                    // === SCORPION TAIL (curves up/down from body) ===
+                    var tail = Path()
+                    tail.move(to: CGPoint(x: cx, y: cy + scale * 0.22))
+                    tail.addCurve(
+                        to: CGPoint(x: cx + scale * 0.20, y: cy + scale * 0.55),
+                        control1: CGPoint(x: cx + scale * 0.12, y: cy + scale * 0.30),
+                        control2: CGPoint(x: cx + scale * 0.25, y: cy + scale * 0.42)
+                    )
+                    tail.addCurve(
+                        to: CGPoint(x: cx - scale * 0.05, y: cy + scale * 0.66),
+                        control1: CGPoint(x: cx + scale * 0.18, y: cy + scale * 0.63),
+                        control2: CGPoint(x: cx + scale * 0.05, y: cy + scale * 0.68)
+                    )
+                    // Stinger tip
+                    tail.addLine(to: CGPoint(x: cx - scale * 0.10, y: cy + scale * 0.62))
+                    ctx.stroke(tail, with: .color(cyan.opacity(0.80)), lineWidth: 2.0)
+                    ctx.stroke(tail, with: .color(cyan.opacity(0.10)), lineWidth: 8)
+
+                }
+                .frame(width: size * 0.87, height: size * 0.87)
+
+                // Hour markers (on top of art)
                 ForEach(0..<12) { i in
                     let angle = Double(i) * 30.0 - 90.0
                     let isMainHour = i % 3 == 0
-                    let markerLength: CGFloat = isMainHour ? size * 0.07 : size * 0.04
-                    let markerWidth: CGFloat = isMainHour ? 3.0 : 1.5
+                    let markerLength: CGFloat = isMainHour ? size * 0.065 : size * 0.035
+                    let markerWidth: CGFloat = isMainHour ? 2.5 : 1.2
                     let outerRadius = size * 0.40
                     let innerRadius = outerRadius - markerLength
-
-                    let cosAngle = cos(angle * .pi / 180)
-                    let sinAngle = sin(angle * .pi / 180)
+                    let cosA = cos(angle * .pi / 180)
+                    let sinA = sin(angle * .pi / 180)
 
                     Path { path in
                         path.move(to: CGPoint(
-                            x: center.x + innerRadius * cosAngle,
-                            y: center.y + innerRadius * sinAngle
+                            x: center.x + innerRadius * cosA,
+                            y: center.y + innerRadius * sinA
                         ))
                         path.addLine(to: CGPoint(
-                            x: center.x + outerRadius * cosAngle,
-                            y: center.y + outerRadius * sinAngle
+                            x: center.x + outerRadius * cosA,
+                            y: center.y + outerRadius * sinA
                         ))
                     }
                     .stroke(
                         isMainHour
-                            ? Color(red: 0.80, green: 0.95, blue: 1.0)
-                            : Color(red: 0.50, green: 0.66, blue: 0.88),
+                            ? Color.white.opacity(0.92)
+                            : Color.white.opacity(0.40),
                         style: StrokeStyle(lineWidth: markerWidth, lineCap: .round)
                     )
-                    .shadow(color: isMainHour ? Color(red: 0.50, green: 0.90, blue: 1.0).opacity(0.28) : .clear, radius: 2)
+                    .shadow(color: isMainHour ? Color.white.opacity(0.35) : .clear, radius: 2)
                 }
 
-                // Minute tick marks
-                ForEach(0..<60) { i in
-                    if i % 5 != 0 {
-                        let angle = Double(i) * 6.0 - 90.0
-                        let outerRadius = size * 0.40
-                        let innerRadius = outerRadius - size * 0.015
-
-                        let cosAngle = cos(angle * .pi / 180)
-                        let sinAngle = sin(angle * .pi / 180)
-
-                        Path { path in
-                            path.move(to: CGPoint(
-                                x: center.x + innerRadius * cosAngle,
-                                y: center.y + innerRadius * sinAngle
-                            ))
-                            path.addLine(to: CGPoint(
-                                x: center.x + outerRadius * cosAngle,
-                                y: center.y + outerRadius * sinAngle
-                            ))
-                        }
-                        .stroke(Color.white.opacity(0.2), style: StrokeStyle(lineWidth: 0.5, lineCap: .round))
-                    }
-                }
-
-                // "O'BRIEN" text at top
+                // "JUNIPERO" label at top
                 Text("JUNIPERO")
-                    .font(.system(size: size * 0.09, weight: .semibold, design: .serif))
-                    .tracking(5)
-                    .foregroundColor(Color(red: 0.76, green: 0.90, blue: 0.98))
-                    .offset(y: -size * 0.18)
+                    .font(.system(size: size * 0.088, weight: .semibold, design: .serif))
+                    .tracking(4)
+                    .foregroundColor(.white)
+                    .shadow(color: Color(red: 0.0, green: 0.92, blue: 0.96).opacity(0.30), radius: 4)
+                    .offset(y: -size * 0.245)
 
-                // "CHICAGO" text at bottom
-                Text("SAN JUNIPERO")
-                    .font(.system(size: size * 0.042, weight: .regular, design: .default))
-                    .tracking(5)
-                    .foregroundColor(Color(red: 0.52, green: 0.66, blue: 0.84))
-                    .offset(y: size * 0.21)
+                // "powered by openclaw" label at bottom
+                Text("powered by openclaw")
+                    .font(.system(size: size * 0.038, weight: .regular, design: .default))
+                    .tracking(2)
+                    .foregroundColor(Color.white.opacity(0.55))
+                    .offset(y: size * 0.245)
 
                 // Hour hand
                 ClockHand(
                     angle: hourAngle,
                     length: size * 0.22,
                     width: 4.5,
-                    color: Color(red: 0.86, green: 0.94, blue: 1.0),
+                    color: Color.white.opacity(0.95),
                     center: center,
                     tailLength: size * 0.05
                 )
@@ -149,43 +285,33 @@ struct AnalogClockView: View {
                     angle: minuteAngle,
                     length: size * 0.32,
                     width: 3.0,
-                    color: Color(red: 0.80, green: 0.90, blue: 0.98),
+                    color: Color.white.opacity(0.88),
                     center: center,
                     tailLength: size * 0.07
                 )
                 .shadow(color: .black.opacity(0.5), radius: 2, x: 1, y: 1)
 
-                // Second hand
+                // Second hand — red
                 ClockHand(
                     angle: secondAngle,
                     length: size * 0.35,
                     width: 1.2,
-                    color: Color(red: 0.92, green: 0.30, blue: 0.26),
+                    color: Color(red: 0.95, green: 0.28, blue: 0.28),
                     center: center,
                     tailLength: size * 0.08
                 )
-                .shadow(color: Color(red: 0.92, green: 0.30, blue: 0.26).opacity(0.3), radius: 2)
+                .shadow(color: Color(red: 0.95, green: 0.28, blue: 0.28).opacity(0.4), radius: 3)
 
-                // Center cap
+                // Center cap — gray pivot
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.80, green: 0.92, blue: 1.0),
-                                Color(red: 0.48, green: 0.64, blue: 0.86),
-                            ],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: size * 0.025
-                        )
-                    )
-                    .frame(width: size * 0.05, height: size * 0.05)
+                    .fill(Color(red: 0.65, green: 0.68, blue: 0.72))
+                    .frame(width: size * 0.048, height: size * 0.048)
                     .shadow(color: .black.opacity(0.3), radius: 2)
 
-                // Inner center dot
+                // Center dot — orange/red
                 Circle()
                     .fill(Color(red: 0.92, green: 0.30, blue: 0.26))
-                    .frame(width: size * 0.015, height: size * 0.015)
+                    .frame(width: size * 0.016, height: size * 0.016)
             }
         }
         .onReceive(timer) { _ in
@@ -231,15 +357,10 @@ struct ClockHand: View {
         Path { path in
             let cosAngle = cos(angle * .pi / 180)
             let sinAngle = sin(angle * .pi / 180)
-
-            // Tail (opposite direction)
             let tailX = center.x - tailLength * cosAngle
             let tailY = center.y - tailLength * sinAngle
-
-            // Tip
             let tipX = center.x + length * cosAngle
             let tipY = center.y + length * sinAngle
-
             path.move(to: CGPoint(x: tailX, y: tailY))
             path.addLine(to: CGPoint(x: tipX, y: tipY))
         }
