@@ -204,8 +204,64 @@ struct ChatThread: Identifiable, Codable {
         return converted
     }
 
+    var displayErrorMessage: String? {
+        errorMessage.map(Self.presentableErrorMessage)
+    }
+
     var formattedDate: String {
         Self.dateTimeFormatter.string(from: updatedAt)
+    }
+
+    static func presentableErrorMessage(_ raw: String) -> String {
+        let lower = raw.lowercased()
+
+        if lower.contains("overloaded") || lower.contains("rate limit") || lower.contains("cooldown") {
+            return "Provider is overloaded right now. Retry in a moment or use local fallback."
+        }
+
+        if lower.contains("image exceeds 5 mb") || lower.contains("exceeds 5 mb maximum") {
+            return "Attachment is too large (max 5 MB). Resize or compress, then try again."
+        }
+
+        if lower.contains("timed out")
+            || lower.contains("request timed out")
+            || lower.contains("nsurlerrordomain code=-1001")
+        {
+            return "The reply took too long and timed out. Retry, or pick a faster model in Setup."
+        }
+
+        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("openclaw rejected authentication") {
+            return "Authentication failed. Open Setup and verify your provider token."
+        }
+
+        if lower.contains("could not connect to the server")
+            || lower.contains("cannot connect to host")
+            || lower.contains("not connected to internet")
+            || lower.contains("nsurlerrordomain code=-1004")
+            || lower.contains("kcferror")
+        {
+            return "Cannot reach OpenClaw right now. Use Heal or check that OpenClaw is running."
+        }
+
+        if lower.contains("primary and fallback both failed") {
+            let fallbackMissingModel = lower.contains("model")
+                && lower.contains("not found")
+                && (lower.contains("kimi") || lower.contains("ollama"))
+            if fallbackMissingModel {
+                return "Primary is offline and local fallback model is missing. Open Setup and tap Fix Missing Model."
+            }
+            return "Primary and fallback both failed. Open Setup, run diagnostics, then retry."
+        }
+
+        if lower.contains("openclaw error 404") && lower.contains("model") && lower.contains("not found") {
+            return "Configured model was not found. Open Setup and select/install an available model."
+        }
+
+        if raw.count > 220 {
+            return "Request failed. Open Setup > Run Diagnostics for full details."
+        }
+
+        return raw
     }
 
     private static let dateTimeFormatter: DateFormatter = {

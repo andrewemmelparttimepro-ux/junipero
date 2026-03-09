@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct JuniperoApp: App {
     @StateObject private var threadStore = ThreadStore()
+    @StateObject private var agentRosterStore = AgentRosterStore()
     @StateObject private var bootstrap = JuniperoBootstrap()
     @StateObject private var updateManager = UpdateManager()
     @StateObject private var sparkleUpdater = SparkleUpdaterService()
@@ -11,6 +12,7 @@ struct JuniperoApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(threadStore)
+                .environmentObject(agentRosterStore)
                 .environmentObject(bootstrap)
                 .environmentObject(updateManager)
                 .environmentObject(sparkleUpdater)
@@ -28,6 +30,7 @@ struct JuniperoApp: App {
                     Text("Junipero \(updateManager.latestVersion) is available. Download the latest build for best stability.")
                 }
                 .task {
+                    agentRosterStore.start(threadSending: threadStore.isSending)
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
                 }

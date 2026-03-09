@@ -16,6 +16,11 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/JuniperoApp"
+        ),
+        .testTarget(
+            name: "JuniperoAppTests",
+            dependencies: ["JuniperoApp"],
+            path: "Tests/JuniperoAppTests"
         )
     ]
 )

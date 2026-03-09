@@ -1,16 +1,26 @@
 import SwiftUI
 
+enum BitcoinWidgetStyle {
+    case regular
+    case compact
+}
+
 struct BitcoinWidget: View {
+    let style: BitcoinWidgetStyle
     @State private var price: Double?
     @State private var change24h: Double?
     @State private var isLoading = true
 
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
+    init(style: BitcoinWidgetStyle = .regular) {
+        self.style = style
+    }
+
     var body: some View {
         ZStack {
             // MSN-blue glass background
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: metrics.cornerRadius)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -23,7 +33,7 @@ struct BitcoinWidget: View {
                     )
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16)
+                    RoundedRectangle(cornerRadius: metrics.cornerRadius)
                         .fill(
                             LinearGradient(
                                 colors: [
@@ -37,7 +47,7 @@ struct BitcoinWidget: View {
                         )
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16)
+                    RoundedRectangle(cornerRadius: metrics.cornerRadius)
                         .stroke(
                             LinearGradient(
                                 colors: [
@@ -51,17 +61,17 @@ struct BitcoinWidget: View {
                             lineWidth: 0.8
                         )
                 )
-                .shadow(color: Color(red: 0.16, green: 0.46, blue: 0.96).opacity(0.30), radius: 10, x: 0, y: 5)
+                .shadow(color: Color(red: 0.16, green: 0.46, blue: 0.96).opacity(0.28), radius: metrics.shadowRadius, x: 0, y: metrics.shadowYOffset)
 
-            VStack(spacing: 6) {
+            VStack(spacing: metrics.verticalSpacing) {
                 // Header
                 HStack {
                     Text("₿")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: metrics.symbolSize, weight: .bold))
                         .foregroundColor(Color(red: 0.95, green: 0.75, blue: 0.15))
                     Text("BITCOIN")
-                        .font(.system(size: 10, weight: .medium, design: .default))
-                        .tracking(2)
+                        .font(.system(size: metrics.headerSize, weight: .medium, design: .default))
+                        .tracking(metrics.headerTracking)
                         .foregroundColor(Color(red: 0.86, green: 0.94, blue: 1.0).opacity(0.75))
                     Spacer()
                 }
@@ -76,10 +86,10 @@ struct BitcoinWidget: View {
                     // Price
                     HStack(alignment: .firstTextBaseline) {
                         Text("$")
-                            .font(.system(size: 14, weight: .light))
+                            .font(.system(size: metrics.pricePrefixSize, weight: .light))
                             .foregroundColor(Color(red: 0.82, green: 0.90, blue: 1.0).opacity(0.8))
                         Text(formattedPrice)
-                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+                            .font(.system(size: metrics.priceSize, weight: .semibold, design: .rounded))
                             .foregroundColor(Color.white.opacity(0.96))
                     }
 
@@ -87,11 +97,11 @@ struct BitcoinWidget: View {
                     if let change = change24h {
                         HStack(spacing: 4) {
                             Image(systemName: change >= 0 ? "arrow.up.right" : "arrow.down.right")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.system(size: metrics.changeIconSize, weight: .bold))
                             Text(String(format: "%.1f%%", abs(change)))
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .font(.system(size: metrics.changeTextSize, weight: .medium, design: .rounded))
                             Text("24h")
-                                .font(.system(size: 9))
+                                .font(.system(size: metrics.changeCaptionSize))
                                 .foregroundColor(.white.opacity(0.4))
                         }
                         .foregroundColor(change >= 0 ? Color(red: 0.30, green: 0.85, blue: 0.45) : Color(red: 0.95, green: 0.35, blue: 0.30))
@@ -100,7 +110,7 @@ struct BitcoinWidget: View {
 
                 Spacer()
             }
-            .padding(16)
+            .padding(metrics.padding)
         }
         .task {
             await fetchPrice()
@@ -137,5 +147,58 @@ struct BitcoinWidget: View {
                 self.isLoading = false
             }
         }
+    }
+
+    private var metrics: Metrics {
+        switch style {
+        case .regular:
+            return Metrics(
+                cornerRadius: 16,
+                shadowRadius: 10,
+                shadowYOffset: 5,
+                padding: 16,
+                verticalSpacing: 6,
+                symbolSize: 14,
+                headerSize: 10,
+                headerTracking: 2,
+                pricePrefixSize: 14,
+                priceSize: 24,
+                changeIconSize: 9,
+                changeTextSize: 11,
+                changeCaptionSize: 9
+            )
+        case .compact:
+            return Metrics(
+                cornerRadius: 14,
+                shadowRadius: 8,
+                shadowYOffset: 4,
+                padding: 14,
+                verticalSpacing: 5,
+                symbolSize: 12,
+                headerSize: 9,
+                headerTracking: 1.8,
+                pricePrefixSize: 12,
+                priceSize: 20,
+                changeIconSize: 8,
+                changeTextSize: 10,
+                changeCaptionSize: 8
+            )
+        }
+    }
+
+    private struct Metrics {
+        let cornerRadius: CGFloat
+        let shadowRadius: CGFloat
+        let shadowYOffset: CGFloat
+        let padding: CGFloat
+        let verticalSpacing: CGFloat
+        let symbolSize: CGFloat
+        let headerSize: CGFloat
+        let headerTracking: CGFloat
+        let pricePrefixSize: CGFloat
+        let priceSize: CGFloat
+        let changeIconSize: CGFloat
+        let changeTextSize: CGFloat
+        let changeCaptionSize: CGFloat
     }
 }

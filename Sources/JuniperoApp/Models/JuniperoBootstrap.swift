@@ -459,7 +459,7 @@ final class JuniperoBootstrap: ObservableObject {
             baseURL: "http://127.0.0.1:18789",
             model: providerModel,
             token: nil,
-            timeoutSeconds: 45,
+            timeoutSeconds: 90,
             preferLocalFirst: setupMode == .freeLocal ? true : (enableOllamaFallback && preferLocalFirst),
             alwaysRouteThroughOpenClaw: setupMode == .freeLocal ? true : alwaysRouteThroughOpenClaw,
             ollamaFallbackEnabled: setupMode == .freeLocal ? true : enableOllamaFallback,

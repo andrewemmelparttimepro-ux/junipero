@@ -290,7 +290,7 @@ final class ThreadStore: ObservableObject {
         threads[index].updatedAt = Date()
         threads[index].isLoading = false
         threads[index].state = .failed
-        threads[index].errorMessage = error
+        threads[index].errorMessage = presentableErrorMessage(error)
         moveThreadToTop(id)
         saveThreads()
     }
@@ -383,49 +383,11 @@ final class ThreadStore: ObservableObject {
 
     private func normalizeError(_ error: Error) -> String {
         let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach O'Brien."
-        let lower = raw.lowercased()
+        return ChatThread.presentableErrorMessage(raw)
+    }
 
-        if lower.contains("overloaded") || lower.contains("rate limit") || lower.contains("cooldown") {
-            return "Provider is overloaded right now. Retry in a moment or use local fallback."
-        }
-
-        if lower.contains("image exceeds 5 mb") || lower.contains("exceeds 5 mb maximum") {
-            return "Attachment is too large (max 5 MB). Resize or compress, then try again."
-        }
-
-        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("openclaw rejected authentication") {
-            return "Authentication failed. Open Setup and verify your provider token."
-        }
-
-        if lower.contains("could not connect to the server")
-            || lower.contains("cannot connect to host")
-            || lower.contains("not connected to internet")
-            || lower.contains("nsurlerrordomain code=-1004")
-            || lower.contains("kcferror")
-        {
-            return "Cannot reach OpenClaw right now. Use Heal or check that OpenClaw is running."
-        }
-
-        if lower.contains("primary and fallback both failed") {
-            let fallbackMissingModel = lower.contains("model")
-                && lower.contains("not found")
-                && (lower.contains("kimi") || lower.contains("ollama"))
-            if fallbackMissingModel {
-                return "Primary is offline and local fallback model is missing. Open Setup and tap Fix Missing Model."
-            }
-            return "Primary and fallback both failed. Open Setup, run diagnostics, then retry."
-        }
-
-        if lower.contains("openclaw error 404") && lower.contains("model") && lower.contains("not found") {
-            return "Configured model was not found. Open Setup and select/install an available model."
-        }
-
-        // Prevent noisy framework/network dumps from reaching chat bubbles.
-        if raw.count > 220 {
-            return "Request failed. Open Setup > Run Diagnostics for full details."
-        }
-
-        return raw
+    private func presentableErrorMessage(_ raw: String) -> String {
+        ChatThread.presentableErrorMessage(raw)
     }
 
     private func cancelTask(for id: UUID, updateThreadState: Bool) {
@@ -542,15 +504,27 @@ final class ThreadStore: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let decoded = try decoder.decode([ChatThread].self, from: data)
+            var didSanitizeStoredErrors = false
             self.threads = Array(decoded.prefix(maxStoredThreads)).map { thread in
-                if thread.isLoading {
-                    var recovered = thread
+                var sanitized = thread
+                if let errorMessage = sanitized.errorMessage {
+                    let cleaned = presentableErrorMessage(errorMessage)
+                    if cleaned != errorMessage {
+                        sanitized.errorMessage = cleaned
+                        didSanitizeStoredErrors = true
+                    }
+                }
+                if sanitized.isLoading {
+                    var recovered = sanitized
                     recovered.isLoading = false
                     recovered.state = .failed
                     recovered.errorMessage = "Recovered after app restart before reply completed."
                     return recovered
                 }
-                return thread
+                return sanitized
+            }
+            if didSanitizeStoredErrors {
+                saveThreads()
             }
         } catch {
             let brokenName = "threads-corrupt-\(Int(Date().timeIntervalSince1970)).json"

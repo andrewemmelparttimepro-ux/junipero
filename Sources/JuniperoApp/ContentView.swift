@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var agentRosterStore: AgentRosterStore
 
     var body: some View {
         ZStack {
@@ -52,6 +53,14 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: threadStore.allThreadsMode)
+        .task {
+            agentRosterStore.start(threadSending: threadStore.isSending)
+        }
+        .onChange(of: threadStore.isSending) { newValue in
+            Task {
+                await agentRosterStore.refresh(threadSending: newValue)
+            }
+        }
     }
 }
 

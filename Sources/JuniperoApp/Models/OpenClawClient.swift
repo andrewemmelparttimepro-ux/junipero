@@ -15,7 +15,7 @@ struct OpenClawConfig: Codable {
         baseURL: "http://127.0.0.1:18789",
         model: "anthropic/claude-sonnet-4-6",
         token: nil,
-        timeoutSeconds: 45,
+        timeoutSeconds: 90,
         preferLocalFirst: false,
         alwaysRouteThroughOpenClaw: true,
         ollamaFallbackEnabled: true,
@@ -112,7 +112,7 @@ actor OpenClawClient {
         let config = Self.resolveConfig()
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.timeoutIntervalForRequest = max(5, config.timeoutSeconds)
-        sessionConfig.timeoutIntervalForResource = max(10, config.timeoutSeconds + 10)
+        sessionConfig.timeoutIntervalForResource = max(20, config.timeoutSeconds + 20)
         self.session = URLSession(configuration: sessionConfig)
     }
 
@@ -146,7 +146,7 @@ actor OpenClawClient {
                 await ChatDiagnostics.shared.log("openclaw-chain-ok model=\(modelName)")
                 return reply
             } catch {
-                let text = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                let text = Self.summarize(error)
                 failures.append("\(modelName): \(text)")
                 await ChatDiagnostics.shared.log("openclaw-chain-fail model=\(modelName) error=\(text)")
             }
@@ -187,8 +187,8 @@ actor OpenClawClient {
 
         if let primaryError {
             if let fallbackError {
-                let primaryText = (primaryError as? LocalizedError)?.errorDescription ?? String(describing: primaryError)
-                let fallbackText = (fallbackError as? LocalizedError)?.errorDescription ?? String(describing: fallbackError)
+                let primaryText = Self.summarize(primaryError)
+                let fallbackText = Self.summarize(fallbackError)
                 throw OpenClawClientError.allBackendsFailed("Primary and fallback both failed. Primary: \(primaryText) | Fallback: \(fallbackText)")
             }
             throw primaryError
@@ -248,10 +248,10 @@ actor OpenClawClient {
         }
 
         if let localViaOpenClawError, let remoteViaOpenClawError {
-            let l = (localViaOpenClawError as? LocalizedError)?.errorDescription ?? String(describing: localViaOpenClawError)
-            let r = (remoteViaOpenClawError as? LocalizedError)?.errorDescription ?? String(describing: remoteViaOpenClawError)
+            let l = Self.summarize(localViaOpenClawError)
+            let r = Self.summarize(remoteViaOpenClawError)
             if let directLocalError {
-                let d = (directLocalError as? LocalizedError)?.errorDescription ?? String(describing: directLocalError)
+                let d = Self.summarize(directLocalError)
                 throw OpenClawClientError.allBackendsFailed("OpenClaw local and provider models failed, plus direct local fallback failed. Local(OpenClaw): \(l) | Provider(OpenClaw): \(r) | Local(direct): \(d)")
             }
             throw OpenClawClientError.allBackendsFailed("OpenClaw local and provider models both failed. Local(OpenClaw): \(l) | Provider(OpenClaw): \(r)")
@@ -623,7 +623,7 @@ actor OpenClawClient {
         if let homeConfig = readJuniperoConfig() {
             config.baseURL = homeConfig.baseURL
             config.model = homeConfig.model
-            config.timeoutSeconds = homeConfig.timeoutSeconds
+            config.timeoutSeconds = max(homeConfig.timeoutSeconds, OpenClawConfig.default.timeoutSeconds)
             config.preferLocalFirst = homeConfig.preferLocalFirst
             config.alwaysRouteThroughOpenClaw = homeConfig.alwaysRouteThroughOpenClaw
             config.ollamaFallbackEnabled = homeConfig.ollamaFallbackEnabled
@@ -668,6 +668,29 @@ actor OpenClawClient {
         }
 
         return config
+    }
+
+    private static func summarize(_ error: Error) -> String {
+        let raw = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        let lower = raw.lowercased()
+
+        if lower.contains("timed out") || lower.contains("nsurlerrordomain code=-1001") {
+            return "Request timed out."
+        }
+        if lower.contains("unauthorized") || lower.contains("authentication") || lower.contains("token") {
+            return "Authentication failed."
+        }
+        if lower.contains("kcferror")
+            || lower.contains("cannot connect")
+            || lower.contains("could not connect")
+            || lower.contains("not connected to internet")
+        {
+            return "Connection failed."
+        }
+        if raw.count > 160 {
+            return String(raw.prefix(157)) + "..."
+        }
+        return raw
     }
 
     private static func readJuniperoConfig() -> OpenClawConfig? {

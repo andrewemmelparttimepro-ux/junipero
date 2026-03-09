@@ -95,7 +95,7 @@ struct ThreadDetailView: View {
                                 .id("loading-\(thread.id.uuidString)")
                             } else if thread.state == .failed {
                                 HStack {
-                                    Text(thread.errorMessage ?? "Request failed.")
+                                    Text(thread.displayErrorMessage ?? "Request failed.")
                                         .font(.system(size: 12))
                                         .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
                                     Spacer()

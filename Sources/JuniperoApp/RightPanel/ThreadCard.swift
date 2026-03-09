@@ -51,7 +51,7 @@ struct ThreadCard: View {
                         .foregroundColor(Color.black.opacity(0.72))
                 }
             } else if thread.state == .failed {
-                Text(thread.errorMessage ?? "Request failed.")
+                Text(thread.displayErrorMessage ?? "Request failed.")
                     .font(.system(size: 12))
                     .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
                     .lineLimit(2)
