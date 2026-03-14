@@ -6,6 +6,8 @@ struct ThrawnApp: App {
     @StateObject private var bootstrap = ThrawnBootstrap()
     @StateObject private var updateManager = UpdateManager()
     @StateObject private var sparkleUpdater = SparkleUpdaterService()
+    @StateObject private var roster = AgentRosterStore()
+    @StateObject private var nav = ConsoleNavigationStore()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +16,8 @@ struct ThrawnApp: App {
                 .environmentObject(bootstrap)
                 .environmentObject(updateManager)
                 .environmentObject(sparkleUpdater)
+                .environmentObject(roster)
+                .environmentObject(nav)
                 .frame(minWidth: 1200, minHeight: 800)
                 .sheet(isPresented: $bootstrap.showSetup) {
                     SetupWizardView()

@@ -12,11 +12,14 @@ struct RightPanelView: View {
 
             ZStack(alignment: .bottomTrailing) {
                 VStack(spacing: 14) {
-                    CommandStrip()
-                        .padding(.horizontal, 16)
-                        .padding(.top, 14)
+                    VStack(alignment: .leading, spacing: 10) {
+                        CommandStrip()
+                        ConsoleSectionSwitcher()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
 
-                    ThreadListView()
+                    ConsoleSectionBody()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.clear)
                 }
