@@ -12,6 +12,7 @@ struct AnalogClockView: View {
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
             ZStack {
+                // Outer bezel
                 Circle()
                     .fill(
                         LinearGradient(
@@ -30,15 +31,17 @@ struct AnalogClockView: View {
                     )
                     .shadow(color: .black.opacity(0.45), radius: 18, x: 0, y: 12)
 
+                // Inner bezel ring with royal blue glow
                 Circle()
                     .fill(Color(red: 0.07, green: 0.08, blue: 0.11))
                     .frame(width: size * 0.94, height: size * 0.94)
                     .overlay(
                         Circle()
-                            .stroke(Color(red: 0.40, green: 0.63, blue: 0.98).opacity(0.35), lineWidth: 2)
+                            .stroke(Color(red: 0.25, green: 0.45, blue: 0.98).opacity(0.50), lineWidth: 2.5)
                     )
-                    .shadow(color: Color(red: 0.30, green: 0.45, blue: 0.98).opacity(0.30), radius: 16)
+                    .shadow(color: Color(red: 0.25, green: 0.40, blue: 0.98).opacity(0.45), radius: 20)
 
+                // Deep obsidian face
                 Circle()
                     .fill(
                         RadialGradient(
@@ -54,64 +57,71 @@ struct AnalogClockView: View {
                     )
                     .frame(width: size * 0.88, height: size * 0.88)
 
+                // Subtle inner track ring
                 Circle()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
                     .frame(width: size * 0.82, height: size * 0.82)
 
+                // Tick marks
                 ForEach(0..<60) { i in
                     let angle = Double(i) * 6.0 - 90.0
                     let isMajor = i % 5 == 0
                     let outerRadius = size * 0.40
                     let innerRadius = outerRadius - (isMajor ? size * 0.055 : size * 0.02)
-                    let width = isMajor ? 2.4 : 0.8
-                    let color = isMajor ? Color(red: 0.86, green: 0.90, blue: 0.96) : Color.white.opacity(0.18)
-                    let cosAngle = cos(angle * .pi / 180)
-                    let sinAngle = sin(angle * .pi / 180)
+                    let cosA = cos(angle * .pi / 180)
+                    let sinA = sin(angle * .pi / 180)
 
                     Path { path in
-                        path.move(to: CGPoint(x: center.x + innerRadius * cosAngle, y: center.y + innerRadius * sinAngle))
-                        path.addLine(to: CGPoint(x: center.x + outerRadius * cosAngle, y: center.y + outerRadius * sinAngle))
+                        path.move(to: CGPoint(x: center.x + innerRadius * cosA, y: center.y + innerRadius * sinA))
+                        path.addLine(to: CGPoint(x: center.x + outerRadius * cosA, y: center.y + outerRadius * sinA))
                     }
-                    .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+                    .stroke(
+                        isMajor ? Color(red: 0.86, green: 0.90, blue: 0.96) : Color.white.opacity(0.18),
+                        style: StrokeStyle(lineWidth: isMajor ? 2.4 : 0.8, lineCap: .round)
+                    )
                     .shadow(color: isMajor ? Color(red: 0.40, green: 0.62, blue: 1.0).opacity(0.22) : .clear, radius: 3)
                 }
 
+                // THRAWN — elegant serif with royal blue glow
                 Text("THRAWN")
-                    .font(.system(size: size * 0.09, weight: .bold, design: .serif))
-                    .tracking(5)
-                    .foregroundColor(Color(red: 0.82, green: 0.89, blue: 0.98))
-                    .shadow(color: Color(red: 0.31, green: 0.47, blue: 1.0).opacity(0.55), radius: 10)
-                    .offset(y: size * 0.02)
+                    .font(.custom("Didot", size: size * 0.082) != Font.custom("", size: 0) ? .custom("Didot", size: size * 0.082) : .system(size: size * 0.082, weight: .light, design: .serif))
+                    .tracking(size * 0.018)
+                    .foregroundColor(Color(red: 0.88, green: 0.93, blue: 0.99))
+                    .shadow(color: Color(red: 0.28, green: 0.45, blue: 1.0).opacity(0.75), radius: 14)
+                    .shadow(color: Color(red: 0.28, green: 0.45, blue: 1.0).opacity(0.35), radius: 28)
+                    .offset(y: -size * 0.04)
 
-                Text("CHRONOMETRE COMMAND")
-                    .font(.system(size: size * 0.032, weight: .medium, design: .serif))
-                    .tracking(3)
-                    .foregroundColor(Color(red: 0.52, green: 0.64, blue: 0.82))
-                    .offset(y: size * 0.17)
+                // COMMAND CENTER — compact, restrained
+                Text("COMMAND CENTER")
+                    .font(.system(size: size * 0.028, weight: .medium, design: .default))
+                    .tracking(size * 0.012)
+                    .foregroundColor(Color(red: 0.48, green: 0.60, blue: 0.82).opacity(0.85))
+                    .frame(maxWidth: size * 0.55)
+                    .offset(y: size * 0.08)
 
+                // Clock hands
                 ClockHand(angle: hourAngle, length: size * 0.20, width: 5.2, color: Color(red: 0.84, green: 0.88, blue: 0.94), center: center, tailLength: size * 0.045)
                     .shadow(color: .black.opacity(0.55), radius: 3)
                 ClockHand(angle: minuteAngle, length: size * 0.30, width: 3.2, color: Color(red: 0.76, green: 0.82, blue: 0.92), center: center, tailLength: size * 0.065)
                     .shadow(color: .black.opacity(0.55), radius: 2)
-                ClockHand(angle: secondAngle, length: size * 0.33, width: 1.4, color: Color(red: 0.36, green: 0.60, blue: 1.0), center: center, tailLength: size * 0.08)
-                    .shadow(color: Color(red: 0.36, green: 0.60, blue: 1.0).opacity(0.65), radius: 8)
+                ClockHand(angle: secondAngle, length: size * 0.33, width: 1.4, color: Color(red: 0.30, green: 0.55, blue: 1.0), center: center, tailLength: size * 0.08)
+                    .shadow(color: Color(red: 0.30, green: 0.55, blue: 1.0).opacity(0.75), radius: 10)
 
+                // Center jewel
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [Color.white, Color(red: 0.36, green: 0.60, blue: 1.0)],
+                            colors: [Color.white, Color(red: 0.30, green: 0.52, blue: 1.0)],
                             center: .center,
                             startRadius: 1,
                             endRadius: size * 0.03
                         )
                     )
-                    .frame(width: size * 0.06, height: size * 0.06)
-                    .shadow(color: Color(red: 0.36, green: 0.60, blue: 1.0).opacity(0.6), radius: 8)
+                    .frame(width: size * 0.058, height: size * 0.058)
+                    .shadow(color: Color(red: 0.30, green: 0.52, blue: 1.0).opacity(0.70), radius: 10)
             }
         }
-        .onReceive(timer) { _ in
-            currentTime = Date()
-        }
+        .onReceive(timer) { _ in currentTime = Date() }
     }
 
     private var calendar: Calendar {
@@ -121,22 +131,22 @@ struct AnalogClockView: View {
     }
 
     private var hourAngle: Double {
-        let hour = Double(calendar.component(.hour, from: currentTime) % 12)
-        let minute = Double(calendar.component(.minute, from: currentTime))
-        let second = Double(calendar.component(.second, from: currentTime))
-        return (hour + minute / 60.0 + second / 3600.0) * 30.0 - 90.0
+        let h = Double(calendar.component(.hour, from: currentTime) % 12)
+        let m = Double(calendar.component(.minute, from: currentTime))
+        let s = Double(calendar.component(.second, from: currentTime))
+        return (h + m / 60.0 + s / 3600.0) * 30.0 - 90.0
     }
 
     private var minuteAngle: Double {
-        let minute = Double(calendar.component(.minute, from: currentTime))
-        let second = Double(calendar.component(.second, from: currentTime))
-        return (minute + second / 60.0) * 6.0 - 90.0
+        let m = Double(calendar.component(.minute, from: currentTime))
+        let s = Double(calendar.component(.second, from: currentTime))
+        return (m + s / 60.0) * 6.0 - 90.0
     }
 
     private var secondAngle: Double {
-        let second = Double(calendar.component(.second, from: currentTime))
-        let nanosecond = Double(calendar.component(.nanosecond, from: currentTime))
-        return (second + nanosecond / 1_000_000_000.0) * 6.0 - 90.0
+        let s = Double(calendar.component(.second, from: currentTime))
+        let ns = Double(calendar.component(.nanosecond, from: currentTime))
+        return (s + ns / 1_000_000_000.0) * 6.0 - 90.0
     }
 }
 
@@ -150,14 +160,10 @@ struct ClockHand: View {
 
     var body: some View {
         Path { path in
-            let cosAngle = cos(angle * .pi / 180)
-            let sinAngle = sin(angle * .pi / 180)
-            let tailX = center.x - tailLength * cosAngle
-            let tailY = center.y - tailLength * sinAngle
-            let tipX = center.x + length * cosAngle
-            let tipY = center.y + length * sinAngle
-            path.move(to: CGPoint(x: tailX, y: tailY))
-            path.addLine(to: CGPoint(x: tipX, y: tipY))
+            let cosA = cos(angle * .pi / 180)
+            let sinA = sin(angle * .pi / 180)
+            path.move(to: CGPoint(x: center.x - tailLength * cosA, y: center.y - tailLength * sinA))
+            path.addLine(to: CGPoint(x: center.x + length * cosA, y: center.y + length * sinA))
         }
         .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
     }
