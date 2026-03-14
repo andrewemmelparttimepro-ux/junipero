@@ -39,9 +39,11 @@ struct ThrawnApp: App {
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
                     gatewayClient.refreshPlaceholderState()
-                    let prefs = ThrawnPreferencesStore.load()
-                    let config = OpenClawClient.resolveConfig()
-                    gatewayWS.configure(baseURL: config.baseURL, token: config.token)
+                    let wsPrefs = ThrawnPreferencesStore.load()
+                    _ = wsPrefs
+                    let wsBaseURL = UserDefaults.standard.string(forKey: "ThrawnGatewayURL") ?? "http://127.0.0.1:18789"
+                    let wsToken = UserDefaults.standard.string(forKey: "ThrawnGatewayToken")
+                    gatewayWS.configure(baseURL: wsBaseURL, token: wsToken)
                     gatewayWS.connect()
                 }
         }
