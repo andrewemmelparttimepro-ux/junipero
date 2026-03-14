@@ -7,110 +7,129 @@ struct ChatInputView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // MSN-style separator
             Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.55, green: 0.70, blue: 0.88),
-                            Color(red: 0.45, green: 0.60, blue: 0.80),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 2)
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 1)
 
-            // Input area with MSN blue chrome
-            VStack(spacing: 8) {
-                // MSN-style mini toolbar
-                HStack(spacing: 12) {
-                    Text("💬")
-                        .font(.system(size: 12))
-                    Text("Send a message to Thrawn")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.88))
-                    Spacer()
-
-                    // Emoji shortcode hint
-                    Text(threadStore.isSending ? "Sending..." : "MSN shortcuts: :-) (y) (L)")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.72))
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-
+            VStack(spacing: 10) {
+                // Error line
                 if let error = threadStore.lastErrorText {
-                    Text(error)
-                        .font(.system(size: 10))
-                        .foregroundColor(Color(red: 1.0, green: 0.92, blue: 0.92))
-                        .lineLimit(1)
-                        .padding(.horizontal, 14)
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                        Text(error)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(Color(red: 1.0, green: 0.72, blue: 0.72))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
                 }
 
-                // Text field + Send button
-                HStack(spacing: 10) {
-                    TextField("Type a message...", text: $messageText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundColor(Color.black.opacity(0.95))
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white)
-                                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-                        )
-                        .lineLimit(1...4)
-                        .focused($isFocused)
-                        .onSubmit {
-                            sendMessage()
+                HStack(alignment: .bottom, spacing: 10) {
+                    // Input field
+                    ZStack(alignment: .topLeading) {
+                        if messageText.isEmpty {
+                            Text("Issue a command to Thrawn…")
+                                .font(.system(size: 13))
+                                .foregroundColor(Color.white.opacity(0.28))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 11)
+                                .allowsHitTesting(false)
                         }
 
+                        TextEditor(text: $messageText)
+                            .font(.system(size: 13))
+                            .foregroundColor(Color.white.opacity(0.92))
+                            .scrollContentBackground(.hidden)
+                            .background(Color.clear)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .focused($isFocused)
+                            .frame(minHeight: 40, maxHeight: 120)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.white.opacity(isFocused ? 0.07 : 0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(
+                                        isFocused
+                                            ? Color(red: 0.30, green: 0.50, blue: 1.0).opacity(0.55)
+                                            : Color.white.opacity(0.08),
+                                        lineWidth: 1
+                                    )
+                            )
+                    )
+
+                    // Send button
                     Button(action: sendMessage) {
-                        HStack(spacing: 5) {
-                            Text("Send")
-                                .font(.system(size: 13, weight: .semibold))
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 11))
+                        ZStack {
+                            if threadStore.isSending {
+                                ProgressView()
+                                    .scaleEffect(0.65)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(canSend ? .white : Color.white.opacity(0.30))
+                            }
                         }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        .frame(width: 36, height: 36)
                         .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(sendButtonColor)
+                            Circle()
+                                .fill(
+                                    canSend
+                                        ? LinearGradient(
+                                            colors: [
+                                                Color(red: 0.30, green: 0.48, blue: 1.0),
+                                                Color(red: 0.18, green: 0.32, blue: 0.82),
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                        : LinearGradient(
+                                            colors: [Color.white.opacity(0.06), Color.white.opacity(0.06)],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                )
+                        )
+                        .shadow(
+                            color: canSend ? Color(red: 0.28, green: 0.44, blue: 1.0).opacity(0.45) : .clear,
+                            radius: 8
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSend)
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+                .padding(.bottom, 14)
+                .padding(.top, 8)
             }
             .background(
                 LinearGradient(
                     colors: [
-                        Color(red: 0.22, green: 0.40, blue: 0.65),
-                        Color(red: 0.16, green: 0.32, blue: 0.55),
-                        Color(red: 0.12, green: 0.26, blue: 0.48),
+                        Color(red: 0.07, green: 0.09, blue: 0.13),
+                        Color(red: 0.05, green: 0.07, blue: 0.10),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
         }
+        .onAppear { isFocused = true }
     }
 
-    private var sendButtonColor: Color {
-        messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? Color.white.opacity(0.15)
-            : Color(red: 0.25, green: 0.50, blue: 0.80)
+    private var canSend: Bool {
+        !threadStore.isSending && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func sendMessage() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
+        guard !trimmed.isEmpty, !threadStore.isSending else { return }
         threadStore.sendMessage(trimmed)
         messageText = ""
     }
