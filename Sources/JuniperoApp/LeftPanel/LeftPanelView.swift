@@ -2,38 +2,22 @@ import SwiftUI
 
 struct LeftPanelView: View {
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             AgentRailView()
-                .frame(width: 330)
+                .frame(width: 310)
 
-            VStack(spacing: 20) {
-                Spacer(minLength: 10)
+            VStack(spacing: 0) {
+                Spacer(minLength: 12)
 
                 AnalogClockView()
-                    .frame(width: 360, height: 360)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("THRAWN")
-                        .font(.system(size: 28, weight: .bold, design: .serif))
-                        .tracking(4)
-                        .foregroundColor(Color.white.opacity(0.95))
-                    Text("Executive command surface for Andrew. One interface. A full fleet behind it.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.66))
-                        .frame(maxWidth: 420, alignment: .leading)
-                    Text("The console should talk to OpenClaw through the same Gateway-native route as the dashboard, while exposing tasks, reviews, approvals, deliverables, and agent handoffs.")
-                        .font(.system(size: 11.5, weight: .regular))
-                        .foregroundColor(Color(red: 0.62, green: 0.74, blue: 0.88))
-                        .frame(maxWidth: 460, alignment: .leading)
-                }
-                .padding(.horizontal, 8)
+                    .frame(width: 340, height: 340)
 
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 26)
-        .padding(.vertical, 20)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
     }
 }

@@ -335,7 +335,7 @@ struct ThrawnHeaderBar: View {
                     Capsule()
                         .fill(
                             bootstrap.liabilityMode == .myFault
-                                ? Color(red: 0.60, green: 0.24, blue: 0.22).opacity(0.6)
+                                ? Color(red: 0.70, green: 0.28, blue: 0.26)
                                 : Color.white.opacity(0.14)
                         )
                 )
@@ -367,7 +367,8 @@ struct ThrawnHeaderBar: View {
                 .padding(.vertical, 6)
                 .background(
                     Capsule()
-                        .fill(Color.white.opacity(selected ? 0.28 : 0.14))
+                        .fill(selected ? Color.chissDeep : Color.white.opacity(0.08))
+                        .overlay(Capsule().stroke(selected ? Color.chissPrimary.opacity(0.55) : Color.clear, lineWidth: 1))
                 )
         }
         .buttonStyle(.plain)
@@ -464,20 +465,11 @@ private struct PopupComposerCard: View {
         .frame(width: 320)
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.36, blue: 0.68),
-                            Color(red: 0.10, green: 0.25, blue: 0.50),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+                .fill(Color.obsidianMid)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.chissPrimary.opacity(0.28), lineWidth: 1)
                 )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white.opacity(0.15), lineWidth: 0.6)
         )
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
         .background {
@@ -515,7 +507,7 @@ private struct AttachmentStrip: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
+                    .foregroundColor(Color.chissPrimary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(
