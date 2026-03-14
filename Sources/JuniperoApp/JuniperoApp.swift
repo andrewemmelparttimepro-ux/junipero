@@ -7,6 +7,7 @@ struct ThrawnApp: App {
     @StateObject private var updateManager = UpdateManager()
     @StateObject private var sparkleUpdater = SparkleUpdaterService()
     @StateObject private var roster = AgentRosterStore()
+    @StateObject private var gatewayWS = GatewayWSClient()
     @StateObject private var nav = ConsoleNavigationStore()
     @StateObject private var gatewayClient = GatewayClient()
 
@@ -20,6 +21,7 @@ struct ThrawnApp: App {
                 .environmentObject(roster)
                 .environmentObject(nav)
                 .environmentObject(gatewayClient)
+                .environmentObject(gatewayWS)
                 .frame(minWidth: 1200, minHeight: 800)
                 .sheet(isPresented: $bootstrap.showSetup) {
                     SetupWizardView()
@@ -37,6 +39,10 @@ struct ThrawnApp: App {
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
                     gatewayClient.refreshPlaceholderState()
+                    let prefs = ThrawnPreferencesStore.load()
+                    let config = OpenClawClient.resolveConfig()
+                    gatewayWS.configure(baseURL: config.baseURL, token: config.token)
+                    gatewayWS.connect()
                 }
         }
         .windowStyle(.hiddenTitleBar)
