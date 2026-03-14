@@ -29,7 +29,8 @@ final class ThreadStore: ObservableObject {
     private var maxTotalInputChars = 16_000
     private var maxQueuedPerThread = 6
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
-    private let client = OpenClawClient()
+    let gatewayWS = GatewayWSClient()
+    private let legacyClient = OpenClawClient()
     private var threadDrafts: [UUID: String] = [:]
     private var threadAttachments: [UUID: [ChatAttachment]] = [:]
     private var queuedUserMessages: [UUID: [String]] = [:]
@@ -245,25 +246,94 @@ final class ThreadStore: ObservableObject {
     }
 
     private func performRequest(threadId: UUID, messages: [OpenClawClient.InputMessage]) async {
+        // Use Gateway WebSocket if connected or connectable; fall back to legacy HTTP
+        let userText = messages.last(where: { $0.role == "user" })?.content ?? ""
+        let startMs = Int(Date().timeIntervalSince1970 * 1000)
+
+        if !userText.isEmpty {
+            // Ensure connected
+            if !gatewayWS.connected {
+                gatewayWS.connect()
+                // Give it up to 4 seconds to connect
+                for _ in 0..<40 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if gatewayWS.connected { break }
+                }
+            }
+
+            if gatewayWS.connected {
+                await performGatewayRequest(threadId: threadId, text: userText, startMs: startMs)
+                return
+            }
+        }
+
+        // Fallback to legacy HTTP client
         do {
-            let result = try await client.send(messages: messages)
+            let result = try await legacyClient.send(messages: messages)
             guard !Task.isCancelled else { return }
             updateThreadSuccess(threadId, response: result.text, model: result.model, latencyMs: result.latencyMs)
             connectivity = .online
             lastErrorText = nil
-            await ChatDiagnostics.shared.log("request-ok thread=\(threadId.uuidString) model=\(result.model) latencyMs=\(result.latencyMs) outChars=\(result.text.count)")
         } catch is CancellationError {
-            // handled by cancelRequest
         } catch {
             guard !Task.isCancelled else { return }
             let message = normalizeError(error)
             updateThreadFailure(threadId, error: message)
             connectivity = .offline
             lastErrorText = message
-            await ChatDiagnostics.shared.log("request-fail thread=\(threadId.uuidString) error=\(message)")
         }
         inFlightTasks[threadId] = nil
         inFlightCount = inFlightTasks.count
+    }
+
+    private func performGatewayRequest(threadId: UUID, text: String, startMs: Int) async {
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            var accumulated = ""
+
+            gatewayWS.send(
+                text: text,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        accumulated += delta
+                        // Stream partial into the thread in real time
+                        if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
+                            if self.threads[index].messages.last?.role == .assistant {
+                                let lastIdx = self.threads[index].messages.count - 1
+                                self.threads[index].messages[lastIdx].text = accumulated
+                            } else {
+                                self.threads[index].messages.append(ChatMessage(role: .assistant, text: accumulated))
+                            }
+                        }
+                    }
+                },
+                onComplete: { [weak self] finalText, model in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+                        let responseText = finalText.isEmpty ? accumulated : finalText
+                        self.updateThreadSuccess(threadId, response: responseText, model: model ?? "gateway", latencyMs: latencyMs)
+                        self.connectivity = .online
+                        self.lastErrorText = nil
+                        self.inFlightTasks[threadId] = nil
+                        self.inFlightCount = self.inFlightTasks.count
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.updateThreadFailure(threadId, error: error)
+                        self.connectivity = .offline
+                        self.lastErrorText = error
+                        self.inFlightTasks[threadId] = nil
+                        self.inFlightCount = self.inFlightTasks.count
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                }
+            )
+        }
     }
 
     private func updateThreadSuccess(_ id: UUID, response: String, model: String, latencyMs: Int) {

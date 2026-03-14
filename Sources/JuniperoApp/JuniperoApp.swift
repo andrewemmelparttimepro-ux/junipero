@@ -10,7 +10,6 @@ struct ThrawnApp: App {
     @StateObject private var gatewayWS = GatewayWSClient()
     @StateObject private var nav = ConsoleNavigationStore()
     @StateObject private var flowTab = FlowTabStore()
-    @StateObject private var gatewayClient = GatewayClient()
 
     var body: some Scene {
         WindowGroup {
@@ -22,7 +21,6 @@ struct ThrawnApp: App {
                 .environmentObject(roster)
                 .environmentObject(nav)
                 .environmentObject(flowTab)
-                .environmentObject(gatewayClient)
                 .environmentObject(gatewayWS)
                 .frame(minWidth: 1200, minHeight: 800)
                 .sheet(isPresented: $bootstrap.showSetup) {
@@ -40,13 +38,7 @@ struct ThrawnApp: App {
                 .task {
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
-                    gatewayClient.refreshPlaceholderState()
-                    let wsPrefs = ThrawnPreferencesStore.load()
-                    _ = wsPrefs
-                    let wsBaseURL = UserDefaults.standard.string(forKey: "ThrawnGatewayURL") ?? "http://127.0.0.1:18789"
-                    let wsToken = UserDefaults.standard.string(forKey: "ThrawnGatewayToken")
-                    gatewayWS.configure(baseURL: wsBaseURL, token: wsToken)
-                    gatewayWS.connect()
+                    threadStore.gatewayWS.connect()
                 }
         }
         .windowStyle(.hiddenTitleBar)
