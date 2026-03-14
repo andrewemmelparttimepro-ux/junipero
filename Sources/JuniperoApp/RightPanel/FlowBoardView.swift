@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Model
 
-enum FlowLane: String, CaseIterable, Identifiable {
+enum FlowLane: String, CaseIterable, Identifiable, Codable {
     case inbox      = "Inbox"
     case ready      = "Ready"
     case inProgress = "In Progress"
@@ -43,8 +43,8 @@ enum FlowLane: String, CaseIterable, Identifiable {
     }
 }
 
-struct FlowCard: Identifiable {
-    let id = UUID()
+struct FlowCard: Identifiable, Codable {
+    var id: UUID = UUID()
     var title: String
     var owner: String
     var lane: FlowLane
@@ -53,16 +53,36 @@ struct FlowCard: Identifiable {
 
 @MainActor
 final class FlowBoardStore: ObservableObject {
-    @Published var cards: [FlowCard] = [
-        FlowCard(title: "Thrawn Console: Gateway WS integration", owner: "R2-D2", lane: .inProgress, note: "Replace chat-completions with Gateway-native transport"),
+    @Published var cards: [FlowCard] = [] {
+        didSet { save() }
+    }
+
+    private static let storePath: URL = {
+        let brain = URL(fileURLWithPath: "/Volumes/brain/NDAI/02-Thrawn/Ops/flow-board.json")
+        let fallback = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw/thrawn-flow-board.json")
+        // Prefer brain drive if mounted
+        if FileManager.default.fileExists(atPath: "/Volumes/brain/NDAI/02-Thrawn/Ops") {
+            return brain
+        }
+        return fallback
+    }()
+
+    private static let seed: [FlowCard] = [
+        FlowCard(title: "Thrawn Console: Gateway WS integration", owner: "R2-D2", lane: .done, note: "Gateway WebSocket client live"),
         FlowCard(title: "Agent spec files for all six roles", owner: "Thrawn", lane: .done, note: "See agents/ in workspace"),
         FlowCard(title: "Brain drive folder structure", owner: "Thrawn", lane: .done, note: "/Volumes/brain/NDAI"),
         FlowCard(title: "Cognee memory system", owner: "Thrawn", lane: .inProgress, note: "Installed, local server running on :8000"),
         FlowCard(title: "Blender CLI automation path", owner: "R2-D2", lane: .ready, note: "CLI-Anything installed, Phase 1 scope defined"),
         FlowCard(title: "GUI control layer research", owner: "Qui-Gon", lane: .inbox, note: "High priority — major autonomy unlock"),
         FlowCard(title: "Persistent dedicated agent sessions", owner: "Thrawn", lane: .blocked, note: "Needs compatible surface/runtime"),
-        FlowCard(title: "Autonomy boundaries and command structure", owner: "Thrawn", lane: .inProgress, note: "APPROVAL_BOUNDARIES.md defined, evolving"),
+        FlowCard(title: "Autonomy boundaries and command structure", owner: "Thrawn", lane: .done, note: "APPROVAL_BOUNDARIES.md defined"),
+        FlowCard(title: "Thrawn Console: feature complete", owner: "R2-D2", lane: .inProgress, note: "Persistent Flow, agent rail, live chat"),
     ]
+
+    init() {
+        load()
+    }
 
     func move(card: FlowCard, to lane: FlowLane) {
         guard let idx = cards.firstIndex(where: { $0.id == card.id }) else { return }
@@ -79,6 +99,20 @@ final class FlowBoardStore: ObservableObject {
 
     func cards(in lane: FlowLane) -> [FlowCard] {
         cards.filter { $0.lane == lane }
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(cards) else { return }
+        try? data.write(to: Self.storePath)
+    }
+
+    private func load() {
+        if let data = try? Data(contentsOf: Self.storePath),
+           let loaded = try? JSONDecoder().decode([FlowCard].self, from: data), !loaded.isEmpty {
+            cards = loaded
+        } else {
+            cards = Self.seed
+        }
     }
 }
 
