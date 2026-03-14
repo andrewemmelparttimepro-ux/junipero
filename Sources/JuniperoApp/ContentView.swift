@@ -1,28 +1,30 @@
 import SwiftUI
 
 // MARK: - Thrawn Chiss Palette
-// Chiss skin: steel-slate blue ~#7BA7BC / HSB 200° 35% 74%
-// Accent deep: #2A4A62
-// Glass surface: near-black with blue tint
-
 extension Color {
-    static let chissPrimary   = Color(red: 0.484, green: 0.655, blue: 0.737) // #7BA7BC
-    static let chissDeep      = Color(red: 0.165, green: 0.290, blue: 0.384) // #2A4A62
-    static let chissDark      = Color(red: 0.055, green: 0.110, blue: 0.160) // #0E1C29
-    static let obsidian       = Color(red: 0.040, green: 0.055, blue: 0.075) // #0A0E13
-    static let obsidianMid    = Color(red: 0.072, green: 0.100, blue: 0.132) // #121922
-    static let glassEdge      = Color(red: 0.484, green: 0.655, blue: 0.737).opacity(0.18)
+    static let chissPrimary   = Color(red: 0.484, green: 0.655, blue: 0.737)
+    static let chissDeep      = Color(red: 0.165, green: 0.290, blue: 0.384)
+    static let chissDark      = Color(red: 0.055, green: 0.110, blue: 0.160)
+    static let obsidian       = Color(red: 0.040, green: 0.055, blue: 0.075)
+    static let obsidianMid    = Color(red: 0.072, green: 0.100, blue: 0.132)
+    static let sithRed        = Color(red: 0.72, green: 0.08, blue: 0.10)
+    static let sithGlow       = Color(red: 0.85, green: 0.12, blue: 0.14)
 }
 
 struct ContentView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var flowTab: FlowTabStore
 
     var body: some View {
         ZStack {
             ThrawnObsidianBackdrop()
                 .ignoresSafeArea()
 
-            if threadStore.allThreadsMode {
+            if flowTab.showFlow {
+                FlowBoardView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+            } else if threadStore.allThreadsMode {
                 RightPanelView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
@@ -31,7 +33,6 @@ struct ContentView: View {
                     LeftPanelView()
                         .frame(maxWidth: .infinity)
 
-                    // Glass divider
                     Rectangle()
                         .fill(
                             LinearGradient(
@@ -53,6 +54,7 @@ struct ContentView: View {
                 .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.22), value: flowTab.showFlow)
         .animation(.easeInOut(duration: 0.2), value: threadStore.allThreadsMode)
     }
 }
@@ -60,63 +62,25 @@ struct ContentView: View {
 struct ThrawnObsidianBackdrop: View {
     var body: some View {
         ZStack {
-            // Base obsidian
             Color.obsidian
-
-            // Chiss blue ambient — top left
-            RadialGradient(
-                colors: [
-                    Color.chissDeep.opacity(0.65),
-                    Color.clear,
-                ],
-                center: .topLeading,
-                startRadius: 0,
-                endRadius: 680
-            )
-
-            // Chiss blue ambient — bottom right
-            RadialGradient(
-                colors: [
-                    Color.chissDark.opacity(0.80),
-                    Color.clear,
-                ],
-                center: .bottomTrailing,
-                startRadius: 0,
-                endRadius: 500
-            )
-
-            // Subtle center luminance — alien glass sheen
-            RadialGradient(
-                colors: [
-                    Color.chissPrimary.opacity(0.06),
-                    Color.clear,
-                ],
-                center: .center,
-                startRadius: 0,
-                endRadius: 600
-            )
-
-            // Fine noise/grain overlay — obsidian glass texture
-            ObsidianGrainTexture()
-                .blendMode(.screen)
-                .opacity(0.028)
+            RadialGradient(colors: [Color.chissDeep.opacity(0.65), Color.clear], center: .topLeading, startRadius: 0, endRadius: 680)
+            RadialGradient(colors: [Color.chissDark.opacity(0.80), Color.clear], center: .bottomTrailing, startRadius: 0, endRadius: 500)
+            RadialGradient(colors: [Color.chissPrimary.opacity(0.06), Color.clear], center: .center, startRadius: 0, endRadius: 600)
+            ObsidianGrainTexture().blendMode(.screen).opacity(0.028)
         }
     }
 }
 
 struct ObsidianGrainTexture: View {
     var body: some View {
-        GeometryReader { geo in
+        GeometryReader { _ in
             Canvas { ctx, size in
                 var rng = SystemRandomNumberGenerator()
                 for _ in 0..<Int(size.width * size.height * 0.015) {
                     let x = CGFloat(rng.next() % UInt64(size.width))
                     let y = CGFloat(rng.next() % UInt64(size.height))
                     let bright = Double(rng.next() % 100) / 100.0
-                    ctx.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.2, height: 1.2)),
-                        with: .color(Color.white.opacity(bright * 0.8))
-                    )
+                    ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.2, height: 1.2)), with: .color(Color.white.opacity(bright * 0.8)))
                 }
             }
         }

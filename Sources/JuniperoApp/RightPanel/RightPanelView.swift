@@ -1,24 +1,16 @@
 
-enum RightPanelTab: String, CaseIterable {
-    case threads = "Threads"
-    case flow = "Flow"
-}
-
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct RightPanelView: View {
     @EnvironmentObject var threadStore: ThreadStore
     @State private var isComposerOpen = false
-    @State private var activeTab: RightPanelTab = .threads
 
     var body: some View {
         VStack(spacing: 0) {
-            ThrawnHeaderBar(activeTab: $activeTab)
+            ThrawnHeaderBar()
 
-            switch activeTab {
-            case .threads:
-                ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottomTrailing) {
                     ThreadListView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.white.opacity(0.6))
@@ -83,11 +75,6 @@ struct RightPanelView: View {
                     .padding(.trailing, 16)
                     .padding(.bottom, 14)
                 }
-
-            case .flow:
-                FlowBoardView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         }
     }
 
@@ -104,7 +91,7 @@ struct ThrawnHeaderBar: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
-    @Binding var activeTab: RightPanelTab
+    @EnvironmentObject var flowTab: FlowTabStore
 
     var body: some View {
         HStack {
@@ -221,15 +208,14 @@ struct ThrawnHeaderBar: View {
     private var fullHeaderControls: some View {
         HStack(spacing: 8) {
             runtimeBadge(maxWidth: 140)
-            ForEach(RightPanelTab.allCases, id: \.self) { tab in
-                actionButton(tab.rawValue, selected: activeTab == tab) {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        activeTab = tab
-                        if tab == .threads {
-                            threadStore.allThreadsMode = false
-                        }
-                    }
+            actionButton(threadStore.allThreadsMode ? "Exit Threads" : "Threads", selected: threadStore.allThreadsMode) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    threadStore.allThreadsMode.toggle()
+                    threadStore.selectedThreadId = nil
                 }
+            }
+            actionButton("Flow", selected: flowTab.showFlow) {
+                withAnimation(.easeInOut(duration: 0.22)) { flowTab.showFlow.toggle() }
             }
             actionButton("Setup") {
                 bootstrap.showSetup = true
@@ -269,12 +255,14 @@ struct ThrawnHeaderBar: View {
     private var compactHeaderControls: some View {
         HStack(spacing: 8) {
             runtimeBadge(maxWidth: 110)
-            ForEach(RightPanelTab.allCases, id: \.self) { tab in
-                actionButton(tab.rawValue, selected: activeTab == tab) {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        activeTab = tab
-                    }
+            actionButton(threadStore.allThreadsMode ? "Threads" : "Threads", selected: threadStore.allThreadsMode) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    threadStore.allThreadsMode.toggle()
+                    threadStore.selectedThreadId = nil
                 }
+            }
+            actionButton("Flow", selected: flowTab.showFlow) {
+                withAnimation { flowTab.showFlow.toggle() }
             }
             Menu {
                 Button("Setup") { bootstrap.showSetup = true }
