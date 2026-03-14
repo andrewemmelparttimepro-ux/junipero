@@ -30,15 +30,15 @@ struct ConsoleSectionBody: View {
     var body: some View {
         switch nav.selectedSection {
         case .command:
-            ThreadListView()
+            EmptyView() // handled directly in RightPanelView
         case .tasks:
-            ConsoleInfoPanel(title: "Task Board", subtitle: "Live project ownership, status lanes, blockers, and next actions.", bullets: ["Mirror the operating task board inside the app", "Show owner, deliverable path, and review state", "Route users to only the decisions that matter"])
+            TaskBoardView()
         case .review:
-            ConsoleInfoPanel(title: "Review Queue", subtitle: "Outputs waiting on Thrawn review before they are considered complete.", bullets: ["Surface deliverable location", "Show validation status", "Allow approve / revise / escalate flow"])
+            ReviewQueueView()
         case .approvals:
-            ConsoleInfoPanel(title: "Approvals", subtitle: "Only the items Andrew actually needs to decide.", bullets: ["External actions", "Sensitive system changes", "Strategic decisions or blocked execution"])
+            ApprovalsView()
         case .deliverables:
-            ConsoleInfoPanel(title: "Deliverables", subtitle: "Assets, exports, reports, and outputs from the fleet.", bullets: ["Mirror brain-drive routing", "Show project and agent ownership", "Make final outputs easy to find quickly"])
+            DeliverablesView()
         }
     }
 }

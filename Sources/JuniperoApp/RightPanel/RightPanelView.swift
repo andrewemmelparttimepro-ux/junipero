@@ -4,13 +4,25 @@ import UniformTypeIdentifiers
 
 struct RightPanelView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var nav: ConsoleNavigationStore
     @State private var isComposerOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
             ThrawnHeaderBar()
 
-            ZStack(alignment: .bottomTrailing) {
+            // Console section switcher
+            ConsoleSectionSwitcher()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.obsidianMid.opacity(0.85))
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color.chissPrimary.opacity(0.10)).frame(height: 1)
+                }
+
+            // Section content
+            if nav.selectedSection == .command {
+                ZStack(alignment: .bottomTrailing) {
                     ThreadListView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.white.opacity(0.6))
@@ -75,7 +87,14 @@ struct RightPanelView: View {
                     .padding(.trailing, 16)
                     .padding(.bottom, 14)
                 }
+                .animation(.easeInOut(duration: 0.18), value: threadStore.selectedThreadId)
+            } else {
+                ConsoleSectionBody()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.18), value: nav.selectedSection)
     }
 
     private func sendFromPopup() {
