@@ -8,6 +8,7 @@ struct ThrawnApp: App {
     @StateObject private var sparkleUpdater = SparkleUpdaterService()
     @StateObject private var roster = AgentRosterStore()
     @StateObject private var nav = ConsoleNavigationStore()
+    @StateObject private var gatewayClient = GatewayClient()
 
     var body: some Scene {
         WindowGroup {
@@ -18,6 +19,7 @@ struct ThrawnApp: App {
                 .environmentObject(sparkleUpdater)
                 .environmentObject(roster)
                 .environmentObject(nav)
+                .environmentObject(gatewayClient)
                 .frame(minWidth: 1200, minHeight: 800)
                 .sheet(isPresented: $bootstrap.showSetup) {
                     SetupWizardView()
@@ -34,6 +36,7 @@ struct ThrawnApp: App {
                 .task {
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
+                    gatewayClient.refreshPlaceholderState()
                 }
         }
         .windowStyle(.hiddenTitleBar)

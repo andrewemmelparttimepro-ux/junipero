@@ -197,10 +197,11 @@ struct ThrawnHeaderBar: View {
 
 struct CommandStrip: View {
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             CommandCard(title: "Task Flow", detail: "Task board, review, deliverables, approvals")
             CommandCard(title: "Agent Fleet", detail: "Dedicated specialists routed through Thrawn")
-            CommandCard(title: "Gateway", detail: "Target architecture: same native route as dashboard")
+            GatewayStatusPanel()
+                .frame(maxWidth: .infinity)
         }
     }
 }
