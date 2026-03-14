@@ -82,7 +82,7 @@ struct ThreadDetailView: View {
                                 HStack {
                                     ProgressView()
                                         .scaleEffect(0.6)
-                                    Text("O'Brien is thinking...")
+                                    Text("Thrawn is thinking...")
                                         .font(.system(size: 12))
                                         .foregroundColor(Color.black.opacity(0.72))
                                     Spacer()

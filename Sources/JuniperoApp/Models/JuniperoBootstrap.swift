@@ -5,7 +5,7 @@ import AppKit
 #endif
 
 @MainActor
-final class JuniperoBootstrap: ObservableObject {
+final class ThrawnBootstrap: ObservableObject {
     enum SetupMode: String, CaseIterable, Identifiable {
         case freeLocal = "Free Local"
         case bringYourOwn = "Bring Your Own Plan"
@@ -72,7 +72,7 @@ final class JuniperoBootstrap: ObservableObject {
         self.stepStates = Dictionary(uniqueKeysWithValues: SetupStep.allCases.map { ($0, .pending) })
         syncPreferences()
         preferencesObserver = NotificationCenter.default.addObserver(
-            forName: JuniperoPreferencesStore.changedNotification,
+            forName: ThrawnPreferencesStore.changedNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -118,7 +118,7 @@ final class JuniperoBootstrap: ObservableObject {
         guard !isWorking else { return }
         isWorking = true
         errorText = nil
-        statusText = "Setting up Junipero runtime…"
+        statusText = "Setting up Thrawn runtime…"
         applySetupModeDefaults()
         resetStepStates()
         setStep(.migrate, .running)
@@ -132,7 +132,7 @@ final class JuniperoBootstrap: ObservableObject {
         setStep(.fallback, (!enableOllamaFallback || ollamaHealthy) ? .done : .failed)
 
         setStep(.save, .running)
-        writeJuniperoConfig()
+        writeThrawnConfig()
         writeSetupState(SetupState(completed: true, setupDate: Date()))
         setStep(.save, .done)
 
@@ -152,17 +152,17 @@ final class JuniperoBootstrap: ObservableObject {
     }
 
     var canDisableGuardrails: Bool {
-        JuniperoPreferencesStore.load().probationComplete
+        ThrawnPreferencesStore.load().probationComplete
     }
 
     func setLiabilityMode(_ mode: LiabilityMode) {
-        var prefs = JuniperoPreferencesStore.load()
+        var prefs = ThrawnPreferencesStore.load()
         if !prefs.probationComplete {
             prefs.liabilityMode = .idiot
         } else {
             prefs.liabilityMode = mode
         }
-        JuniperoPreferencesStore.save(prefs)
+        ThrawnPreferencesStore.save(prefs)
     }
 
     func runGuidedDiagnostics() async {
@@ -294,7 +294,7 @@ final class JuniperoBootstrap: ObservableObject {
             let cmd = "cd '\(tempDir.deletingLastPathComponent().path)' && /usr/bin/zip -r '\(archivePath.path)' '\(tempDir.lastPathComponent)' >/dev/null"
             let zip = await ShellCommand.run(cmd)
             if zip.exitCode != 0 {
-                throw NSError(domain: "JuniperoBundle", code: 2, userInfo: [NSLocalizedDescriptionKey: "zip command failed"])
+                throw NSError(domain: "ThrawnBundle", code: 2, userInfo: [NSLocalizedDescriptionKey: "zip command failed"])
             }
             lastSupportBundlePath = archivePath.path
             statusText = "Support bundle exported"
@@ -435,7 +435,7 @@ final class JuniperoBootstrap: ObservableObject {
         return names.first
     }
 
-    private func writeJuniperoConfig() {
+    private func writeThrawnConfig() {
         let token = providerToken.trimmingCharacters(in: .whitespacesAndNewlines)
         if setupMode == .bringYourOwn {
             _ = KeychainStore.saveProviderToken(token)
@@ -708,7 +708,7 @@ final class JuniperoBootstrap: ObservableObject {
     }
 
     private func syncPreferences() {
-        let prefs = JuniperoPreferencesStore.load()
+        let prefs = ThrawnPreferencesStore.load()
         liabilityMode = prefs.effectiveLiabilityMode
         probationInteractionCount = prefs.interactionCount
         if prefs.probationComplete {

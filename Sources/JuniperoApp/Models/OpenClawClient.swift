@@ -620,7 +620,7 @@ actor OpenClawClient {
     private static func resolveConfig() -> OpenClawConfig {
         var config = OpenClawConfig.default
 
-        if let homeConfig = readJuniperoConfig() {
+        if let homeConfig = readThrawnConfig() {
             config.baseURL = homeConfig.baseURL
             config.model = homeConfig.model
             config.timeoutSeconds = homeConfig.timeoutSeconds
@@ -642,35 +642,35 @@ actor OpenClawClient {
             config.token = discoveredToken
         }
 
-        if let envURL = ProcessInfo.processInfo.environment["JUNIPERO_OPENCLAW_URL"], !envURL.isEmpty {
+        if let envURL = ProcessInfo.processInfo.environment["THRAWN_OPENCLAW_URL"], !envURL.isEmpty {
             config.baseURL = envURL
         }
-        if let envModel = ProcessInfo.processInfo.environment["JUNIPERO_OPENCLAW_MODEL"], !envModel.isEmpty {
+        if let envModel = ProcessInfo.processInfo.environment["THRAWN_OPENCLAW_MODEL"], !envModel.isEmpty {
             config.model = envModel
         }
-        if let envToken = ProcessInfo.processInfo.environment["JUNIPERO_OPENCLAW_TOKEN"], !envToken.isEmpty {
+        if let envToken = ProcessInfo.processInfo.environment["THRAWN_OPENCLAW_TOKEN"], !envToken.isEmpty {
             config.token = envToken
         }
-        if let envOllamaURL = ProcessInfo.processInfo.environment["JUNIPERO_OLLAMA_URL"], !envOllamaURL.isEmpty {
+        if let envOllamaURL = ProcessInfo.processInfo.environment["THRAWN_OLLAMA_URL"], !envOllamaURL.isEmpty {
             config.ollamaBaseURL = envOllamaURL
         }
-        if let envOllamaModel = ProcessInfo.processInfo.environment["JUNIPERO_OLLAMA_MODEL"], !envOllamaModel.isEmpty {
+        if let envOllamaModel = ProcessInfo.processInfo.environment["THRAWN_OLLAMA_MODEL"], !envOllamaModel.isEmpty {
             config.ollamaModel = envOllamaModel
         }
-        if let envOllamaFallback = ProcessInfo.processInfo.environment["JUNIPERO_OLLAMA_FALLBACK_ENABLED"], !envOllamaFallback.isEmpty {
+        if let envOllamaFallback = ProcessInfo.processInfo.environment["THRAWN_OLLAMA_FALLBACK_ENABLED"], !envOllamaFallback.isEmpty {
             config.ollamaFallbackEnabled = envOllamaFallback.lowercased() == "1" || envOllamaFallback.lowercased() == "true"
         }
-        if let envPreferLocal = ProcessInfo.processInfo.environment["JUNIPERO_PREFER_LOCAL_FIRST"], !envPreferLocal.isEmpty {
+        if let envPreferLocal = ProcessInfo.processInfo.environment["THRAWN_PREFER_LOCAL_FIRST"], !envPreferLocal.isEmpty {
             config.preferLocalFirst = envPreferLocal.lowercased() == "1" || envPreferLocal.lowercased() == "true"
         }
-        if let envAlwaysRoute = ProcessInfo.processInfo.environment["JUNIPERO_ALWAYS_ROUTE_OPENCLAW"], !envAlwaysRoute.isEmpty {
+        if let envAlwaysRoute = ProcessInfo.processInfo.environment["THRAWN_ALWAYS_ROUTE_OPENCLAW"], !envAlwaysRoute.isEmpty {
             config.alwaysRouteThroughOpenClaw = envAlwaysRoute.lowercased() == "1" || envAlwaysRoute.lowercased() == "true"
         }
 
         return config
     }
 
-    private static func readJuniperoConfig() -> OpenClawConfig? {
+    private static func readThrawnConfig() -> OpenClawConfig? {
         let path = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".junipero", isDirectory: true)
             .appendingPathComponent("config.json")

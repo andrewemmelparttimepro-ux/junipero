@@ -89,7 +89,7 @@ final class ThreadStore: ObservableObject {
         try? FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
         applyGuardrailPreset()
         preferenceObserver = NotificationCenter.default.addObserver(
-            forName: JuniperoPreferencesStore.changedNotification,
+            forName: ThrawnPreferencesStore.changedNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -125,7 +125,7 @@ final class ThreadStore: ObservableObject {
     }
 
     func sendMessage(_ text: String, attachments: [ChatAttachment] = []) {
-        JuniperoPreferencesStore.incrementInteraction()
+        ThrawnPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
         let cleanAttachments = sanitizedAttachments(attachments)
         guard !trimmed.isEmpty || !cleanAttachments.isEmpty else { return }
@@ -148,7 +148,7 @@ final class ThreadStore: ObservableObject {
     }
 
     func sendMessage(in threadId: UUID, text: String, attachments: [ChatAttachment] = []) {
-        JuniperoPreferencesStore.incrementInteraction()
+        ThrawnPreferencesStore.incrementInteraction()
         let trimmed = sanitize(text)
         let cleanAttachments = sanitizedAttachments(attachments)
         guard !trimmed.isEmpty || !cleanAttachments.isEmpty else { return }
@@ -366,7 +366,7 @@ final class ThreadStore: ObservableObject {
     }
 
     private func applyGuardrailPreset() {
-        let prefs = JuniperoPreferencesStore.load()
+        let prefs = ThrawnPreferencesStore.load()
         switch prefs.effectiveLiabilityMode {
         case .idiot:
             maxMessageLength = 4000
@@ -382,7 +382,7 @@ final class ThreadStore: ObservableObject {
     }
 
     private func normalizeError(_ error: Error) -> String {
-        let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach O'Brien."
+        let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach Thrawn."
         let lower = raw.lowercased()
 
         if lower.contains("overloaded") || lower.contains("rate limit") || lower.contains("cooldown") {

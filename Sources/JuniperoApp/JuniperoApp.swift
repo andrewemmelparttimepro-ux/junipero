@@ -1,9 +1,9 @@
 import SwiftUI
 
 @main
-struct JuniperoApp: App {
+struct ThrawnApp: App {
     @StateObject private var threadStore = ThreadStore()
-    @StateObject private var bootstrap = JuniperoBootstrap()
+    @StateObject private var bootstrap = ThrawnBootstrap()
     @StateObject private var updateManager = UpdateManager()
     @StateObject private var sparkleUpdater = SparkleUpdaterService()
 
@@ -25,7 +25,7 @@ struct JuniperoApp: App {
                     }
                     Button("Later", role: .cancel) {}
                 } message: {
-                    Text("Junipero \(updateManager.latestVersion) is available. Download the latest build for best stability.")
+                    Text("Thrawn \(updateManager.latestVersion) is available. Download the latest build for best stability.")
                 }
                 .task {
                     await bootstrap.startIfNeeded()

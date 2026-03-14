@@ -46,7 +46,7 @@ struct ThreadCard: View {
                 HStack(spacing: 6) {
                     ProgressView()
                         .scaleEffect(0.55)
-                    Text("O'Brien is thinking...")
+                    Text("Thrawn is thinking...")
                         .font(.system(size: 12))
                         .foregroundColor(Color.black.opacity(0.72))
                 }
@@ -56,7 +56,7 @@ struct ThreadCard: View {
                     .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
                     .lineLimit(2)
             } else {
-                line(title: "O'Brien", text: thread.assistantMessagePreview, titleColor: Color.black.opacity(0.8))
+                line(title: "Thrawn", text: thread.assistantMessagePreview, titleColor: Color.black.opacity(0.8))
                 if let model = thread.modelUsed, let latencyMs = thread.latencyMs {
                     Text("\(model) • \(latencyMs)ms")
                         .font(.system(size: 10))

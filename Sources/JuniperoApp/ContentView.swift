@@ -5,20 +5,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Linen/cream background
-            LinearGradient(
-                colors: [
-                    Color(red: 0.98, green: 0.96, blue: 0.93),
-                    Color(red: 0.96, green: 0.94, blue: 0.90),
-                    Color(red: 0.97, green: 0.95, blue: 0.91),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            // Subtle linen texture overlay
-            LinenTexture()
+            ThrawnBackdrop()
                 .ignoresSafeArea()
 
             if threadStore.allThreadsMode {
@@ -26,27 +13,14 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
             } else {
-                HStack(spacing: 0) {
+                HStack(spacing: 18) {
                     LeftPanelView()
                         .frame(maxWidth: .infinity)
-
-                    Rectangle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.05),
-                                    Color.black.opacity(0.1),
-                                    Color.black.opacity(0.05),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: 1)
 
                     RightPanelView()
                         .frame(maxWidth: .infinity)
                 }
+                .padding(18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity)
             }
@@ -55,43 +29,42 @@ struct ContentView: View {
     }
 }
 
-struct LinenTexture: View {
+struct ThrawnBackdrop: View {
     var body: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.02),
-                        Color.brown.opacity(0.02),
-                        Color.white.opacity(0.01),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.04, green: 0.05, blue: 0.07),
+                    Color(red: 0.08, green: 0.09, blue: 0.12),
+                    Color(red: 0.05, green: 0.06, blue: 0.08)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
-            .blendMode(.multiply)
-    }
-}
 
-struct GeometryRatioLayout: Layout {
-    let leftRatio: CGFloat
+            RadialGradient(
+                colors: [
+                    Color(red: 0.14, green: 0.18, blue: 0.30).opacity(0.55),
+                    Color.clear
+                ],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 700
+            )
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        return proposal.replacingUnspecifiedDimensions()
-    }
+            RadialGradient(
+                colors: [
+                    Color(red: 0.18, green: 0.26, blue: 0.52).opacity(0.22),
+                    Color.clear
+                ],
+                center: .center,
+                startRadius: 0,
+                endRadius: 520
+            )
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 2 else { return }
-        let leftWidth = bounds.width * leftRatio
-        let rightWidth = bounds.width * (1 - leftRatio)
-
-        subviews[0].place(
-            at: bounds.origin,
-            proposal: ProposedViewSize(width: leftWidth, height: bounds.height)
-        )
-        subviews[1].place(
-            at: CGPoint(x: bounds.minX + leftWidth, y: bounds.minY),
-            proposal: ProposedViewSize(width: rightWidth, height: bounds.height)
-        )
+            Rectangle()
+                .fill(Color.white.opacity(0.018))
+                .blendMode(.screen)
+        }
     }
 }

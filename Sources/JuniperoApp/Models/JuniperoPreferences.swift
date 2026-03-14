@@ -16,12 +16,12 @@ enum LiabilityMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct JuniperoPreferences: Codable {
+struct ThrawnPreferences: Codable {
     var liabilityMode: LiabilityMode
     var probationStartedAt: Date
     var interactionCount: Int
 
-    static let `default` = JuniperoPreferences(
+    static let `default` = ThrawnPreferences(
         liabilityMode: .idiot,
         probationStartedAt: Date(),
         interactionCount: 0
@@ -36,23 +36,23 @@ struct JuniperoPreferences: Codable {
     }
 }
 
-enum JuniperoPreferencesStore {
-    static let changedNotification = Notification.Name("JuniperoPreferencesChanged")
+enum ThrawnPreferencesStore {
+    static let changedNotification = Notification.Name("ThrawnPreferencesChanged")
 
     private static var fileURL: URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".junipero", isDirectory: true).appendingPathComponent("preferences.json")
     }
 
-    static func load() -> JuniperoPreferences {
+    static func load() -> ThrawnPreferences {
         guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode(JuniperoPreferences.self, from: data) else {
+              let decoded = try? JSONDecoder().decode(ThrawnPreferences.self, from: data) else {
             return .default
         }
         return decoded
     }
 
-    static func save(_ prefs: JuniperoPreferences) {
+    static func save(_ prefs: ThrawnPreferences) {
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(prefs) {

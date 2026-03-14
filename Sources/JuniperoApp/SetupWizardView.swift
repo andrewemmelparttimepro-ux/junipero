@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct SetupWizardView: View {
-    @EnvironmentObject var bootstrap: JuniperoBootstrap
+    @EnvironmentObject var bootstrap: ThrawnBootstrap
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Junipero One-Click Setup")
+            Text("Thrawn One-Click Setup")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(Color.white.opacity(0.95))
 
@@ -14,7 +14,7 @@ struct SetupWizardView: View {
                 .foregroundColor(Color.white.opacity(0.82))
 
             Picker("Mode", selection: $bootstrap.setupMode) {
-                ForEach(JuniperoBootstrap.SetupMode.allCases) { mode in
+                ForEach(ThrawnBootstrap.SetupMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode)
                 }
             }
@@ -102,7 +102,7 @@ struct SetupWizardView: View {
             )
 
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(JuniperoBootstrap.SetupStep.allCases) { step in
+                ForEach(ThrawnBootstrap.SetupStep.allCases) { step in
                     HStack(spacing: 8) {
                         Image(systemName: icon(for: bootstrap.stateForStep(step)))
                             .font(.system(size: 11, weight: .bold))
@@ -218,7 +218,7 @@ struct SetupWizardView: View {
         )
     }
 
-    private func icon(for state: JuniperoBootstrap.StepState) -> String {
+    private func icon(for state: ThrawnBootstrap.StepState) -> String {
         switch state {
         case .pending: return "circle"
         case .running: return "clock.fill"
@@ -227,7 +227,7 @@ struct SetupWizardView: View {
         }
     }
 
-    private func color(for state: JuniperoBootstrap.StepState) -> Color {
+    private func color(for state: ThrawnBootstrap.StepState) -> Color {
         switch state {
         case .pending: return Color.white.opacity(0.5)
         case .running: return Color(red: 0.98, green: 0.78, blue: 0.32)
