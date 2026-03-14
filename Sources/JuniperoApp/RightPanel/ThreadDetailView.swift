@@ -16,62 +16,62 @@ struct ThreadDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Thread")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
+            // Thread header
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        threadStore.selectedThreadId = nil
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.75))
+                        .padding(8)
+                        .background(Circle().fill(Color.white.opacity(0.07)))
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Thread")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.92))
+                    if let thread {
+                        Text(thread.formattedDate)
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.42))
+                    }
+                }
+
                 Spacer()
+
                 if queuedCount > 0 {
                     HStack(spacing: 6) {
                         Text("\(queuedCount) queued")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color(red: 0.12, green: 0.22, blue: 0.42))
+                            .foregroundColor(Color(red: 0.65, green: 0.78, blue: 1.0))
                         Button("Clear") {
                             threadStore.clearQueuedMessages(for: threadId)
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(Color(red: 0.17, green: 0.30, blue: 0.55))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color(red: 0.65, green: 0.78, blue: 1.0))
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.84))
-                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color(red: 0.28, green: 0.42, blue: 0.88).opacity(0.22)))
                 }
-                if let thread {
-                    Text(thread.formattedDate)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.76))
-                }
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        threadStore.selectedThreadId = nil
-                    }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.18, green: 0.36, blue: 0.68),
-                        Color(red: 0.10, green: 0.25, blue: 0.50),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(Color(red: 0.07, green: 0.09, blue: 0.13))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            }
 
+            // Messages
             ScrollView {
                 ScrollViewReader { proxy in
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 12) {
                         if let thread {
                             ForEach(thread.messages) { msg in
                                 MessageBubble(message: msg)
@@ -79,130 +79,141 @@ struct ThreadDetailView: View {
                             }
 
                             if thread.isLoading {
-                                HStack {
+                                HStack(spacing: 10) {
                                     ProgressView()
-                                        .scaleEffect(0.6)
-                                    Text("Thrawn is thinking...")
+                                        .scaleEffect(0.65)
+                                        .tint(Color(red: 0.45, green: 0.65, blue: 1.0))
+                                    Text("Thrawn is thinking…")
                                         .font(.system(size: 12))
-                                        .foregroundColor(Color.black.opacity(0.72))
+                                        .foregroundColor(Color(red: 0.55, green: 0.72, blue: 1.0))
                                     Spacer()
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.white.opacity(0.9))
-                                )
+                                .padding(12)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.04)))
                                 .id("loading-\(thread.id.uuidString)")
                             } else if thread.state == .failed {
                                 HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(red: 0.95, green: 0.55, blue: 0.55))
                                     Text(thread.errorMessage ?? "Request failed.")
                                         .font(.system(size: 12))
-                                        .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
+                                        .foregroundColor(Color(red: 0.95, green: 0.55, blue: 0.55))
                                     Spacer()
                                     Button("Retry") {
                                         threadStore.retryThread(thread.id)
                                     }
                                     .buttonStyle(.plain)
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(Color(red: 0.20, green: 0.40, blue: 0.70))
+                                    .foregroundColor(Color(red: 0.55, green: 0.72, blue: 1.0))
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color(red: 0.98, green: 0.93, blue: 0.93))
-                                )
+                                .padding(12)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.95, green: 0.35, blue: 0.32).opacity(0.10)))
                                 .id("failed-\(thread.id.uuidString)")
                             }
                         }
                         Color.clear.frame(height: 1).id(bottomAnchorId)
                     }
-                    .padding(12)
-                    .onAppear {
-                        scrollToBottom(proxy: proxy, animated: false)
-                    }
-                    .onChange(of: thread?.messages.count ?? 0) { _ in
-                        scrollToBottom(proxy: proxy, animated: true)
-                    }
-                    .onChange(of: thread?.isLoading ?? false) { _ in
-                        scrollToBottom(proxy: proxy, animated: true)
-                    }
+                    .padding(14)
+                    .onAppear { scrollToBottom(proxy: proxy, animated: false) }
+                    .onChange(of: thread?.messages.count ?? 0) { _ in scrollToBottom(proxy: proxy, animated: true) }
+                    .onChange(of: thread?.isLoading ?? false) { _ in scrollToBottom(proxy: proxy, animated: true) }
                 }
             }
-            .background(Color(red: 0.95, green: 0.95, blue: 0.96))
+            .background(Color(red: 0.05, green: 0.06, blue: 0.09))
 
-            HStack(spacing: 10) {
-                TextField("Reply to this thread...", text: replyTextBinding, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundColor(Color.black.opacity(0.95))
-                    .lineLimit(1...5)
-                    .focused($isReplyFocused)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.white.opacity(0.98))
-                    )
-                    .onSubmit {
-                        sendReply()
+            // Attachment strip
+            if !threadStore.attachments(for: threadId).isEmpty {
+                ThreadAttachmentStrip(
+                    attachments: threadStore.attachments(for: threadId),
+                    onRemove: { id in threadStore.removeAttachment(threadId: threadId, attachmentId: id) }
+                )
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+                .background(Color(red: 0.06, green: 0.08, blue: 0.11))
+            }
+
+            // Reply input
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+
+            HStack(alignment: .bottom, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    let replyText = replyTextBinding.wrappedValue
+                    if replyText.isEmpty {
+                        Text("Reply to Thrawn…")
+                            .font(.system(size: 13))
+                            .foregroundColor(Color.white.opacity(0.28))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .allowsHitTesting(false)
                     }
-                    .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
-                        threadStore.handleFileDrop(providers: providers, threadId: threadId)
-                        return true
-                    }
+                    TextEditor(text: replyTextBinding)
+                        .font(.system(size: 13))
+                        .foregroundColor(Color.white.opacity(0.92))
+                        .scrollContentBackground(.hidden)
+                        .background(Color.clear)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .focused($isReplyFocused)
+                        .frame(minHeight: 38, maxHeight: 100)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+                            threadStore.handleFileDrop(providers: providers, threadId: threadId)
+                            return true
+                        }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(isReplyFocused ? 0.07 : 0.04))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(
+                                    isReplyFocused
+                                        ? Color(red: 0.30, green: 0.50, blue: 1.0).opacity(0.55)
+                                        : Color.white.opacity(0.08),
+                                    lineWidth: 1
+                                )
+                        )
+                )
 
                 if isDropTargeted {
-                    Text("Drop files to attach")
+                    Text("Drop to attach")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
+                        .foregroundColor(Color(red: 0.55, green: 0.72, blue: 1.0))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.95))
-                        )
-                }
-
-                if !threadStore.attachments(for: threadId).isEmpty {
-                    ThreadAttachmentStrip(
-                        attachments: threadStore.attachments(for: threadId),
-                        onRemove: { id in
-                            threadStore.removeAttachment(threadId: threadId, attachmentId: id)
-                        }
-                    )
+                        .background(Capsule().fill(Color(red: 0.28, green: 0.42, blue: 0.88).opacity(0.22)))
                 }
 
                 Button(action: sendReply) {
-                    Text("Send")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(canReply ? .white : Color.white.opacity(0.28))
+                        .frame(width: 34, height: 34)
                         .background(
-                            Capsule()
-                                .fill(Color(red: 0.22, green: 0.48, blue: 0.80))
+                            Circle().fill(
+                                canReply
+                                    ? LinearGradient(colors: [Color(red: 0.30, green: 0.48, blue: 1.0), Color(red: 0.18, green: 0.32, blue: 0.82)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    : LinearGradient(colors: [Color.white.opacity(0.06), Color.white.opacity(0.06)], startPoint: .top, endPoint: .bottom)
+                            )
                         )
+                        .shadow(color: canReply ? Color(red: 0.28, green: 0.44, blue: 1.0).opacity(0.45) : .clear, radius: 8)
                 }
                 .buttonStyle(.plain)
-                .disabled(replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && threadStore.attachments(for: threadId).isEmpty)
+                .disabled(!canReply)
+                .keyboardShortcut(.return, modifiers: .command)
             }
-            .padding(12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.18, green: 0.36, blue: 0.68),
-                        Color(red: 0.12, green: 0.28, blue: 0.58),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    colors: [Color(red: 0.07, green: 0.09, blue: 0.13), Color(red: 0.05, green: 0.07, blue: 0.10)],
+                    startPoint: .top, endPoint: .bottom
                 )
             )
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 10)
         .background {
             FileDropCatcher(isTargeted: $isDropTargeted) { urls in
                 threadStore.handleDroppedURLs(urls, threadId: threadId)
@@ -210,16 +221,17 @@ struct ThreadDetailView: View {
         }
         .onAppear {
             threadStore.markThreadRead(threadId)
-            DispatchQueue.main.async {
-                isReplyFocused = true
-            }
+            DispatchQueue.main.async { isReplyFocused = true }
         }
         .onChange(of: threadStore.selectedThreadId) { selected in
             guard selected == threadId else { return }
-            DispatchQueue.main.async {
-                isReplyFocused = true
-            }
+            DispatchQueue.main.async { isReplyFocused = true }
         }
+    }
+
+    private var canReply: Bool {
+        let text = replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty || !threadStore.attachments(for: threadId).isEmpty
     }
 
     private func sendReply() {
@@ -227,9 +239,7 @@ struct ThreadDetailView: View {
         let attachments = threadStore.attachments(for: threadId)
         guard !text.isEmpty || !attachments.isEmpty else { return }
         threadStore.sendMessage(in: threadId, text: text, attachments: attachments)
-        DispatchQueue.main.async {
-            isReplyFocused = true
-        }
+        DispatchQueue.main.async { isReplyFocused = true }
     }
 
     private var replyTextBinding: Binding<String> {
@@ -239,27 +249,17 @@ struct ThreadDetailView: View {
         )
     }
 
-    private var bottomAnchorId: String {
-        "thread-bottom-\(threadId.uuidString)"
-    }
+    private var bottomAnchorId: String { "thread-bottom-\(threadId.uuidString)" }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        let action = {
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-        }
-        if animated {
-            withAnimation(.easeOut(duration: 0.2)) {
-                action()
-            }
-        } else {
-            action()
-        }
+        let action = { proxy.scrollTo(bottomAnchorId, anchor: .bottom) }
+        if animated { withAnimation(.easeOut(duration: 0.2)) { action() } } else { action() }
     }
 
-    private var queuedCount: Int {
-        threadStore.queuedCount(for: threadId)
-    }
+    private var queuedCount: Int { threadStore.queuedCount(for: threadId) }
 }
+
+// MARK: - Attachment Strip
 
 private struct ThreadAttachmentStrip: View {
     let attachments: [ChatAttachment]
@@ -268,107 +268,133 @@ private struct ThreadAttachmentStrip: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(attachments) { attachment in
+                ForEach(attachments) { att in
                     HStack(spacing: 6) {
                         Image(systemName: "paperclip")
                             .font(.system(size: 10, weight: .bold))
-                        Text(attachment.fileName)
+                        Text(att.fileName)
                             .font(.system(size: 10, weight: .medium))
                             .lineLimit(1)
-                        Button {
-                            onRemove(attachment.id)
-                        } label: {
+                        Button { onRemove(att.id) } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 11))
                         }
                         .buttonStyle(.plain)
                     }
-                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
-                    .padding(.horizontal, 8)
+                    .foregroundColor(Color(red: 0.62, green: 0.76, blue: 1.0))
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.94))
-                    )
+                    .background(Capsule().fill(Color(red: 0.28, green: 0.42, blue: 0.88).opacity(0.18)))
                 }
             }
         }
-        .frame(height: 30)
+        .frame(height: 32)
     }
 }
+
+// MARK: - Message Bubble
 
 private struct MessageBubble: View {
     let message: ChatMessage
     @State private var copied = false
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 0) {
             if message.role == .assistant {
-                bubble(text: message.text, isUser: false)
-                Spacer(minLength: 20)
+                assistantBubble
+                Spacer(minLength: 32)
             } else {
-                Spacer(minLength: 20)
-                bubble(text: message.text, isUser: true)
+                Spacer(minLength: 32)
+                userBubble
             }
         }
+    }
+
+    private var userBubble: some View {
+        bubble(text: message.text, isUser: true)
+    }
+
+    private var assistantBubble: some View {
+        bubble(text: message.text, isUser: false)
     }
 
     @ViewBuilder
     private func bubble(text: String, isUser: Bool) -> some View {
         let displayText = MSNEmoji.convert(text)
-        Text(linkified(displayText))
-            .font(.system(size: 13))
-            .foregroundColor(Color.black.opacity(0.93))
-            .textSelection(.enabled)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .padding(.top, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 16)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(
-                        isUser
-                            ? Color(red: 0.84, green: 0.91, blue: 1.0)
-                            : Color.white.opacity(0.95)
-                    )
-            )
-            .overlay(alignment: .topTrailing) {
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button {
-                        copyToClipboard(displayText)
-                    } label: {
-                        Image(systemName: copied ? "checkmark" : "clipboard")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(Color.black.opacity(0.75))
-                            .padding(5)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.92))
-                            )
+        VStack(alignment: isUser ? .trailing : .leading, spacing: 0) {
+            Text(linkified(displayText))
+                .font(.system(size: 13))
+                .foregroundColor(isUser ? Color.white.opacity(0.95) : Color.white.opacity(0.88))
+                .textSelection(.enabled)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(
+                            isUser
+                                ? LinearGradient(
+                                    colors: [
+                                        Color(red: 0.28, green: 0.44, blue: 0.96),
+                                        Color(red: 0.18, green: 0.30, blue: 0.78),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                : LinearGradient(
+                                    colors: [
+                                        Color(red: 0.14, green: 0.16, blue: 0.22),
+                                        Color(red: 0.10, green: 0.12, blue: 0.18),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(
+                                    isUser
+                                        ? Color.white.opacity(0.10)
+                                        : Color.white.opacity(0.07),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+                .overlay(alignment: .topTrailing) {
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button {
+                            copyToClipboard(displayText)
+                        } label: {
+                            Image(systemName: copied ? "checkmark" : "clipboard")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(Color.white.opacity(0.55))
+                                .padding(5)
+                                .background(Circle().fill(Color.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(5)
                     }
-                    .buttonStyle(.plain)
-                    .padding(6)
                 }
-            }
-            .contextMenu {
-                Button("Copy") {
-                    copyToClipboard(displayText)
+                .contextMenu {
+                    Button("Copy") { copyToClipboard(displayText) }
                 }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if !message.attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(message.attachments) { attachment in
-                            Text("📎 \(attachment.fileName)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Color.black.opacity(0.65))
+
+            if !message.attachments.isEmpty {
+                VStack(alignment: isUser ? .trailing : .leading, spacing: 3) {
+                    ForEach(message.attachments) { att in
+                        HStack(spacing: 5) {
+                            Image(systemName: "paperclip")
+                                .font(.system(size: 9))
+                            Text(att.fileName)
+                                .font(.system(size: 10))
                                 .lineLimit(1)
                         }
+                        .foregroundColor(Color(red: 0.62, green: 0.76, blue: 1.0))
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 6)
-                    .offset(y: 14)
                 }
+                .padding(.horizontal, 6)
+                .padding(.top, 4)
             }
+        }
     }
 
     private func linkified(_ text: String) -> AttributedString {
@@ -380,10 +406,7 @@ private struct MessageBubble: View {
                 mutable.addAttribute(.link, value: url, range: result.range)
             }
         }
-        if let attributed = try? AttributedString(mutable, including: \.foundation) {
-            return attributed
-        }
-        return AttributedString(text)
+        return (try? AttributedString(mutable, including: \.foundation)) ?? AttributedString(text)
     }
 
     private func copyToClipboard(_ text: String) {
@@ -394,9 +417,7 @@ private struct MessageBubble: View {
         copied = true
         Task {
             try? await Task.sleep(nanoseconds: 900_000_000)
-            await MainActor.run {
-                copied = false
-            }
+            await MainActor.run { copied = false }
         }
     }
 }
