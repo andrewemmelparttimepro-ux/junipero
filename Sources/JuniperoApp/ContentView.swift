@@ -12,7 +12,6 @@ extension Color {
 }
 
 struct ContentView: View {
-    @EnvironmentObject var threadStore: ThreadStore
     @EnvironmentObject var flowTab: FlowTabStore
 
     var body: some View {
@@ -22,10 +21,6 @@ struct ContentView: View {
 
             if flowTab.showFlow {
                 FlowBoardView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-            } else if threadStore.allThreadsMode {
-                RightPanelView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity)
             } else {
@@ -55,7 +50,6 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.22), value: flowTab.showFlow)
-        .animation(.easeInOut(duration: 0.2), value: threadStore.allThreadsMode)
     }
 }
 

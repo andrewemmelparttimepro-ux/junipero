@@ -72,6 +72,7 @@ final class AgentRosterStore: ObservableObject {
 
     init() {
         load()
+        startPolling()
     }
 
     func setState(id: String, state: AgentActivityState, detail: String) {
@@ -81,14 +82,42 @@ final class AgentRosterStore: ObservableObject {
         agents[index].lastTransition = Date()
     }
 
+    // Poll the file every 30s to pick up external state changes
+    private func startPolling() {
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                reloadIfChanged()
+            }
+        }
+    }
+
+    private var lastLoadedModTime: Date?
+
+    private func reloadIfChanged() {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: Self.savePath.path)
+        let modTime = attrs?[.modificationDate] as? Date
+        guard let modTime, modTime != lastLoadedModTime else { return }
+        load()
+    }
+
     private func load() {
         if let data = try? Data(contentsOf: Self.savePath),
            let decoded = try? JSONDecoder().decode([AgentStatus].self, from: data),
            !decoded.isEmpty {
-            agents = decoded
+            // Merge: preserve agents that exist in defaults but not in file
+            var merged = decoded
+            for def in Self.defaults {
+                if !merged.contains(where: { $0.id == def.id }) {
+                    merged.append(def)
+                }
+            }
+            agents = merged
         } else {
             agents = Self.defaults
         }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: Self.savePath.path)
+        lastLoadedModTime = attrs?[.modificationDate] as? Date
     }
 
     private func save() {

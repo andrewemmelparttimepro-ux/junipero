@@ -31,6 +31,7 @@ struct ThrawnHeaderBar: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
+    @EnvironmentObject var flowTab: FlowTabStore
 
     var body: some View {
         HStack(spacing: 12) {
@@ -80,6 +81,9 @@ struct ThrawnHeaderBar: View {
 
             // Action buttons
             HStack(spacing: 6) {
+                headerBtn("Flow", icon: "square.grid.2x2.fill") {
+                    withAnimation(.easeInOut(duration: 0.22)) { flowTab.showFlow.toggle() }
+                }
                 headerBtn("Setup", icon: "gearshape") { bootstrap.showSetup = true }
                 headerBtn("Heal", icon: "waveform.path.ecg") { Task { await bootstrap.refreshRuntimeStatus() } }
                 Menu {

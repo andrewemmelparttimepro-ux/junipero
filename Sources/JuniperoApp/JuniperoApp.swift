@@ -38,6 +38,7 @@ struct ThrawnApp: App {
                 .task {
                     await bootstrap.startIfNeeded()
                     await updateManager.checkOnLaunchIfNeeded()
+                    gatewayWS.connect()
                     threadStore.gatewayWS.connect()
                 }
         }
