@@ -4,19 +4,29 @@ struct ConsoleSectionSwitcher: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ForEach(ConsoleSection.allCases) { section in
                 Button { nav.selectedSection = section } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         Image(systemName: section.icon)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10, weight: .bold))
                         Text(section.rawValue)
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundColor(.white.opacity(nav.selectedSection == section ? 0.96 : 0.74))
+                    .foregroundColor(nav.selectedSection == section ? .white : Color.white.opacity(0.55))
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(nav.selectedSection == section ? Color(red: 0.27, green: 0.42, blue: 0.95) : Color.white.opacity(0.06)))
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(nav.selectedSection == section ? Color.chissDeep : Color.white.opacity(0.05))
+                            .overlay(
+                                Capsule().stroke(
+                                    nav.selectedSection == section ? Color.chissPrimary.opacity(0.55) : Color.clear,
+                                    lineWidth: 1
+                                )
+                            )
+                    )
+                    .shadow(color: nav.selectedSection == section ? Color.chissPrimary.opacity(0.20) : .clear, radius: 6)
                 }
                 .buttonStyle(.plain)
             }
@@ -30,7 +40,7 @@ struct ConsoleSectionBody: View {
     var body: some View {
         switch nav.selectedSection {
         case .command:
-            EmptyView() // handled directly in RightPanelView
+            PrimarySessionView()
         case .tasks:
             TaskBoardView()
         case .review:
