@@ -189,20 +189,24 @@ final class HermesBootstrap: ObservableObject {
             return
         }
 
-        // Try starting gateway
-        let hermesCmd = hermesHome
-            .appendingPathComponent("hermes-agent", isDirectory: true)
+        // Try starting gateway with API server enabled
+        let agentDir = hermesHome.appendingPathComponent("hermes-agent", isDirectory: true)
+        let pythonCmd = agentDir
             .appendingPathComponent("venv", isDirectory: true)
             .appendingPathComponent("bin", isDirectory: true)
-            .appendingPathComponent("hermes")
+            .appendingPathComponent("python")
             .path
+        let cliPath = agentDir.appendingPathComponent("cli.py").path
+        let logDir = hermesHome.appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let logPath = logDir.appendingPathComponent("junipero-gateway.log").path
 
-        // Try the installed hermes command
-        let startCmd = "nohup '\(hermesCmd)' gateway > '\(hermesHome.path)/logs/junipero-gateway.log' 2>&1 &"
+        // Launch gateway: API_SERVER_ENABLED=true python cli.py --gateway
+        let startCmd = "cd '\(agentDir.path)' && API_SERVER_ENABLED=true nohup '\(pythonCmd)' '\(cliPath)' --gateway > '\(logPath)' 2>&1 &"
         let result = await ShellCommand.run(startCmd)
         if result.exitCode != 0 {
-            // Try PATH-based hermes
-            let fallback = await ShellCommand.run("nohup hermes gateway > /tmp/junipero-hermes-gateway.log 2>&1 &")
+            // Fallback: try hermes from PATH
+            let fallback = await ShellCommand.run("API_SERVER_ENABLED=true nohup hermes --gateway > /tmp/junipero-hermes-gateway.log 2>&1 &")
             if fallback.exitCode != 0 {
                 await ChatDiagnostics.shared.log("gateway-start-fail stderr=\(result.stderr) fallback=\(fallback.stderr)")
             }
