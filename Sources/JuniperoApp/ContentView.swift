@@ -10,22 +10,13 @@ struct ContentView: View {
                 .frame(width: 380)
 
             Rectangle()
-                .fill(JuniperoTheme.copper.opacity(0.3))
+                .fill(JuniperoTheme.divider)
                 .frame(width: 1)
 
             RightPanelView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    JuniperoTheme.backgroundPrimary,
-                    JuniperoTheme.backgroundPrimary.opacity(0.97)
-                ]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .background(JuniperoTheme.backgroundPrimary)
         .frame(minWidth: 1200, minHeight: 800)
     }
 }

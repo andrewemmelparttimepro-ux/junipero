@@ -1,7 +1,7 @@
 import SwiftUI
 
-// MARK: - Junipero v2 Dark Luxury Color Palette
-// Black + copper, high-end watch aesthetic
+// MARK: - Junipero v2 — Monochrome Luxury
+// Black + brushed silver/white. No gold. No copper.
 
 enum JuniperoTheme {
 
@@ -11,25 +11,23 @@ enum JuniperoTheme {
     static let backgroundSurface = Color(red: 0.13, green: 0.13, blue: 0.14)       // Card surface
     static let backgroundElevated = Color(red: 0.16, green: 0.16, blue: 0.17)      // Elevated surface
 
-    // MARK: — Copper Accent Palette
-    static let copper = Color(red: 0.72, green: 0.45, blue: 0.20)                  // Primary copper #B87333
-    static let copperLight = Color(red: 0.83, green: 0.59, blue: 0.42)             // Lighter copper
-    static let copperDark = Color(red: 0.55, green: 0.35, blue: 0.17)              // Darker copper
-    static let copperGlow = Color(red: 0.72, green: 0.45, blue: 0.20).opacity(0.3) // Glow/shadow
-    static let copperSubtle = Color(red: 0.72, green: 0.45, blue: 0.20).opacity(0.12) // Very subtle copper tint
-    static let roseGold = Color(red: 0.88, green: 0.68, blue: 0.55)                // Rose gold highlight
+    // MARK: — Accent (Silver / White Steel)
+    static let accent = Color(red: 0.78, green: 0.80, blue: 0.82)                  // Brushed silver
+    static let accentLight = Color(red: 0.90, green: 0.91, blue: 0.93)             // Bright silver
+    static let accentDark = Color(red: 0.50, green: 0.52, blue: 0.54)              // Muted steel
+    static let accentGlow = Color.white.opacity(0.15)                               // Subtle glow
+    static let accentSubtle = Color.white.opacity(0.06)                             // Barely there
 
     // MARK: — Text
     static let textPrimary = Color.white.opacity(0.92)
-    static let textSecondary = Color.white.opacity(0.60)
-    static let textTertiary = Color.white.opacity(0.38)
-    static let textCopper = Color(red: 0.83, green: 0.59, blue: 0.42)
+    static let textSecondary = Color.white.opacity(0.55)
+    static let textTertiary = Color.white.opacity(0.32)
 
     // MARK: — Status
     static let statusOnline = Color(red: 0.30, green: 0.85, blue: 0.45)
     static let statusWarning = Color(red: 0.95, green: 0.70, blue: 0.20)
     static let statusError = Color(red: 0.85, green: 0.25, blue: 0.20)
-    static let statusThinking = Color(red: 0.72, green: 0.45, blue: 0.20)
+    static let statusThinking = Color.white.opacity(0.60)
 
     // MARK: — Gradients
     static let backgroundGradient = LinearGradient(
@@ -47,8 +45,8 @@ enum JuniperoTheme {
         endPoint: .bottom
     )
 
-    static let copperGradient = LinearGradient(
-        colors: [copperLight, copper, copperDark],
+    static let accentGradient = LinearGradient(
+        colors: [accentLight, accent, accentDark],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
@@ -60,13 +58,21 @@ enum JuniperoTheme {
     )
 
     // MARK: — User / Assistant Bubble
-    static let userBubble = Color(red: 0.18, green: 0.15, blue: 0.12)              // Warm dark
-    static let assistantBubble = Color(red: 0.13, green: 0.13, blue: 0.14)         // Cool dark
+    static let userBubble = Color(red: 0.14, green: 0.14, blue: 0.16)
+    static let assistantBubble = Color(red: 0.10, green: 0.10, blue: 0.11)
 
     // MARK: — Divider
-    static let divider = Color.white.opacity(0.08)
+    static let divider = Color.white.opacity(0.06)
 
-    // MARK: — Tab bar
-    static let tabInactive = Color.white.opacity(0.45)
-    static let tabActive = copper
+    // MARK: — Legacy aliases (keeps existing code compiling during migration)
+    static let copper = accent
+    static let copperLight = accentLight
+    static let copperDark = accentDark
+    static let copperGlow = accentGlow
+    static let copperSubtle = accentSubtle
+    static let roseGold = accentLight
+    static let textCopper = accentLight
+    static let copperGradient = accentGradient
+    static let tabInactive = Color.white.opacity(0.40)
+    static let tabActive = accent
 }

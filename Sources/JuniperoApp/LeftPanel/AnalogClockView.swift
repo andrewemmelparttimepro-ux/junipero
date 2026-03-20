@@ -12,36 +12,36 @@ struct AnalogClockView: View {
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
 
             ZStack {
-                // Outer bezel — copper angular gradient
+                // Outer bezel — brushed steel angular gradient
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                JuniperoTheme.copperLight,
-                                JuniperoTheme.copper,
-                                JuniperoTheme.copperDark,
-                                JuniperoTheme.roseGold,
-                                JuniperoTheme.copper,
-                                JuniperoTheme.copperLight,
+                                Color(white: 0.38),
+                                Color(white: 0.28),
+                                Color(white: 0.42),
+                                Color(white: 0.22),
+                                Color(white: 0.36),
+                                Color(white: 0.30),
+                                Color(white: 0.38),
                             ],
                             center: .center
                         )
                     )
                     .frame(width: size, height: size)
-                    .shadow(color: JuniperoTheme.copper.opacity(0.35), radius: 18, x: 0, y: 4)
-                    .shadow(color: .black.opacity(0.40), radius: 12, x: 0, y: 6)
+                    .shadow(color: .black.opacity(0.50), radius: 14, x: 0, y: 6)
                     .overlay(
                         Circle()
-                            .stroke(JuniperoTheme.roseGold.opacity(0.25), lineWidth: 1.5)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
                     )
 
-                // Inner bezel ring — darker bronze
+                // Inner bezel ring — dark steel
                 Circle()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.35, green: 0.22, blue: 0.10),
-                                Color(red: 0.25, green: 0.15, blue: 0.08),
+                                Color(white: 0.18),
+                                Color(white: 0.12),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -49,14 +49,14 @@ struct AnalogClockView: View {
                     )
                     .frame(width: size * 0.92, height: size * 0.92)
 
-                // Clock face — deep obsidian black
+                // Clock face — deep black
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
                                 Color(red: 0.06, green: 0.06, blue: 0.07),
                                 Color(red: 0.03, green: 0.03, blue: 0.04),
-                                Color(red: 0.02, green: 0.02, blue: 0.03),
+                                Color(red: 0.02, green: 0.02, blue: 0.02),
                             ],
                             center: .center,
                             startRadius: 0,
@@ -85,7 +85,7 @@ struct AnalogClockView: View {
                                 y: center.y + outerRadius * sinAngle
                             ))
                         }
-                        .stroke(Color.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, lineCap: .round))
+                        .stroke(Color.white.opacity(0.10), style: StrokeStyle(lineWidth: 0.5, lineCap: .round))
                     }
                 }
 
@@ -94,7 +94,7 @@ struct AnalogClockView: View {
                     let angle = Double(i) * 30.0 - 90.0
                     let isMainHour = i % 3 == 0
                     let markerLength: CGFloat = isMainHour ? size * 0.07 : size * 0.04
-                    let markerWidth: CGFloat = isMainHour ? 3.0 : 1.5
+                    let markerWidth: CGFloat = isMainHour ? 2.5 : 1.2
                     let outerRadius = size * 0.40
                     let innerRadius = outerRadius - markerLength
 
@@ -113,85 +113,79 @@ struct AnalogClockView: View {
                     }
                     .stroke(
                         isMainHour
-                            ? JuniperoTheme.roseGold
-                            : JuniperoTheme.copper.opacity(0.55),
+                            ? Color.white.opacity(0.85)
+                            : Color.white.opacity(0.35),
                         style: StrokeStyle(lineWidth: markerWidth, lineCap: .round)
-                    )
-                    .shadow(
-                        color: isMainHour
-                            ? JuniperoTheme.copper.opacity(0.35)
-                            : .clear,
-                        radius: 3
                     )
                 }
 
                 // Brand text "JUNIPERO" — luxury watch dial inscription
                 Text("JUNIPERO")
-                    .font(.system(size: size * 0.09, weight: .semibold, design: .serif))
-                    .tracking(5)
-                    .foregroundColor(JuniperoTheme.roseGold)
+                    .font(.system(size: size * 0.078, weight: .light, design: .serif))
+                    .tracking(6)
+                    .foregroundColor(Color.white.opacity(0.55))
                     .offset(y: -size * 0.18)
 
-                // Sub-dial text "SAN JUNIPERO"
+                // Sub text
                 Text("SAN JUNIPERO")
-                    .font(.system(size: size * 0.042, weight: .regular, design: .default))
-                    .tracking(5)
-                    .foregroundColor(JuniperoTheme.copper.opacity(0.7))
+                    .font(.system(size: size * 0.035, weight: .ultraLight, design: .default))
+                    .tracking(4)
+                    .foregroundColor(Color.white.opacity(0.25))
                     .offset(y: size * 0.21)
 
-                // Hour hand — copper / rose gold
+                // Hour hand — white
                 ClockHand(
                     angle: hourAngle,
                     length: size * 0.22,
-                    width: 4.5,
-                    color: JuniperoTheme.roseGold,
+                    width: 4.0,
+                    color: Color.white.opacity(0.90),
                     center: center,
                     tailLength: size * 0.05
                 )
-                .shadow(color: .black.opacity(0.55), radius: 3, x: 1, y: 1)
+                .shadow(color: .black.opacity(0.60), radius: 3, x: 1, y: 1)
 
-                // Minute hand — lighter copper
+                // Minute hand — white, thinner
                 ClockHand(
                     angle: minuteAngle,
                     length: size * 0.32,
-                    width: 3.0,
-                    color: JuniperoTheme.copperLight,
+                    width: 2.5,
+                    color: Color.white.opacity(0.85),
                     center: center,
                     tailLength: size * 0.07
                 )
                 .shadow(color: .black.opacity(0.50), radius: 2, x: 1, y: 1)
 
-                // Second hand — deep red/copper accent
+                // Second hand — red accent (the only color)
                 ClockHand(
                     angle: secondAngle,
                     length: size * 0.35,
-                    width: 1.2,
-                    color: Color(red: 0.85, green: 0.30, blue: 0.15),
+                    width: 1.0,
+                    color: Color(red: 0.85, green: 0.18, blue: 0.15),
                     center: center,
                     tailLength: size * 0.08
                 )
-                .shadow(color: JuniperoTheme.copper.opacity(0.40), radius: 4)
+                .shadow(color: Color(red: 0.85, green: 0.18, blue: 0.15).opacity(0.30), radius: 4)
 
-                // Center cap — radial gradient from roseGold to copperDark
+                // Center cap — brushed steel
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                JuniperoTheme.roseGold,
-                                JuniperoTheme.copperDark,
+                                Color(white: 0.55),
+                                Color(white: 0.25),
                             ],
                             center: .center,
                             startRadius: 0,
                             endRadius: size * 0.025
                         )
                     )
-                    .frame(width: size * 0.05, height: size * 0.05)
-                    .shadow(color: .black.opacity(0.35), radius: 2)
+                    .frame(width: size * 0.045, height: size * 0.045)
+                    .shadow(color: .black.opacity(0.40), radius: 2)
 
-                // Inner center dot — same red/copper as second hand
+                // Inner center dot — red
                 Circle()
-                    .fill(Color(red: 0.85, green: 0.30, blue: 0.15))
-                    .frame(width: size * 0.015, height: size * 0.015)
+                    .fill(Color(red: 0.85, green: 0.18, blue: 0.15))
+                    .frame(width: size * 0.012, height: size * 0.012)
             }
         }
         .onReceive(timer) { _ in
@@ -242,11 +236,9 @@ struct ClockHand: View {
             let cosAngle = cos(angle * .pi / 180)
             let sinAngle = sin(angle * .pi / 180)
 
-            // Tail (opposite direction)
             let tailX = center.x - tailLength * cosAngle
             let tailY = center.y - tailLength * sinAngle
 
-            // Tip
             let tipX = center.x + length * cosAngle
             let tipY = center.y + length * sinAngle
 

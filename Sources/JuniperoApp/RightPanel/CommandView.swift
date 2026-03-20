@@ -31,29 +31,17 @@ struct CommandView: View {
             Spacer()
 
             VStack(spacing: 20) {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [JuniperoTheme.copper.opacity(0.3), JuniperoTheme.copperDark.opacity(0.15)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 72, height: 72)
-                    .overlay(
-                        Image(systemName: "terminal")
-                            .font(.system(size: 28, weight: .light))
-                            .foregroundColor(JuniperoTheme.copper)
-                    )
+                Image(systemName: "terminal")
+                    .font(.system(size: 32, weight: .ultraLight))
+                    .foregroundColor(JuniperoTheme.textTertiary)
 
                 Text("What can I help you with?")
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 22, weight: .light))
                     .foregroundColor(JuniperoTheme.textPrimary)
 
-                Text("Start a conversation with Hermes to get things done.")
-                    .font(.system(size: 14))
-                    .foregroundColor(JuniperoTheme.textSecondary)
-                    .multilineTextAlignment(.center)
+                Text("Start a conversation with Hermes.")
+                    .font(.system(size: 13))
+                    .foregroundColor(JuniperoTheme.textTertiary)
             }
             .padding(.horizontal, 40)
 
@@ -76,15 +64,14 @@ struct CommandView: View {
                     if thread.isLoading {
                         HStack(spacing: 10) {
                             ProgressView().scaleEffect(0.6)
-                            Text("Hermes is thinking...")
-                                .font(.system(size: 13))
+                            Text("Thinking...")
+                                .font(.system(size: 13, weight: .light))
                                 .foregroundColor(JuniperoTheme.textSecondary)
-                                .italic()
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .background(JuniperoTheme.assistantBubble)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -96,11 +83,11 @@ struct CommandView: View {
                             Spacer()
                             Button("Retry") { threadStore.retryThread(thread.id) }
                                 .buttonStyle(.plain)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(JuniperoTheme.copper)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(JuniperoTheme.textSecondary)
                         }
                         .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(JuniperoTheme.backgroundSurface))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(JuniperoTheme.backgroundSurface))
                     }
 
                     Color.clear.frame(height: 1).id("command-bottom")

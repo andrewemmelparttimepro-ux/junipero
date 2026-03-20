@@ -21,16 +21,7 @@ struct ChatInputView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            LinearGradient(
-                colors: [
-                    JuniperoTheme.backgroundSecondary,
-                    JuniperoTheme.backgroundSecondary.opacity(0.95)
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        )
+        .background(JuniperoTheme.backgroundSecondary.opacity(0.8))
     }
 
     // MARK: - Error Banner
@@ -48,9 +39,7 @@ struct ChatInputView: View {
 
             Spacer()
 
-            Button(action: {
-                threadStore.lastErrorText = nil
-            }) {
+            Button(action: { threadStore.lastErrorText = nil }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(JuniperoTheme.textTertiary)
@@ -59,7 +48,7 @@ struct ChatInputView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(JuniperoTheme.statusError.opacity(0.1))
+        .background(JuniperoTheme.statusError.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -77,12 +66,12 @@ struct ChatInputView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(JuniperoTheme.backgroundSurface)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(
                             isInputFocused
-                                ? JuniperoTheme.copper.opacity(0.4)
+                                ? Color.white.opacity(0.15)
                                 : JuniperoTheme.divider,
                             lineWidth: 1
                         )
@@ -109,33 +98,15 @@ struct ChatInputView: View {
             Image(systemName: "arrow.up")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(
-                    canSend ? JuniperoTheme.textPrimary : JuniperoTheme.textTertiary
+                    canSend ? JuniperoTheme.backgroundPrimary : JuniperoTheme.textTertiary
                 )
-                .frame(width: 38, height: 38)
+                .frame(width: 36, height: 36)
                 .background(
-                    Group {
-                        if canSend {
-                            LinearGradient(
-                                colors: [JuniperoTheme.copper, JuniperoTheme.copperDark],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        } else {
-                            LinearGradient(
-                                colors: [JuniperoTheme.backgroundElevated, JuniperoTheme.backgroundElevated],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        }
-                    }
+                    canSend
+                        ? Color.white.opacity(0.90)
+                        : JuniperoTheme.backgroundElevated
                 )
-                .clipShape(Capsule())
-                .shadow(
-                    color: canSend ? JuniperoTheme.copper.opacity(0.3) : Color.clear,
-                    radius: 6,
-                    x: 0,
-                    y: 2
-                )
+                .clipShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(!canSend)

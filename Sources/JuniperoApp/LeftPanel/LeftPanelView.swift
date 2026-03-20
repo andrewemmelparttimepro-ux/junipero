@@ -1,35 +1,48 @@
 import SwiftUI
 
 struct LeftPanelView: View {
+    @EnvironmentObject var bootstrap: HermesBootstrap
+
     var body: some View {
         VStack(spacing: 0) {
-            // Top-left: "powered by HERMES" badge
-            HStack {
-                HermesBadge()
-                    .frame(width: 220, height: 110)
-                    .rotationEffect(.degrees(-4))
-                Spacer()
-            }
-            .padding(.leading, 8)
-            .padding(.top, 12)
-
             Spacer()
 
             // HERO: Analog Clock — the centerpiece
             AnalogClockView()
-                .frame(width: 360, height: 360)
+                .frame(width: 340, height: 340)
 
             Spacer()
-                .frame(height: 24)
+                .frame(height: 28)
 
-            // Hermes status card
-            HermesStatusWidget()
-                .frame(width: 240, height: 100)
+            // Minimal status — just the dot and a word
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: statusColor.opacity(0.6), radius: 4)
+
+                Text(statusLabel)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(JuniperoTheme.textSecondary)
+                    .tracking(2)
+                    .textCase(.uppercase)
+            }
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JuniperoTheme.backgroundPrimary)
-        .padding(.horizontal, 24)
+    }
+
+    private var statusColor: Color {
+        if bootstrap.hermesHealthy { return JuniperoTheme.statusOnline }
+        if bootstrap.isWorking { return JuniperoTheme.statusWarning }
+        return JuniperoTheme.statusError
+    }
+
+    private var statusLabel: String {
+        if bootstrap.hermesHealthy { return "Online" }
+        if bootstrap.isWorking { return "Starting" }
+        return "Offline"
     }
 }
