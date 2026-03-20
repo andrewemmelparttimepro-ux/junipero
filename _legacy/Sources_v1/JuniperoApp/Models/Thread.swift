@@ -62,7 +62,11 @@ struct ChatMessage: Identifiable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, role, text, attachments, timestamp
+        case id
+        case role
+        case text
+        case attachments
+        case timestamp
     }
 
     init(from decoder: Decoder) throws {
@@ -112,13 +116,25 @@ struct ChatThread: Identifiable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, createdAt, updatedAt, messages, isLoading, state
-        case errorMessage, modelUsed, latencyMs, unreadCount
-        case timestamp, userMessage, assistantMessage
+        case id
+        case createdAt
+        case updatedAt
+        case messages
+        case isLoading
+        case state
+        case errorMessage
+        case modelUsed
+        case latencyMs
+        case unreadCount
+        // Legacy keys (single-turn schema)
+        case timestamp
+        case userMessage
+        case assistantMessage
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         self.isLoading = try container.decodeIfPresent(Bool.self, forKey: .isLoading) ?? false
         self.state = try container.decodeIfPresent(ChatDeliveryState.self, forKey: .state) ?? (isLoading ? .pending : .success)
@@ -134,13 +150,17 @@ struct ChatThread: Identifiable, Codable {
             return
         }
 
-        // Legacy migration
+        // Legacy migration path
         let legacyTimestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
         let legacyUser = try container.decodeIfPresent(String.self, forKey: .userMessage) ?? ""
         let legacyAssistant = try container.decodeIfPresent(String.self, forKey: .assistantMessage) ?? ""
         var migrated: [ChatMessage] = []
-        if !legacyUser.isEmpty { migrated.append(ChatMessage(role: .user, text: legacyUser, timestamp: legacyTimestamp)) }
-        if !legacyAssistant.isEmpty { migrated.append(ChatMessage(role: .assistant, text: legacyAssistant, timestamp: legacyTimestamp)) }
+        if !legacyUser.isEmpty {
+            migrated.append(ChatMessage(role: .user, text: legacyUser, timestamp: legacyTimestamp))
+        }
+        if !legacyAssistant.isEmpty {
+            migrated.append(ChatMessage(role: .assistant, text: legacyAssistant, timestamp: legacyTimestamp))
+        }
         self.messages = migrated
         self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? legacyTimestamp
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? legacyTimestamp
@@ -160,25 +180,61 @@ struct ChatThread: Identifiable, Codable {
         try container.encode(unreadCount, forKey: .unreadCount)
     }
 
-    var latestUserText: String { messages.last(where: { $0.role == .user })?.text ?? "" }
-    var latestAssistantText: String { messages.last(where: { $0.role == .assistant })?.text ?? "" }
+    var latestUserText: String {
+        messages.last(where: { $0.role == .user })?.text ?? ""
+    }
+
+    var latestAssistantText: String {
+        messages.last(where: { $0.role == .assistant })?.text ?? ""
+    }
 
     var userMessagePreview: String {
-        let t = latestUserText
-        return t.count > 60 ? String(t.prefix(60)) + "..." : t
+        let converted = MSNEmoji.convert(latestUserText)
+        if converted.count > 60 {
+            return String(converted.prefix(60)) + "…"
+        }
+        return converted
     }
 
     var assistantMessagePreview: String {
-        let t = latestAssistantText
-        return t.count > 80 ? String(t.prefix(80)) + "..." : t
+        let converted = MSNEmoji.convert(latestAssistantText)
+        if converted.count > 80 {
+            return String(converted.prefix(80)) + "…"
+        }
+        return converted
     }
 
-    var formattedDate: String { Self.dateTimeFormatter.string(from: updatedAt) }
+    var formattedDate: String {
+        Self.dateTimeFormatter.string(from: updatedAt)
+    }
 
     private static let dateTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeZone = .autoupdatingCurrent
-        f.dateFormat = "MMM d, h:mm a"
-        return f
+        let formatter = DateFormatter()
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "MMM d, h:mm a"
+        return formatter
     }()
+}
+
+struct MSNEmoji {
+    static func convert(_ text: String) -> String {
+        var result = text
+        result = result.replacingOccurrences(of: ":-(", with: "😢")
+        result = result.replacingOccurrences(of: ":-)", with: "😊")
+        result = result.replacingOccurrences(of: ":-D", with: "😄")
+        result = result.replacingOccurrences(of: ":-P", with: "😛")
+        result = result.replacingOccurrences(of: ":O", with: "😮")
+        result = result.replacingOccurrences(of: "(y)", with: "👍")
+        result = result.replacingOccurrences(of: "(n)", with: "👎")
+        result = result.replacingOccurrences(of: "(H)", with: "😎")
+        result = result.replacingOccurrences(of: "(L)", with: "❤️")
+        result = result.replacingOccurrences(of: "(U)", with: "💔")
+        result = result.replacingOccurrences(of: "(K)", with: "💋")
+        result = result.replacingOccurrences(of: "(F)", with: "🌸")
+        result = result.replacingOccurrences(of: "(W)", with: "⛅")
+        result = result.replacingOccurrences(of: "(S)", with: "🌙")
+        result = result.replacingOccurrences(of: "(*)", with: "⭐")
+        result = result.replacingOccurrences(of: "(8)", with: "🎵")
+        return result
+    }
 }

@@ -1,21 +1,49 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum RightPanelTab: String, CaseIterable, Identifiable {
+    case command = "Command"
+    case threads = "Threads"
+    case tasks = "Tasks"
+    case review = "Review"
+    case approvals = "Approvals"
+    case deliverables = "Deliverables"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .command: return "terminal"
+        case .threads: return "bubble.left.and.bubble.right"
+        case .tasks: return "checklist"
+        case .review: return "doc.text.magnifyingglass"
+        case .approvals: return "checkmark.seal"
+        case .deliverables: return "tray.full"
+        }
+    }
+}
+
 struct RightPanelView: View {
+    @EnvironmentObject var bootstrap: HermesBootstrap
     @EnvironmentObject var threadStore: ThreadStore
+    @State private var selectedTab: RightPanelTab = .command
     @State private var isComposerOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // MSN-style header bar
-            MSNHeaderBar()
+            headerBar
 
-            ZStack(alignment: .bottomTrailing) {
-                // Thread stack area
-                ThreadListView()
+            tabBar
+
+            Rectangle()
+                .fill(JuniperoTheme.divider)
+                .frame(height: 1)
+
+            ZStack {
+                tabContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.white.opacity(0.6))
 
+                // Thread detail overlay
                 if let selectedId = threadStore.selectedThreadId {
                     ThreadDetailView(threadId: selectedId)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -24,491 +52,174 @@ struct RightPanelView: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                         .zIndex(2)
                 }
-
-                VStack(alignment: .trailing, spacing: 10) {
-                    if isComposerOpen && threadStore.selectedThreadId == nil {
-                        PopupComposerCard(
-                            draftText: Binding(
-                                get: { threadStore.popupDraftText },
-                                set: { threadStore.updatePopupDraft($0) }
-                            ),
-                            onClose: {
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                                    isComposerOpen = false
-                                }
-                            },
-                            onSend: {
-                                sendFromPopup()
-                            }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    Button(action: {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                            isComposerOpen.toggle()
-                        }
-                    }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "bubble.left.and.bubble.right.fill")
-                                .font(.system(size: 14, weight: .bold))
-                            Text(isComposerOpen && threadStore.selectedThreadId == nil ? "Hide Chat" : "Chat")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(
-                            Capsule()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color(red: 0.18, green: 0.36, blue: 0.68),
-                                            Color(red: 0.12, green: 0.28, blue: 0.58),
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                        )
-                        .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.trailing, 16)
-                .padding(.bottom, 14)
             }
+        }
+        .background(JuniperoTheme.backgroundPrimary)
+        .overlay(alignment: .bottomTrailing) {
+            composerFAB
         }
     }
 
-    private func sendFromPopup() {
-        let trimmed = threadStore.popupDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attachments = threadStore.popupAttachments
-        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
-        threadStore.sendMessage(trimmed, attachments: attachments)
-    }
-}
+    // MARK: - Header Bar
 
-struct MSNHeaderBar: View {
-    @EnvironmentObject var threadStore: ThreadStore
-    @EnvironmentObject var bootstrap: JuniperoBootstrap
-    @EnvironmentObject var updateManager: UpdateManager
-    @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
-
-    var body: some View {
-        HStack {
-            // O'Brien avatar and status
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(width: 32, height: 32)
-                    Text("O")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("O'Brien")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.9)
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 6, height: 6)
-                        Text(statusText)
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.7))
-                            .lineLimit(1)
-                    }
-                }
-            }
-            .frame(width: 128, alignment: .leading)
-
-            Spacer()
-
-            ViewThatFits(in: .horizontal) {
-                fullHeaderControls
-                compactHeaderControls
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.18, green: 0.36, blue: 0.68),
-                    Color(red: 0.12, green: 0.28, blue: 0.58),
-                    Color(red: 0.08, green: 0.22, blue: 0.50),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-    }
-
-    private var statusText: String {
-        if threadStore.isSending {
-            return "Thinking"
-        }
-        if bootstrap.openClawHealthy {
-            if isAuthIssue {
-                return "Auth Needed"
-            }
-            return "Online"
-        }
-        switch threadStore.connectivity {
-        case .online:
-            return "Online"
-        case .offline:
-            return "Offline"
-        case .unknown:
-            return "Unknown"
-        }
-    }
-
-    private var statusColor: Color {
-        if threadStore.isSending {
-            return Color(red: 0.95, green: 0.70, blue: 0.20)
-        }
-        if bootstrap.openClawHealthy {
-            if isAuthIssue {
-                return Color(red: 0.95, green: 0.70, blue: 0.20)
-            }
-            return Color(red: 0.30, green: 0.85, blue: 0.30)
-        }
-        switch threadStore.connectivity {
-        case .online:
-            return Color(red: 0.30, green: 0.85, blue: 0.30)
-        case .offline:
-            return Color(red: 0.85, green: 0.25, blue: 0.20)
-        case .unknown:
-            return Color.white.opacity(0.6)
-        }
-    }
-
-    private var isAuthIssue: Bool {
-        guard let error = threadStore.lastErrorText?.lowercased() else { return false }
-        return error.contains("auth")
-            || error.contains("token")
-            || error.contains("unauthorized")
-            || error.contains("authentication")
-    }
-
-    private var runtimeDotColor: Color {
-        if bootstrap.openClawHealthy && (!bootstrap.enableOllamaFallback || bootstrap.ollamaHealthy) {
-            return Color(red: 0.30, green: 0.85, blue: 0.30)
-        }
-        if bootstrap.openClawHealthy {
-            return Color(red: 0.95, green: 0.70, blue: 0.20)
-        }
-        return Color(red: 0.85, green: 0.25, blue: 0.20)
-    }
-
-    private var fullHeaderControls: some View {
-        HStack(spacing: 8) {
-            runtimeBadge(maxWidth: 140)
-            actionButton(threadStore.allThreadsMode ? "Exit Threads" : "Threads", selected: threadStore.allThreadsMode) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    threadStore.allThreadsMode.toggle()
-                    threadStore.selectedThreadId = nil
-                }
-            }
-            actionButton("Setup") {
-                bootstrap.showSetup = true
-            }
-            actionButton("Heal") {
-                Task { await bootstrap.refreshRuntimeStatus() }
-            }
-            actionButton("Support") {
-                Task { await bootstrap.exportSupportBundle() }
-            }
-            actionButton("Test") {
-                Task { await bootstrap.runFullHealthTest() }
-            }
-            actionButton("Updates") {
-                sparkleUpdater.checkForUpdates()
-                Task { await updateManager.checkForUpdates() }
-            }
-            capabilityMenu
-            if threadStore.unreadThreadCount > 0 {
-                Text(threadStore.unreadThreadCount > 1 ? "\(threadStore.unreadThreadCount) NEW" : "NEW")
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundColor(Color(red: 0.08, green: 0.28, blue: 0.06))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color(red: 0.56, green: 0.98, blue: 0.46))
-                    )
-            }
-            Text("\(threadStore.threads.count) conv")
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.5))
-                .lineLimit(1)
-        }
-    }
-
-    private var compactHeaderControls: some View {
-        HStack(spacing: 8) {
-            runtimeBadge(maxWidth: 110)
-            actionButton(threadStore.allThreadsMode ? "Threads" : "Threads", selected: threadStore.allThreadsMode) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    threadStore.allThreadsMode.toggle()
-                    threadStore.selectedThreadId = nil
-                }
-            }
-            Menu {
-                Button("Setup") { bootstrap.showSetup = true }
-                Button("Heal") { Task { await bootstrap.refreshRuntimeStatus() } }
-                Button("Support") { Task { await bootstrap.exportSupportBundle() } }
-                Button("Full Test") { Task { await bootstrap.runFullHealthTest() } }
-                Button("Check Updates") {
-                    sparkleUpdater.checkForUpdates()
-                    Task { await updateManager.checkForUpdates() }
-                }
-                Divider()
-                Button("I'm an idiot") { bootstrap.setLiabilityMode(.idiot) }
-                Button("It's my fault") { bootstrap.setLiabilityMode(.myFault) }
-                    .disabled(!bootstrap.canDisableGuardrails)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Tools")
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(0.14))
-                )
-            }
-            .buttonStyle(.plain)
-            if threadStore.unreadThreadCount > 0 {
-                Text(threadStore.unreadThreadCount > 1 ? "\(threadStore.unreadThreadCount)" : "NEW")
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundColor(Color(red: 0.08, green: 0.28, blue: 0.06))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color(red: 0.56, green: 0.98, blue: 0.46))
-                    )
-            }
-        }
-    }
-
-    private var capabilityMenu: some View {
-        Menu {
-            Button("I'm an idiot") { bootstrap.setLiabilityMode(.idiot) }
-            Button("It's my fault") { bootstrap.setLiabilityMode(.myFault) }
-                .disabled(!bootstrap.canDisableGuardrails)
-        } label: {
-            Text(bootstrap.liabilityMode == .myFault ? "My Fault" : "Idiot")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(
-                            bootstrap.liabilityMode == .myFault
-                                ? Color(red: 0.60, green: 0.24, blue: 0.22).opacity(0.6)
-                                : Color.white.opacity(0.14)
-                        )
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func runtimeBadge(maxWidth: CGFloat) -> some View {
-        HStack(spacing: 6) {
-            Text(bootstrap.statusText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
-                .lineLimit(1)
-                .truncationMode(.tail)
+    private var headerBar: some View {
+        HStack(spacing: 12) {
             Circle()
-                .fill(runtimeDotColor)
-                .frame(width: 7, height: 7)
-        }
-        .frame(maxWidth: maxWidth, alignment: .leading)
-    }
-
-    private func actionButton(_ title: String, selected: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.white.opacity(selected ? 0.28 : 0.14))
-                )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct PopupComposerCard: View {
-    @EnvironmentObject var threadStore: ThreadStore
-    @Binding var draftText: String
-    @FocusState private var isInputFocused: Bool
-    @State private var isDropTargeted = false
-    let onClose: () -> Void
-    let onSend: () -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("Message O'Brien")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .buttonStyle(.plain)
-            }
-
-            TextField("Type your message...", text: $draftText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(Color.black.opacity(0.95))
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.white.opacity(0.98))
-                )
-                .lineLimit(1...5)
-                .focused($isInputFocused)
-                .onSubmit {
-                    onSend()
-                }
-                .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
-                    threadStore.handleFileDrop(providers: providers, threadId: nil)
-                    return true
-                }
-
-            if isDropTargeted {
-                Text("Drop files to attach")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color(red: 0.14, green: 0.30, blue: 0.56))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.92))
-                    )
-            }
-
-            if !threadStore.popupAttachments.isEmpty {
-                AttachmentStrip(
-                    attachments: threadStore.popupAttachments,
-                    onRemove: { id in
-                        threadStore.removeAttachment(threadId: nil, attachmentId: id)
-                    }
-                )
-            }
-
-            HStack {
-                if threadStore.isSending {
-                    Text("Sending...")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.85))
-                }
-                Spacer()
-                Button(action: onSend) {
-                    Text("Send")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(Color(red: 0.22, green: 0.48, blue: 0.80))
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && threadStore.popupAttachments.isEmpty)
-            }
-        }
-        .padding(12)
-        .frame(width: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
                 .fill(
                     LinearGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.36, blue: 0.68),
-                            Color(red: 0.10, green: 0.25, blue: 0.50),
-                        ],
+                        colors: [JuniperoTheme.copper, JuniperoTheme.copperDark],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white.opacity(0.15), lineWidth: 0.6)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
-        .background {
-            FileDropCatcher(isTargeted: $isDropTargeted) { urls in
-                threadStore.handleDroppedURLs(urls, threadId: nil)
-            }
-        }
-        .onAppear {
-            DispatchQueue.main.async {
-                isInputFocused = true
-            }
-        }
-    }
-}
+                .frame(width: 36, height: 36)
+                .overlay(
+                    Text("H")
+                        .font(.system(size: 16, weight: .bold, design: .serif))
+                        .foregroundColor(JuniperoTheme.textPrimary)
+                )
 
-private struct AttachmentStrip: View {
-    let attachments: [ChatAttachment]
-    let onRemove: (UUID) -> Void
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Hermes")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(JuniperoTheme.textPrimary)
 
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(attachments) { attachment in
-                    HStack(spacing: 6) {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 10, weight: .bold))
-                        Text(attachment.fileName)
-                            .font(.system(size: 10, weight: .medium))
-                            .lineLimit(1)
-                        Button {
-                            onRemove(attachment.id)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.94))
-                    )
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(healthDotColor)
+                        .frame(width: 7, height: 7)
+
+                    Text(bootstrap.statusText)
+                        .font(.system(size: 11))
+                        .foregroundColor(JuniperoTheme.textSecondary)
+                        .lineLimit(1)
                 }
             }
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                if threadStore.unreadThreadCount > 0 {
+                    Text("\(threadStore.unreadThreadCount) NEW")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundColor(JuniperoTheme.copper)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule().fill(JuniperoTheme.copper.opacity(0.15))
+                        )
+                }
+
+                Text("\(threadStore.threads.count) conv")
+                    .font(.system(size: 11))
+                    .foregroundColor(JuniperoTheme.textTertiary)
+            }
         }
-        .frame(height: 30)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(JuniperoTheme.backgroundSecondary)
+    }
+
+    private var healthDotColor: Color {
+        if threadStore.isSending {
+            return JuniperoTheme.statusThinking
+        }
+        if bootstrap.hermesHealthy {
+            return JuniperoTheme.statusOnline
+        }
+        if bootstrap.isWorking {
+            return JuniperoTheme.statusWarning
+        }
+        return JuniperoTheme.statusError
+    }
+
+    // MARK: - Tab Bar
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(RightPanelTab.allCases) { tab in
+                tabButton(for: tab)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(JuniperoTheme.backgroundSecondary.opacity(0.7))
+    }
+
+    private func tabButton(for tab: RightPanelTab) -> some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTab = tab
+                threadStore.selectedThreadId = nil
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 12, weight: .medium))
+                Text(tab.rawValue)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(selectedTab == tab ? JuniperoTheme.copper : JuniperoTheme.textTertiary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(
+                selectedTab == tab ? JuniperoTheme.copper.opacity(0.12) : Color.clear
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Tab Content
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .command:
+            CommandView()
+        case .threads:
+            ThreadsView()
+        case .tasks:
+            TasksView()
+        case .review:
+            ReviewView()
+        case .approvals:
+            ApprovalsView()
+        case .deliverables:
+            DeliverablesView()
+        }
+    }
+
+    // MARK: - Composer FAB
+
+    private var composerFAB: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                isComposerOpen.toggle()
+            }
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 14, weight: .bold))
+                Text(isComposerOpen ? "Hide" : "Chat")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(JuniperoTheme.textPrimary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(
+                    LinearGradient(
+                        colors: [JuniperoTheme.copper, JuniperoTheme.copperDark],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            )
+            .shadow(color: JuniperoTheme.copper.opacity(0.4), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 16)
+        .padding(.bottom, 14)
     }
 }

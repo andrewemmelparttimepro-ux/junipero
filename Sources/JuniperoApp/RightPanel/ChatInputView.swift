@@ -2,116 +2,154 @@ import SwiftUI
 
 struct ChatInputView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var bootstrap: HermesBootstrap
     @State private var messageText = ""
-    @FocusState private var isFocused: Bool
+    @State private var isSending = false
+    @FocusState private var isInputFocused: Bool
+
+    private var canSend: Bool {
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending && bootstrap.hermesHealthy
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // MSN-style separator
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.55, green: 0.70, blue: 0.88),
-                            Color(red: 0.45, green: 0.60, blue: 0.80),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 2)
-
-            // Input area with MSN blue chrome
-            VStack(spacing: 8) {
-                // MSN-style mini toolbar
-                HStack(spacing: 12) {
-                    Text("💬")
-                        .font(.system(size: 12))
-                    Text("Send a message to O'Brien")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.88))
-                    Spacer()
-
-                    // Emoji shortcode hint
-                    Text(threadStore.isSending ? "Sending..." : "MSN shortcuts: :-) (y) (L)")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.72))
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-
-                if let error = threadStore.lastErrorText {
-                    Text(error)
-                        .font(.system(size: 10))
-                        .foregroundColor(Color(red: 1.0, green: 0.92, blue: 0.92))
-                        .lineLimit(1)
-                        .padding(.horizontal, 14)
-                }
-
-                // Text field + Send button
-                HStack(spacing: 10) {
-                    TextField("Type a message...", text: $messageText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundColor(Color.black.opacity(0.95))
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white)
-                                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-                        )
-                        .lineLimit(1...4)
-                        .focused($isFocused)
-                        .onSubmit {
-                            sendMessage()
-                        }
-
-                    Button(action: sendMessage) {
-                        HStack(spacing: 5) {
-                            Text("Send")
-                                .font(.system(size: 13, weight: .semibold))
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 11))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(sendButtonColor)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+        VStack(spacing: 8) {
+            if let error = threadStore.lastErrorText {
+                errorBanner(error)
             }
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.22, green: 0.40, blue: 0.65),
-                        Color(red: 0.16, green: 0.32, blue: 0.55),
-                        Color(red: 0.12, green: 0.26, blue: 0.48),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+
+            inputRow
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(
+                colors: [
+                    JuniperoTheme.backgroundSecondary,
+                    JuniperoTheme.backgroundSecondary.opacity(0.95)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
             )
+        )
+    }
+
+    // MARK: - Error Banner
+
+    private func errorBanner(_ error: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundColor(JuniperoTheme.statusError)
+
+            Text(error)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(JuniperoTheme.statusError)
+                .lineLimit(2)
+
+            Spacer()
+
+            Button(action: {
+                threadStore.lastErrorText = nil
+            }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(JuniperoTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(JuniperoTheme.statusError.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Input Row
+
+    private var inputRow: some View {
+        HStack(alignment: .bottom, spacing: 12) {
+            TextEditor(text: $messageText)
+                .font(.system(size: 14))
+                .foregroundColor(JuniperoTheme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .focused($isInputFocused)
+                .frame(minHeight: 36, maxHeight: 120)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(JuniperoTheme.backgroundSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(
+                            isInputFocused
+                                ? JuniperoTheme.copper.opacity(0.4)
+                                : JuniperoTheme.divider,
+                            lineWidth: 1
+                        )
+                )
+                .overlay(alignment: .topLeading) {
+                    if messageText.isEmpty {
+                        Text("Message Hermes")
+                            .font(.system(size: 14))
+                            .foregroundColor(JuniperoTheme.textTertiary)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            sendButton
         }
     }
 
-    private var sendButtonColor: Color {
-        messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? Color.white.opacity(0.15)
-            : Color(red: 0.25, green: 0.50, blue: 0.80)
+    // MARK: - Send Button
+
+    private var sendButton: some View {
+        Button(action: sendMessage) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(
+                    canSend ? JuniperoTheme.textPrimary : JuniperoTheme.textTertiary
+                )
+                .frame(width: 38, height: 38)
+                .background(
+                    Group {
+                        if canSend {
+                            LinearGradient(
+                                colors: [JuniperoTheme.copper, JuniperoTheme.copperDark],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        } else {
+                            LinearGradient(
+                                colors: [JuniperoTheme.backgroundElevated, JuniperoTheme.backgroundElevated],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        }
+                    }
+                )
+                .clipShape(Capsule())
+                .shadow(
+                    color: canSend ? JuniperoTheme.copper.opacity(0.3) : Color.clear,
+                    radius: 6,
+                    x: 0,
+                    y: 2
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .keyboardShortcut(.return, modifiers: [])
     }
+
+    // MARK: - Actions
 
     private func sendMessage() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-
+        isSending = true
         threadStore.sendMessage(trimmed)
         messageText = ""
+        isSending = false
     }
 }

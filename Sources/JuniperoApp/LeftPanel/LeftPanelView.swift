@@ -2,34 +2,34 @@ import SwiftUI
 
 struct LeftPanelView: View {
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-
+        VStack(spacing: 0) {
+            // Top-left: "powered by HERMES" badge
             HStack {
-                OpenClawNeonWidget()
-                    .frame(width: 235, height: 130)
-                    .rotationEffect(.degrees(-6))
+                HermesBadge()
+                    .frame(width: 220, height: 110)
+                    .rotationEffect(.degrees(-4))
                 Spacer()
             }
-            .padding(.leading, 4)
+            .padding(.leading, 8)
+            .padding(.top, 12)
 
             Spacer()
-                .frame(height: 6)
 
-            // Hero: Analog Clock (Size 3 — Large)
+            // HERO: Analog Clock — the centerpiece
             AnalogClockView()
-                .frame(width: 320, height: 320)
+                .frame(width: 360, height: 360)
 
             Spacer()
-                .frame(height: 22)
+                .frame(height: 24)
 
-            // Bitcoin Widget (Size 1 — Small)
-            BitcoinWidget()
-                .frame(width: 220, height: 120)
+            // Hermes status card
+            HermesStatusWidget()
+                .frame(width: 240, height: 100)
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 32)
+        .background(JuniperoTheme.backgroundPrimary)
+        .padding(.horizontal, 24)
     }
 }

@@ -29,7 +29,7 @@ final class ThreadStore: ObservableObject {
     private var maxTotalInputChars = 16_000
     private var maxQueuedPerThread = 6
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
-    private let client = HermesClient()
+    private let client = OpenClawClient()
     private var threadDrafts: [UUID: String] = [:]
     private var threadAttachments: [UUID: [ChatAttachment]] = [:]
     private var queuedUserMessages: [UUID: [String]] = [:]
@@ -244,7 +244,7 @@ final class ThreadStore: ObservableObject {
         inFlightCount = inFlightTasks.count
     }
 
-    private func performRequest(threadId: UUID, messages: [HermesClient.InputMessage]) async {
+    private func performRequest(threadId: UUID, messages: [OpenClawClient.InputMessage]) async {
         do {
             let result = try await client.send(messages: messages)
             guard !Task.isCancelled else { return }
@@ -324,11 +324,11 @@ final class ThreadStore: ObservableObject {
         Task { await ChatDiagnostics.shared.log("send-drain thread=\(threadId.uuidString)") }
     }
 
-    private func buildInputMessages(for threadId: UUID) -> [HermesClient.InputMessage] {
+    private func buildInputMessages(for threadId: UUID) -> [OpenClawClient.InputMessage] {
         guard let thread = threads.first(where: { $0.id == threadId }) else { return [] }
         let history = thread.messages.suffix(maxInputHistoryMessages)
         var totalChars = 0
-        var reversedSelection: [HermesClient.InputMessage] = []
+        var reversedSelection: [OpenClawClient.InputMessage] = []
 
         for msg in history.reversed() {
             let role = msg.role == .assistant ? "assistant" : "user"
@@ -352,7 +352,7 @@ final class ThreadStore: ObservableObject {
             }
 
             totalChars += content.count
-            reversedSelection.append(HermesClient.InputMessage(role: role, content: content))
+            reversedSelection.append(OpenClawClient.InputMessage(role: role, content: content))
             if totalChars >= maxTotalInputChars {
                 break
             }
@@ -382,7 +382,7 @@ final class ThreadStore: ObservableObject {
     }
 
     private func normalizeError(_ error: Error) -> String {
-        let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach Hermes."
+        let raw = (error as? LocalizedError)?.errorDescription ?? "Failed to reach O'Brien."
         let lower = raw.lowercased()
 
         if lower.contains("overloaded") || lower.contains("rate limit") || lower.contains("cooldown") {
@@ -393,7 +393,7 @@ final class ThreadStore: ObservableObject {
             return "Attachment is too large (max 5 MB). Resize or compress, then try again."
         }
 
-        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("hermes rejected authentication") {
+        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("openclaw rejected authentication") {
             return "Authentication failed. Open Setup and verify your provider token."
         }
 
@@ -403,7 +403,7 @@ final class ThreadStore: ObservableObject {
             || lower.contains("nsurlerrordomain code=-1004")
             || lower.contains("kcferror")
         {
-            return "Cannot reach Hermes right now. Use Heal or check that Hermes is running."
+            return "Cannot reach OpenClaw right now. Use Heal or check that OpenClaw is running."
         }
 
         if lower.contains("primary and fallback both failed") {
@@ -416,7 +416,7 @@ final class ThreadStore: ObservableObject {
             return "Primary and fallback both failed. Open Setup, run diagnostics, then retry."
         }
 
-        if lower.contains("hermes error 404") && lower.contains("model") && lower.contains("not found") {
+        if lower.contains("openclaw error 404") && lower.contains("model") && lower.contains("not found") {
             return "Configured model was not found. Open Setup and select/install an available model."
         }
 

@@ -16,34 +16,16 @@ struct ThreadDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header
             HStack {
                 Text("Thread")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
+                    .foregroundColor(JuniperoTheme.textPrimary)
                 Spacer()
-                if queuedCount > 0 {
-                    HStack(spacing: 6) {
-                        Text("\(queuedCount) queued")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color(red: 0.12, green: 0.22, blue: 0.42))
-                        Button("Clear") {
-                            threadStore.clearQueuedMessages(for: threadId)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(Color(red: 0.17, green: 0.30, blue: 0.55))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.84))
-                    )
-                }
                 if let thread {
                     Text(thread.formattedDate)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.76))
+                        .foregroundColor(JuniperoTheme.textTertiary)
                 }
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -52,23 +34,18 @@ struct ThreadDetailView: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(JuniperoTheme.copper)
+                        .frame(width: 28, height: 28)
+                        .background(JuniperoTheme.copper.opacity(0.12))
+                        .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.18, green: 0.36, blue: 0.68),
-                        Color(red: 0.10, green: 0.25, blue: 0.50),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(JuniperoTheme.backgroundSecondary)
 
+            // Messages
             ScrollView {
                 ScrollViewReader { proxy in
                     LazyVStack(spacing: 10) {
@@ -80,156 +57,83 @@ struct ThreadDetailView: View {
 
                             if thread.isLoading {
                                 HStack {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                    Text("O'Brien is thinking...")
+                                    ProgressView().scaleEffect(0.6)
+                                    Text("Hermes is thinking...")
                                         .font(.system(size: 12))
-                                        .foregroundColor(Color.black.opacity(0.72))
+                                        .foregroundColor(JuniperoTheme.textSecondary)
                                     Spacer()
                                 }
                                 .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.white.opacity(0.9))
-                                )
-                                .id("loading-\(thread.id.uuidString)")
+                                .background(RoundedRectangle(cornerRadius: 12).fill(JuniperoTheme.assistantBubble))
                             } else if thread.state == .failed {
                                 HStack {
                                     Text(thread.errorMessage ?? "Request failed.")
                                         .font(.system(size: 12))
-                                        .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
+                                        .foregroundColor(JuniperoTheme.statusError)
                                     Spacer()
-                                    Button("Retry") {
-                                        threadStore.retryThread(thread.id)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(Color(red: 0.20, green: 0.40, blue: 0.70))
+                                    Button("Retry") { threadStore.retryThread(thread.id) }
+                                        .buttonStyle(.plain)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(JuniperoTheme.copper)
                                 }
                                 .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color(red: 0.98, green: 0.93, blue: 0.93))
-                                )
-                                .id("failed-\(thread.id.uuidString)")
+                                .background(RoundedRectangle(cornerRadius: 12).fill(JuniperoTheme.backgroundSurface))
                             }
                         }
                         Color.clear.frame(height: 1).id(bottomAnchorId)
                     }
                     .padding(12)
-                    .onAppear {
-                        scrollToBottom(proxy: proxy, animated: false)
-                    }
+                    .onAppear { scrollToBottom(proxy: proxy, animated: false) }
                     .onChange(of: thread?.messages.count ?? 0) { _ in
-                        scrollToBottom(proxy: proxy, animated: true)
-                    }
-                    .onChange(of: thread?.isLoading ?? false) { _ in
                         scrollToBottom(proxy: proxy, animated: true)
                     }
                 }
             }
-            .background(Color(red: 0.95, green: 0.95, blue: 0.96))
+            .background(JuniperoTheme.backgroundPrimary)
 
+            // Reply input
             HStack(spacing: 10) {
                 TextField("Reply to this thread...", text: replyTextBinding, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
-                    .foregroundColor(Color.black.opacity(0.95))
+                    .foregroundColor(JuniperoTheme.textPrimary)
                     .lineLimit(1...5)
                     .focused($isReplyFocused)
                     .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.white.opacity(0.98))
-                    )
-                    .onSubmit {
-                        sendReply()
-                    }
-                    .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
-                        threadStore.handleFileDrop(providers: providers, threadId: threadId)
-                        return true
-                    }
-
-                if isDropTargeted {
-                    Text("Drop files to attach")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.95))
-                        )
-                }
-
-                if !threadStore.attachments(for: threadId).isEmpty {
-                    ThreadAttachmentStrip(
-                        attachments: threadStore.attachments(for: threadId),
-                        onRemove: { id in
-                            threadStore.removeAttachment(threadId: threadId, attachmentId: id)
-                        }
-                    )
-                }
+                    .background(RoundedRectangle(cornerRadius: 10).fill(JuniperoTheme.backgroundSurface))
+                    .onSubmit { sendReply() }
 
                 Button(action: sendReply) {
                     Text("Send")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(JuniperoTheme.textPrimary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
-                        .background(
-                            Capsule()
-                                .fill(Color(red: 0.22, green: 0.48, blue: 0.80))
-                        )
+                        .background(Capsule().fill(JuniperoTheme.copper))
                 }
                 .buttonStyle(.plain)
-                .disabled(replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && threadStore.attachments(for: threadId).isEmpty)
+                .disabled(replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(12)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.18, green: 0.36, blue: 0.68),
-                        Color(red: 0.12, green: 0.28, blue: 0.58),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+            .background(JuniperoTheme.backgroundSecondary)
         }
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
+                .stroke(JuniperoTheme.copper.opacity(0.15), lineWidth: 0.8)
         )
-        .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 8)
-        .background {
-            FileDropCatcher(isTargeted: $isDropTargeted) { urls in
-                threadStore.handleDroppedURLs(urls, threadId: threadId)
-            }
-        }
+        .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 8)
         .onAppear {
             threadStore.markThreadRead(threadId)
-            DispatchQueue.main.async {
-                isReplyFocused = true
-            }
-        }
-        .onChange(of: threadStore.selectedThreadId) { selected in
-            guard selected == threadId else { return }
-            DispatchQueue.main.async {
-                isReplyFocused = true
-            }
+            DispatchQueue.main.async { isReplyFocused = true }
         }
     }
 
     private func sendReply() {
         let text = replyTextBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attachments = threadStore.attachments(for: threadId)
-        guard !text.isEmpty || !attachments.isEmpty else { return }
-        threadStore.sendMessage(in: threadId, text: text, attachments: attachments)
-        DispatchQueue.main.async {
-            isReplyFocused = true
-        }
+        guard !text.isEmpty else { return }
+        threadStore.sendMessage(in: threadId, text: text)
+        DispatchQueue.main.async { isReplyFocused = true }
     }
 
     private var replyTextBinding: Binding<String> {
@@ -239,65 +143,21 @@ struct ThreadDetailView: View {
         )
     }
 
-    private var bottomAnchorId: String {
-        "thread-bottom-\(threadId.uuidString)"
-    }
+    private var bottomAnchorId: String { "thread-bottom-\(threadId.uuidString)" }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        let action = {
-            proxy.scrollTo(bottomAnchorId, anchor: .bottom)
-        }
+        let action = { proxy.scrollTo(bottomAnchorId, anchor: .bottom) }
         if animated {
-            withAnimation(.easeOut(duration: 0.2)) {
-                action()
-            }
+            withAnimation(.easeOut(duration: 0.2)) { action() }
         } else {
             action()
         }
     }
-
-    private var queuedCount: Int {
-        threadStore.queuedCount(for: threadId)
-    }
 }
 
-private struct ThreadAttachmentStrip: View {
-    let attachments: [ChatAttachment]
-    let onRemove: (UUID) -> Void
+// MARK: - Message Bubble (shared)
 
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(attachments) { attachment in
-                    HStack(spacing: 6) {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 10, weight: .bold))
-                        Text(attachment.fileName)
-                            .font(.system(size: 10, weight: .medium))
-                            .lineLimit(1)
-                        Button {
-                            onRemove(attachment.id)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .foregroundColor(Color(red: 0.12, green: 0.28, blue: 0.52))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.94))
-                    )
-                }
-            }
-        }
-        .frame(height: 30)
-    }
-}
-
-private struct MessageBubble: View {
+struct MessageBubble: View {
     let message: ChatMessage
     @State private var copied = false
 
@@ -315,75 +175,35 @@ private struct MessageBubble: View {
 
     @ViewBuilder
     private func bubble(text: String, isUser: Bool) -> some View {
-        let displayText = MSNEmoji.convert(text)
-        Text(linkified(displayText))
+        Text(text)
             .font(.system(size: 13))
-            .foregroundColor(Color.black.opacity(0.93))
+            .foregroundColor(JuniperoTheme.textPrimary)
             .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .padding(.top, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(
-                        isUser
-                            ? Color(red: 0.84, green: 0.91, blue: 1.0)
-                            : Color.white.opacity(0.95)
-                    )
+                    .fill(isUser ? JuniperoTheme.userBubble : JuniperoTheme.assistantBubble)
             )
             .overlay(alignment: .topTrailing) {
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
-                        copyToClipboard(displayText)
+                        copyToClipboard(text)
                     } label: {
                         Image(systemName: copied ? "checkmark" : "clipboard")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(Color.black.opacity(0.75))
+                            .foregroundColor(JuniperoTheme.textSecondary)
                             .padding(5)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.92))
-                            )
+                            .background(Circle().fill(JuniperoTheme.backgroundElevated))
                     }
                     .buttonStyle(.plain)
                     .padding(6)
                 }
             }
             .contextMenu {
-                Button("Copy") {
-                    copyToClipboard(displayText)
-                }
+                Button("Copy") { copyToClipboard(text) }
             }
-            .overlay(alignment: .bottomLeading) {
-                if !message.attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(message.attachments) { attachment in
-                            Text("📎 \(attachment.fileName)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Color.black.opacity(0.65))
-                                .lineLimit(1)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 6)
-                    .offset(y: 14)
-                }
-            }
-    }
-
-    private func linkified(_ text: String) -> AttributedString {
-        let mutable = NSMutableAttributedString(string: text)
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-            let range = NSRange(location: 0, length: (text as NSString).length)
-            detector.enumerateMatches(in: text, options: [], range: range) { result, _, _ in
-                guard let result, let url = result.url else { return }
-                mutable.addAttribute(.link, value: url, range: result.range)
-            }
-        }
-        if let attributed = try? AttributedString(mutable, including: \.foundation) {
-            return attributed
-        }
-        return AttributedString(text)
     }
 
     private func copyToClipboard(_ text: String) {
@@ -394,9 +214,7 @@ private struct MessageBubble: View {
         copied = true
         Task {
             try? await Task.sleep(nanoseconds: 900_000_000)
-            await MainActor.run {
-                copied = false
-            }
+            await MainActor.run { copied = false }
         }
     }
 }
