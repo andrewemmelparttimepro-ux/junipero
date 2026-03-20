@@ -18,7 +18,7 @@ struct OpenClawConfig: Codable {
         timeoutSeconds: 45,
         preferLocalFirst: false,
         alwaysRouteThroughOpenClaw: true,
-        ollamaFallbackEnabled: true,
+        ollamaFallbackEnabled: false,
         ollamaBaseURL: "http://127.0.0.1:11434",
         ollamaModel: "qwen2.5-coder:7b"
     )

@@ -20,7 +20,7 @@ private struct ApprovalLogEntry: Codable {
 }
 
 private func appendApprovalLog(approvalId: String, action: String) {
-    let path = "/Users/crustacean/.openclaw/workspace/ops/approval-log.json"
+    let path = ThrawnPaths.opsFile("approval-log.json")
     let entry = ApprovalLogEntry(approvalId: approvalId, action: action, timestamp: ISO8601DateFormatter().string(from: Date()))
     var existing: [ApprovalLogEntry] = []
     if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
@@ -80,7 +80,7 @@ final class ApprovalsStore: ObservableObject {
     func load() {
         isLoading = true
         Task {
-            let path = "/Users/crustacean/.openclaw/workspace/ops/APPROVALS_QUEUE.md"
+            let path = ThrawnPaths.opsFile("APPROVALS_QUEUE.md")
             if let content = try? String(contentsOfFile: path, encoding: .utf8) {
                 items = parseApprovalQueue(from: content)
             } else {

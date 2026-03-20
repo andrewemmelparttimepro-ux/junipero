@@ -27,7 +27,7 @@ struct ChatInputView: View {
                 HStack(spacing: 12) {
                     Text("💬")
                         .font(.system(size: 12))
-                    Text("Send a message to O'Brien")
+                    Text("Send a command to Thrawn")
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.88))
                     Spacer()

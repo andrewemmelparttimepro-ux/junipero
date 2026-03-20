@@ -15,7 +15,10 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle")
             ],
-            path: "Sources/JuniperoApp"
+            path: "Sources/JuniperoApp",
+            resources: [
+                .copy("Resources/clock-reference-default.png")
+            ]
         )
     ]
 )

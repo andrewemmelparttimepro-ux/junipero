@@ -82,7 +82,7 @@ struct ThreadDetailView: View {
                                 HStack {
                                     ProgressView()
                                         .scaleEffect(0.6)
-                                    Text("O'Brien is thinking...")
+                                    Text("Thrawn is thinking...")
                                         .font(.system(size: 12))
                                         .foregroundColor(Color.black.opacity(0.72))
                                     Spacer()
@@ -358,10 +358,7 @@ private struct MessageBubble: View {
                 if !message.attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(message.attachments) { attachment in
-                            Text("📎 \(attachment.fileName)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Color.black.opacity(0.65))
-                                .lineLimit(1)
+                            ThreadAttachmentPreview(attachment: attachment)
                         }
                     }
                     .padding(.horizontal, 10)
@@ -372,6 +369,11 @@ private struct MessageBubble: View {
     }
 
     private func linkified(_ text: String) -> AttributedString {
+        // NSDataDetector with markdown-heavy text causes catastrophic regex backtracking.
+        // Skip link detection for long messages to prevent CPU lockup.
+        guard text.count < 500 else {
+            return AttributedString(text)
+        }
         let mutable = NSMutableAttributedString(string: text)
         if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
             let range = NSRange(location: 0, length: (text as NSString).length)
@@ -397,6 +399,56 @@ private struct MessageBubble: View {
             await MainActor.run {
                 copied = false
             }
+        }
+    }
+}
+
+// MARK: - Thread Attachment Preview
+
+private struct ThreadAttachmentPreview: View {
+    let attachment: ChatAttachment
+    @State private var thumbnail: NSImage?
+
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"]
+
+    private var isImage: Bool {
+        let ext = (attachment.fileName as NSString).pathExtension.lowercased()
+        return Self.imageExtensions.contains(ext)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isImage, let img = thumbnail {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 30)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                Image(systemName: isImage ? "photo" : "doc")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(Color.chissPrimary.opacity(0.60))
+            }
+            Text(attachment.fileName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(Color.white.opacity(0.65))
+                .lineLimit(1)
+        }
+        .onAppear { loadThumbnail() }
+    }
+
+    private func loadThumbnail() {
+        guard isImage, thumbnail == nil else { return }
+        Task.detached(priority: .utility) {
+            guard let img = NSImage(contentsOfFile: attachment.filePath) else { return }
+            let maxDim: CGFloat = 80
+            let ratio = min(maxDim / img.size.width, maxDim / img.size.height, 1.0)
+            let newSize = NSSize(width: img.size.width * ratio, height: img.size.height * ratio)
+            let thumb = NSImage(size: newSize)
+            thumb.lockFocus()
+            img.draw(in: NSRect(origin: .zero, size: newSize))
+            thumb.unlockFocus()
+            Task { @MainActor in thumbnail = thumb }
         }
     }
 }

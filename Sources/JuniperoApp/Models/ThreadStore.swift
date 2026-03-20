@@ -231,8 +231,11 @@ final class ThreadStore: ObservableObject {
     }
 
     private func runRequest(for threadId: UUID) {
-        // Replacing an in-flight task as part of normal send/retry should be silent.
-        cancelTask(for: threadId, updateThreadState: false)
+        // Cancel any existing task for this thread WITHOUT sending gateway abort.
+        // Sending abort would kill the new request we're about to start (race condition).
+        inFlightTasks[threadId]?.cancel()
+        inFlightTasks[threadId] = nil
+        inFlightCount = max(0, inFlightTasks.count)
         let messages = buildInputMessages(for: threadId)
         guard !messages.isEmpty else { return }
         Task { await ChatDiagnostics.shared.log("request-start thread=\(threadId.uuidString) msgs=\(messages.count)") }
@@ -254,6 +257,7 @@ final class ThreadStore: ObservableObject {
             // Ensure connected
             if !gatewayWS.connected {
                 gatewayWS.connect()
+                gatewayWS.refreshNow()
                 // Give it up to 4 seconds to connect
                 for _ in 0..<40 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
@@ -287,12 +291,37 @@ final class ThreadStore: ObservableObject {
     }
 
     private func performGatewayRequest(threadId: UUID, text: String, startMs: Int) async {
-        await withCheckedContinuation { continuation in
+        // Safety timeout: if the gateway doesn't respond within 10 minutes, fail gracefully.
+        // Complex agent tasks (tool installs, multi-step workflows) can take several minutes.
+        let safetyTimeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000_000) // 10 minutes
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let index = self.threads.firstIndex(where: { $0.id == threadId }),
+                   self.threads[index].isLoading {
+                    self.updateThreadFailure(threadId, error: "Request timed out after 10 minutes. Tap to retry.")
+                    self.inFlightTasks[threadId] = nil
+                    self.inFlightCount = self.inFlightTasks.count
+                }
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var resumed = false
             var accumulated = ""
 
+            // Helper to safely resume exactly once
+            func safeResume() {
+                guard !resumed else { return }
+                resumed = true
+                safetyTimeout.cancel()
+                continuation.resume()
+            }
+
             gatewayWS.send(
                 text: text,
+                sessionKey: gatewaySessionKey(for: threadId),
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
@@ -310,26 +339,28 @@ final class ThreadStore: ObservableObject {
                 },
                 onComplete: { [weak self] finalText, model in
                     Task { @MainActor [weak self] in
-                        guard let self else { return }
                         let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
                         let responseText = finalText.isEmpty ? accumulated : finalText
-                        self.updateThreadSuccess(threadId, response: responseText, model: model ?? "gateway", latencyMs: latencyMs)
-                        self.connectivity = .online
-                        self.lastErrorText = nil
-                        self.inFlightTasks[threadId] = nil
-                        self.inFlightCount = self.inFlightTasks.count
-                        if !resumed { resumed = true; continuation.resume() }
+                        if let self {
+                            self.updateThreadSuccess(threadId, response: responseText, model: model ?? "gateway", latencyMs: latencyMs)
+                            self.connectivity = .online
+                            self.lastErrorText = nil
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.updateThreadFailure(threadId, error: error)
-                        self.connectivity = .offline
-                        self.lastErrorText = error
-                        self.inFlightTasks[threadId] = nil
-                        self.inFlightCount = self.inFlightTasks.count
-                        if !resumed { resumed = true; continuation.resume() }
+                        if let self {
+                            self.updateThreadFailure(threadId, error: error)
+                            self.connectivity = .offline
+                            self.lastErrorText = error
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
                     }
                 }
             )
@@ -338,7 +369,13 @@ final class ThreadStore: ObservableObject {
 
     private func updateThreadSuccess(_ id: UUID, response: String, model: String, latencyMs: Int) {
         guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
-        threads[index].messages.append(ChatMessage(role: .assistant, text: response))
+        // If onDelta already added a streaming assistant message, update it instead of duplicating
+        if let lastIdx = threads[index].messages.indices.last,
+           threads[index].messages[lastIdx].role == .assistant {
+            threads[index].messages[lastIdx].text = response
+        } else {
+            threads[index].messages.append(ChatMessage(role: .assistant, text: response))
+        }
         threads[index].updatedAt = Date()
         threads[index].isLoading = false
         threads[index].state = .success
@@ -502,6 +539,7 @@ final class ThreadStore: ObservableObject {
         inFlightTasks[id]?.cancel()
         inFlightTasks[id] = nil
         inFlightCount = max(0, inFlightTasks.count)
+        gatewayWS.abort(sessionKey: gatewaySessionKey(for: id))
         guard updateThreadState else { return }
         if let index = threads.firstIndex(where: { $0.id == id }), threads[index].isLoading {
             threads[index].isLoading = false
@@ -542,6 +580,10 @@ final class ThreadStore: ObservableObject {
     func clearAttachments(for threadId: UUID) {
         threadAttachments.removeValue(forKey: threadId)
         scheduleDraftSnapshotSave()
+    }
+
+    private func gatewaySessionKey(for threadId: UUID) -> String {
+        "agent:thread:\(threadId.uuidString.lowercased())"
     }
 
     func handleFileDrop(providers: [NSItemProvider], threadId: UUID?) {
@@ -711,16 +753,19 @@ final class ThreadStore: ObservableObject {
         guard let payload = try? JSONEncoder().encode(event), let line = String(data: payload, encoding: .utf8) else { return }
         let record = line + "\n"
         guard let data = record.data(using: .utf8) else { return }
+        let url = draftEventLogURL
 
-        if !FileManager.default.fileExists(atPath: draftEventLogURL.path) {
-            try? data.write(to: draftEventLogURL, options: .atomic)
-            return
-        }
-
-        if let handle = try? FileHandle(forWritingTo: draftEventLogURL) {
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-            try? handle.close()
+        // File I/O off the main thread to prevent UI freezes on paste
+        DispatchQueue.global(qos: .utility).async {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? data.write(to: url, options: .atomic)
+                return
+            }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            }
         }
     }
 

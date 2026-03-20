@@ -45,23 +45,30 @@ APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
 APP_ZIP="$RELEASE_DIR/$APP_NAME-notarize.zip"
 DMG_PATH="$RELEASE_DIR/$APP_NAME-$VERSION.dmg"
 UPDATE_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION-macos.zip"
-PRODUCT_PATH="$ROOT_DIR/.build/release/$SWIFT_PRODUCT"
 DMG_STAGE="$BUILD_DIR/dmg-stage"
+ARM_DIR="$BUILD_DIR/arm64"
+X64_DIR="$BUILD_DIR/x86_64"
+UNIVERSAL_DIR="$BUILD_DIR/universal"
+UNIVERSAL_PRODUCT_PATH="$UNIVERSAL_DIR/$APP_EXECUTABLE"
 
 rm -rf "$BUILD_DIR" "$RELEASE_DIR"
-mkdir -p "$BUILD_DIR" "$RELEASE_DIR"
+mkdir -p "$BUILD_DIR" "$RELEASE_DIR" "$ARM_DIR" "$X64_DIR" "$UNIVERSAL_DIR"
 
-echo "==> Building release binary"
-swift build -c release
+echo "==> Building arm64 release binary"
+swift build -c release --arch arm64
+cp "$ROOT_DIR/.build/arm64-apple-macosx/release/$SWIFT_PRODUCT" "$ARM_DIR/$APP_EXECUTABLE"
 
-if [[ ! -f "$PRODUCT_PATH" ]]; then
-  echo "Release product not found at $PRODUCT_PATH"
-  exit 1
-fi
+echo "==> Building x86_64 release binary"
+swift build -c release --arch x86_64
+cp "$ROOT_DIR/.build/x86_64-apple-macosx/release/$SWIFT_PRODUCT" "$X64_DIR/$APP_EXECUTABLE"
+
+echo "==> Creating universal binary"
+lipo -create "$ARM_DIR/$APP_EXECUTABLE" "$X64_DIR/$APP_EXECUTABLE" -output "$UNIVERSAL_PRODUCT_PATH"
+chmod +x "$UNIVERSAL_PRODUCT_PATH"
 
 echo "==> Assembling app bundle"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
-cp "$PRODUCT_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
+cp "$UNIVERSAL_PRODUCT_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
 # Bundle default clock art for fresh installs.
@@ -107,6 +114,9 @@ if [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist" || \
     /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist"
 fi
+
+# Strip AppleDouble and Finder metadata files that break codesign on external volumes.
+find "$APP_BUNDLE" \( -name '._*' -o -name '.DS_Store' \) -delete
 
 echo "==> Signing app"
 codesign --force --deep --options runtime --timestamp --sign "$DEVELOPER_ID_APP_CERT" "$APP_BUNDLE"

@@ -81,6 +81,9 @@ if [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]]; then
     /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist"
 fi
 
+# Strip AppleDouble and Finder metadata files that break codesign on external volumes.
+find "$APP_BUNDLE" \( -name '._*' -o -name '.DS_Store' \) -delete
+
 echo "==> Ad-hoc signing app"
 codesign --force --deep --sign - "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"

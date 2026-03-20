@@ -10,6 +10,7 @@ struct ThrawnApp: App {
     @StateObject private var gatewayWS = GatewayWSClient()
     @StateObject private var nav = ConsoleNavigationStore()
     @StateObject private var flowTab = FlowTabStore()
+    @StateObject private var screenCapture = ScreenCaptureStore()
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,7 @@ struct ThrawnApp: App {
                 .environmentObject(nav)
                 .environmentObject(flowTab)
                 .environmentObject(gatewayWS)
+                .environmentObject(screenCapture)
                 .frame(minWidth: 1200, minHeight: 800)
                 .sheet(isPresented: $bootstrap.showSetup) {
                     SetupWizardView()
@@ -36,10 +38,14 @@ struct ThrawnApp: App {
                     Text("Thrawn \(updateManager.latestVersion) is available. Download the latest build for best stability.")
                 }
                 .task {
-                    await bootstrap.startIfNeeded()
-                    await updateManager.checkOnLaunchIfNeeded()
-                    gatewayWS.connect()
+                    gatewayWS.connectAndPrewarm()
                     threadStore.gatewayWS.connect()
+                    threadStore.gatewayWS.refreshNow()
+                    roster.bindToThreadStore(threadStore)
+                    roster.bindToGateway(gatewayWS)
+                    async let bootstrapTask: Void = bootstrap.startIfNeeded()
+                    async let updateTask: Void = updateManager.checkOnLaunchIfNeeded()
+                    _ = await (bootstrapTask, updateTask)
                 }
         }
         .windowStyle(.hiddenTitleBar)

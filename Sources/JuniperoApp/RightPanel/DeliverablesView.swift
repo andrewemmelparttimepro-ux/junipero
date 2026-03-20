@@ -21,74 +21,77 @@ final class DeliverablesStore: ObservableObject {
     @Published var isLoading = false
     @Published var errorText: String?
 
-    private static let brainRoot = "/Volumes/brain/NDAI"
-    private static let fallbackRoot = "/Users/crustacean/.openclaw/workspace"
-
     func load() {
         isLoading = true
         errorText = nil
         Task {
-            let fm = FileManager.default
-            let usesBrain = fm.fileExists(atPath: Self.brainRoot)
-            let root = usesBrain ? Self.brainRoot : Self.fallbackRoot
-            var found: [DeliverableItem] = []
+            let snapshot = await Task.detached(priority: .utility) {
+                Self.scanDeliverables()
+            }.value
 
-            let rootURL = URL(fileURLWithPath: root)
-            if let enumerator = fm.enumerator(
-                at: rootURL,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                var depth: [URL: Int] = [rootURL: 0]
-                for case let fileURL as URL in enumerator {
-                    // Depth limit
-                    let parent = fileURL.deletingLastPathComponent()
-                    let parentDepth = depth[parent] ?? 0
-                    let currentDepth = parentDepth + 1
-                    depth[fileURL] = currentDepth
-
-                    if currentDepth > 3 {
-                        enumerator.skipDescendants()
-                        continue
-                    }
-
-                    let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                    if isDir { continue }
-
-                    let ext = fileURL.pathExtension.lowercased()
-                    let allowedExts: Set<String> = ["md", "pdf", "txt", "json", "csv", "png", "jpg", "mp4", "zip", "swift", "html", "docx", "xlsx"]
-                    guard allowedExts.contains(ext) else { continue }
-
-                    let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                    let modified = attrs?.contentModificationDate
-                    let size = Int64(attrs?.fileSize ?? 0)
-
-                    // Project = immediate child folder of root
-                    let components = fileURL.pathComponents
-                    let rootComponents = rootURL.pathComponents
-                    let projectName: String
-                    if components.count > rootComponents.count {
-                        projectName = components[rootComponents.count]
-                    } else {
-                        projectName = "Root"
-                    }
-
-                    found.append(DeliverableItem(
-                        fileName: fileURL.lastPathComponent,
-                        filePath: fileURL.path,
-                        project: projectName,
-                        lastModified: modified,
-                        fileSize: size
-                    ))
-                }
+            items = snapshot.items
+            if items.isEmpty {
+                errorText = "No deliverables found in \(snapshot.root)"
             }
-
-            // Sort by most recently modified
-            found.sort { ($0.lastModified ?? .distantPast) > ($1.lastModified ?? .distantPast) }
-            items = Array(found.prefix(200))
-            if items.isEmpty { errorText = "No deliverables found in \(root)" }
             isLoading = false
         }
+    }
+
+    nonisolated private static func scanDeliverables() -> (items: [DeliverableItem], root: String) {
+        let fm = FileManager.default
+        let root = ThrawnPaths.dataRoot.path
+        var found: [DeliverableItem] = []
+
+        let rootURL = URL(fileURLWithPath: root)
+        if let enumerator = fm.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            var depth: [URL: Int] = [rootURL: 0]
+            for case let fileURL as URL in enumerator {
+                let parent = fileURL.deletingLastPathComponent()
+                let parentDepth = depth[parent] ?? 0
+                let currentDepth = parentDepth + 1
+                depth[fileURL] = currentDepth
+
+                if currentDepth > 3 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                if isDir { continue }
+
+                let ext = fileURL.pathExtension.lowercased()
+                let allowedExts: Set<String> = ["md", "pdf", "txt", "json", "csv", "png", "jpg", "mp4", "zip", "swift", "html", "docx", "xlsx"]
+                guard allowedExts.contains(ext) else { continue }
+
+                let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let modified = attrs?.contentModificationDate
+                let size = Int64(attrs?.fileSize ?? 0)
+
+                let components = fileURL.pathComponents
+                let rootComponents = rootURL.pathComponents
+                let projectName: String
+                if components.count > rootComponents.count {
+                    projectName = components[rootComponents.count]
+                } else {
+                    projectName = "Root"
+                }
+
+                found.append(DeliverableItem(
+                    fileName: fileURL.lastPathComponent,
+                    filePath: fileURL.path,
+                    project: projectName,
+                    lastModified: modified,
+                    fileSize: size
+                ))
+            }
+        }
+
+        found.sort { ($0.lastModified ?? .distantPast) > ($1.lastModified ?? .distantPast) }
+        return (Array(found.prefix(200)), root)
     }
 }
 

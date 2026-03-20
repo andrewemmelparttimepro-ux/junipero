@@ -29,12 +29,12 @@ struct ThreadCard: View {
                         Text(thread.unreadCount > 1 ? "NEW \(thread.unreadCount)" : "NEW")
                             .font(.system(size: 9, weight: .heavy))
                     }
-                    .foregroundColor(Color(red: 0.08, green: 0.28, blue: 0.06))
+                    .foregroundColor(Color(red: 0.10, green: 0.22, blue: 0.36))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(
                         Capsule()
-                            .fill(Color(red: 0.56, green: 0.98, blue: 0.46))
+                            .fill(Color(red: 0.58, green: 0.80, blue: 0.92))
                     )
                 }
                 statusIcon
@@ -46,7 +46,7 @@ struct ThreadCard: View {
                 HStack(spacing: 6) {
                     ProgressView()
                         .scaleEffect(0.55)
-                    Text("O'Brien is thinking...")
+                    Text("Thrawn is thinking...")
                         .font(.system(size: 12))
                         .foregroundColor(Color.black.opacity(0.72))
                 }
@@ -56,7 +56,7 @@ struct ThreadCard: View {
                     .foregroundColor(Color(red: 0.75, green: 0.20, blue: 0.20))
                     .lineLimit(2)
             } else {
-                line(title: "O'Brien", text: thread.assistantMessagePreview, titleColor: Color.black.opacity(0.8))
+                line(title: "Thrawn", text: thread.assistantMessagePreview, titleColor: Color.black.opacity(0.8))
                 if let model = thread.modelUsed, let latencyMs = thread.latencyMs {
                     Text("\(model) • \(latencyMs)ms")
                         .font(.system(size: 10))
@@ -80,9 +80,9 @@ struct ThreadCard: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color(red: 0.66, green: 0.98, blue: 0.62).opacity(0.28),
-                                Color(red: 0.40, green: 0.92, blue: 0.48).opacity(0.20),
-                                Color(red: 0.22, green: 0.72, blue: 0.28).opacity(0.16),
+                                Color(red: 0.42, green: 0.68, blue: 0.82).opacity(0.28),
+                                Color(red: 0.32, green: 0.58, blue: 0.74).opacity(0.20),
+                                Color(red: 0.20, green: 0.42, blue: 0.58).opacity(0.16),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -109,13 +109,13 @@ struct ThreadCard: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     thread.unreadCount > 0
-                        ? Color(red: 0.34, green: 0.85, blue: 0.28).opacity(0.8)
+                        ? Color.chissPrimary.opacity(0.8)
                         : Color.black.opacity(0.06),
                     lineWidth: thread.unreadCount > 0 ? 1.2 : 0.6
                 )
         )
         .shadow(
-            color: thread.unreadCount > 0 ? Color(red: 0.42, green: 0.94, blue: 0.32).opacity(0.35) : .clear,
+            color: thread.unreadCount > 0 ? Color.chissPrimary.opacity(0.45) : .clear,
             radius: thread.unreadCount > 0 ? 10 : 0,
             x: 0,
             y: 0

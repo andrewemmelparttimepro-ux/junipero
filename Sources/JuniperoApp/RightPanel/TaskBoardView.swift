@@ -14,6 +14,9 @@ struct ParsedTask: Identifiable, Equatable {
     var blockers: String
     var deliverable: String
     var notes: String
+    /// Preserve all original field key-value pairs (in order) for round-trip fidelity.
+    /// When we serialize, we write these back verbatim so agent-added fields are never lost.
+    var allFields: [(key: String, value: String)] = []
 
     static func == (lhs: ParsedTask, rhs: ParsedTask) -> Bool {
         lhs.id == rhs.id
@@ -59,33 +62,52 @@ func parseTaskBoard(from text: String) -> [ParsedTask] {
     var tasks: [ParsedTask] = []
     let lines = text.components(separatedBy: "\n")
     var i = 0
+    var inCodeFence = false
 
     while i < lines.count {
         let line = lines[i]
+
+        // Track code fences — skip anything inside ```
+        if line.hasPrefix("```") {
+            inCodeFence.toggle()
+            i += 1
+            continue
+        }
+        if inCodeFence { i += 1; continue }
+
         if line.hasPrefix("### TASK-") {
             let taskId = String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces)
             var fields: [String: String] = [:]
+            var orderedFields: [(key: String, value: String)] = []
             i += 1
-            while i < lines.count && !lines[i].hasPrefix("### ") {
+            while i < lines.count && !lines[i].hasPrefix("### ") && !lines[i].hasPrefix("```") {
                 let l = lines[i]
                 if l.hasPrefix("- "), let colon = l.range(of: ": ") {
                     let key = String(l[l.index(l.startIndex, offsetBy: 2)..<colon.lowerBound]).trimmingCharacters(in: .whitespaces)
                     let value = String(l[colon.upperBound...]).trimmingCharacters(in: .whitespaces)
                     fields[key] = value
+                    orderedFields.append((key: key, value: value))
                 }
                 i += 1
             }
+            // Skip TASK-000 (template)
+            if taskId == "TASK-000" { continue }
+            // Skip tasks with empty status
+            let statusVal = fields["Status"] ?? ""
+            if statusVal.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+
             let task = ParsedTask(
                 id: taskId,
                 title: fields["Title"] ?? taskId,
                 owner: fields["Owner"] ?? "",
-                status: fields["Status"] ?? "",
+                status: statusVal,
                 priority: fields["Priority"] ?? "",
                 due: fields["Due"] ?? "",
                 nextStep: fields["Next step"] ?? "",
                 blockers: fields["Blockers"] ?? "",
                 deliverable: fields["Deliverable"] ?? "",
-                notes: fields["Notes"] ?? ""
+                notes: fields["Notes"] ?? "",
+                allFields: orderedFields
             )
             tasks.append(task)
         } else {
@@ -97,29 +119,74 @@ func parseTaskBoard(from text: String) -> [ParsedTask] {
 
 // MARK: - Serializer (write tasks back to markdown)
 
-func serializeTaskBoard(_ tasks: [ParsedTask]) -> String {
-    var lines: [String] = [
-        "# TASK BOARD",
-        "",
-        "> Auto-managed by Thrawn Console. Edit fields in-app or here directly.",
-        ""
-    ]
+/// Serialize tasks back to markdown, preserving the original file header.
+/// Uses `allFields` from each task so agent-written fields (Collaborators, Project,
+/// Requested by, Created, Inputs, Brain path, Review status, etc.) are never lost.
+func serializeTaskBoard(_ tasks: [ParsedTask], preservingHeaderFrom original: String? = nil) -> String {
+    var output = ""
 
-    for task in tasks {
-        lines.append("### \(task.id)")
-        lines.append("- Title: \(task.title)")
-        lines.append("- Owner: \(task.owner)")
-        lines.append("- Status: \(task.status)")
-        lines.append("- Priority: \(task.priority)")
-        if !task.due.isEmpty     { lines.append("- Due: \(task.due)") }
-        if !task.nextStep.isEmpty { lines.append("- Next step: \(task.nextStep)") }
-        if !task.blockers.isEmpty { lines.append("- Blockers: \(task.blockers)") }
-        if !task.deliverable.isEmpty { lines.append("- Deliverable: \(task.deliverable)") }
-        if !task.notes.isEmpty   { lines.append("- Notes: \(task.notes)") }
-        lines.append("")
+    // Preserve everything before the first ### TASK- line (rules, template, etc.)
+    if let orig = original {
+        let lines = orig.components(separatedBy: "\n")
+        var headerEnd = lines.count
+        var inCodeFence = false
+        for (idx, line) in lines.enumerated() {
+            if line.hasPrefix("```") { inCodeFence.toggle(); continue }
+            if inCodeFence { continue }
+            if line.hasPrefix("### TASK-") { headerEnd = idx; break }
+        }
+        output = lines[0..<headerEnd].joined(separator: "\n")
+        if !output.hasSuffix("\n") { output += "\n" }
+    } else {
+        output = "# TASK_BOARD.md\n\n---\n\n"
     }
 
-    return lines.joined(separator: "\n")
+    // Write each task using allFields for round-trip fidelity
+    for task in tasks {
+        output += "\n### \(task.id)\n"
+
+        // Mutable fields the console may have changed
+        let consoleOverrides: [String: String] = [
+            "Title": task.title,
+            "Owner": task.owner,
+            "Status": task.status,
+            "Priority": task.priority,
+            "Due": task.due,
+            "Next step": task.nextStep,
+            "Blockers": task.blockers,
+            "Deliverable": task.deliverable,
+            "Notes": task.notes,
+        ]
+
+        if !task.allFields.isEmpty {
+            // Round-trip: write fields in original order, applying console overrides
+            var written: Set<String> = []
+            for pair in task.allFields {
+                let val = consoleOverrides[pair.key] ?? pair.value
+                output += "- \(pair.key): \(val)\n"
+                written.insert(pair.key)
+            }
+            // Append any console-only fields not in allFields
+            for key in ["Title", "Owner", "Status", "Priority"] {
+                if !written.contains(key), let v = consoleOverrides[key], !v.isEmpty {
+                    output += "- \(key): \(v)\n"
+                }
+            }
+        } else {
+            // No allFields — minimal output
+            output += "- Title: \(task.title)\n"
+            output += "- Owner: \(task.owner)\n"
+            output += "- Status: \(task.status)\n"
+            output += "- Priority: \(task.priority)\n"
+            if !task.due.isEmpty     { output += "- Due: \(task.due)\n" }
+            if !task.nextStep.isEmpty { output += "- Next step: \(task.nextStep)\n" }
+            if !task.blockers.isEmpty { output += "- Blockers: \(task.blockers)\n" }
+            if !task.deliverable.isEmpty { output += "- Deliverable: \(task.deliverable)\n" }
+            if !task.notes.isEmpty   { output += "- Notes: \(task.notes)\n" }
+        }
+    }
+
+    return output
 }
 
 // MARK: - Store
@@ -133,7 +200,12 @@ final class TaskBoardStore: ObservableObject {
     @Published var comments: [TaskComment] = []
     @Published var checklists: [TaskChecklist] = []
 
-    private static let filePath = ThrawnPaths.opsFile("TASK_BOARD.md")
+    /// Resolve symlinks so the file watcher tracks the real inode, not the link.
+    private static let filePath: String = {
+        let raw = ThrawnPaths.opsFile("TASK_BOARD.md")
+        let resolved = (raw as NSString).resolvingSymlinksInPath
+        return resolved
+    }()
     private static let activityPath = ThrawnPaths.opsFile("task_activity.json")
     private static let commentsPath = ThrawnPaths.opsFile("task_comments.json")
     private static let checklistsPath = ThrawnPaths.opsFile("task_checklists.json")
@@ -148,32 +220,20 @@ final class TaskBoardStore: ObservableObject {
     /// Hash of last-loaded content to detect real changes during polling
     private var lastContentHash: Int = 0
 
-    private static let seed: [ParsedTask] = [
-        ParsedTask(id: "TASK-001", title: "Gateway client.id fix", owner: "R2-D2", status: "Ready", priority: "Critical", due: "", nextStep: "One-line fix in GatewayWSClient.swift", blockers: "", deliverable: "Working gateway chat", notes: ""),
-        ParsedTask(id: "TASK-002", title: "Wire live data into console", owner: "R2-D2", status: "Done", priority: "High", due: "", nextStep: "", blockers: "", deliverable: "FlowBoard reads TASK_BOARD.md, agent jewels reflect state", notes: ""),
-        ParsedTask(id: "TASK-003", title: "Enable persistent agent sessions via ACP", owner: "Thrawn", status: "In Progress", priority: "High", due: "", nextStep: "Use sessions_spawn with runtime: acp and thread: true", blockers: "Needs gateway fix first", deliverable: "Persistent specialist sessions", notes: ""),
-        ParsedTask(id: "TASK-004", title: "Wire Cognee memory system", owner: "Thrawn", status: "In Progress", priority: "Medium", due: "", nextStep: "Index workspace, enable recall", blockers: "", deliverable: "Agents remember context across sessions", notes: "Cognee healthy on :8000"),
-        ParsedTask(id: "TASK-005", title: "Blender CLI automation", owner: "R2-D2", status: "Ready", priority: "Medium", due: "", nextStep: "CLI-Anything installed, Phase 1 scope defined", blockers: "", deliverable: "Automated 3D pipeline", notes: ""),
-        ParsedTask(id: "TASK-006", title: "GUI control layer research", owner: "Qui-Gon", status: "Inbox", priority: "High", due: "", nextStep: "Research approaches for GUI automation", blockers: "", deliverable: "Major autonomy unlock", notes: ""),
-    ]
-
     func load() {
         isLoading = true
         errorText = nil
         Task {
             if let content = try? String(contentsOfFile: Self.filePath, encoding: .utf8) {
+                originalFileContent = content
                 let parsed = parseTaskBoard(from: content)
-                if parsed.isEmpty {
-                    tasks = Self.seed
-                    save()
-                } else {
-                    tasks = parsed
-                    validateTaskStatuses(parsed)
-                }
+                tasks = parsed
+                if !parsed.isEmpty { validateTaskStatuses(parsed) }
                 lastContentHash = content.hashValue
             } else {
-                tasks = Self.seed
-                save()
+                // No file yet — start empty, don't seed
+                tasks = []
+                errorText = "TASK_BOARD.md not found at: \(Self.filePath)"
             }
             loadCompanionData()
             isLoading = false
@@ -181,9 +241,12 @@ final class TaskBoardStore: ObservableObject {
         }
     }
 
+    /// Original file content preserved for round-trip header fidelity
+    private var originalFileContent: String?
+
     func save() {
         suppressNextReload = true
-        let markdown = serializeTaskBoard(tasks)
+        let markdown = serializeTaskBoard(tasks, preservingHeaderFrom: originalFileContent)
         try? markdown.write(toFile: Self.filePath, atomically: true, encoding: .utf8)
         lastContentHash = markdown.hashValue
     }
@@ -269,6 +332,7 @@ final class TaskBoardStore: ObservableObject {
         let hash = content.hashValue
         guard hash != lastContentHash else { return }
         lastContentHash = hash
+        originalFileContent = content
         let parsed = parseTaskBoard(from: content)
         guard !parsed.isEmpty else { return }
         tasks = parsed
@@ -305,7 +369,8 @@ final class TaskBoardStore: ObservableObject {
         }
         // Surface a transient warning in the UI so Andrew can spot rogue statuses at a glance.
         let ids = invalid.map { $0.id }.joined(separator: ", ")
-        errorText = "Unrecognized status on: \(ids) — check TASK_BOARD.md"
+        // Log only — don't block the board over one bad status
+        print("⚠️ TaskBoardStore: unrecognized status on \(ids)")
     }
 
     // MARK: - Mutations (with activity logging)

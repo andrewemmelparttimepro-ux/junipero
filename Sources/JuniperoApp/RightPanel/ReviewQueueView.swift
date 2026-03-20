@@ -10,7 +10,7 @@ private struct ReviewLogEntry: Codable {
 }
 
 private func appendReviewLog(taskId: String, action: String) {
-    let path = "/Users/crustacean/.openclaw/workspace/ops/review-log.json"
+    let path = ThrawnPaths.opsFile("review-log.json")
     let entry = ReviewLogEntry(taskId: taskId, action: action, timestamp: ISO8601DateFormatter().string(from: Date()))
     var existing: [ReviewLogEntry] = []
     if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
@@ -34,7 +34,7 @@ final class ReviewQueueStore: ObservableObject {
     func load() {
         isLoading = true
         Task {
-            let path = "/Users/crustacean/.openclaw/workspace/ops/TASK_BOARD.md"
+            let path = ThrawnPaths.opsFile("TASK_BOARD.md")
             if let content = try? String(contentsOfFile: path, encoding: .utf8) {
                 let all = parseTaskBoard(from: content)
                 reviewItems = all.filter { $0.status.lowercased() == "review" }
