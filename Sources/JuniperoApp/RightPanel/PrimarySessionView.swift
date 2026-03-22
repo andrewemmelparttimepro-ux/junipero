@@ -15,13 +15,20 @@ final class PrimarySessionStore: ObservableObject {
     @Published var recallContext: String?
 
     let sessionKey: String
-    private var wsClient: GatewayWSClient?
+    private var anthropicClient: AnthropicClient?
+    private var wsClient: GatewayWSClient?  // Legacy fallback
     private weak var rosterStore: AgentRosterStore?
     private weak var screenCaptureStore: ScreenCaptureStore?
     let cogneeClient = CogneeClient()
+    /// Conversation history for the Anthropic API (messages sent in this session)
+    private var conversationHistory: [AnthropicMessage] = []
 
     init(sessionKey: String = "main") {
         self.sessionKey = sessionKey
+    }
+
+    func bind(anthropicClient: AnthropicClient) {
+        self.anthropicClient = anthropicClient
     }
 
     func bind(wsClient: GatewayWSClient) {
@@ -37,29 +44,37 @@ final class PrimarySessionStore: ObservableObject {
     }
 
     func connect() {
+        // Native API: just check if configured
+        if let client = anthropicClient, client.apiKeyConfigured {
+            isConnected = true
+            // Load persisted messages if any (native mode has no external history)
+            return
+        }
+
+        // Legacy gateway fallback
         guard let wsClient else {
             isConnected = false
             return
         }
-
         if !wsClient.connected {
             wsClient.connect()
             wsClient.refreshNow()
         }
-        // Poll for connection
         Task {
             for _ in 0..<40 {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 if wsClient.connected { break }
             }
             isConnected = wsClient.connected
-            if isConnected {
-                loadHistory()
-            }
+            if isConnected { loadHistory() }
         }
     }
 
     func loadHistory() {
+        // Native mode: no external history to load (conversations are in-memory)
+        guard anthropicClient == nil || !(anthropicClient?.apiKeyConfigured ?? false) else { return }
+
+        // Legacy gateway fallback
         guard let wsClient else { return }
         wsClient.fetchHistory(sessionKey: sessionKey) { [weak self] entries in
             Task { @MainActor [weak self] in
@@ -83,10 +98,6 @@ final class PrimarySessionStore: ObservableObject {
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard let wsClient else {
-            errorText = "Gateway client is not ready yet."
-            return
-        }
 
         let userMsg = PrimaryMessage(role: .user, text: trimmed)
         messages.append(userMsg)
@@ -95,7 +106,18 @@ final class PrimarySessionStore: ObservableObject {
         streamingText = ""
         errorText = nil
 
-        // Ensure connected
+        // Primary: native Anthropic API
+        if let client = anthropicClient, client.apiKeyConfigured {
+            Task { await doSendNative(trimmed) }
+            return
+        }
+
+        // Fallback: legacy gateway
+        guard let wsClient else {
+            errorText = "No API key configured. Open Settings to add your Anthropic API key."
+            isLoading = false
+            return
+        }
         if !wsClient.connected {
             wsClient.connect()
             wsClient.refreshNow()
@@ -104,21 +126,23 @@ final class PrimarySessionStore: ObservableObject {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if wsClient.connected { break }
                 }
-                await self.doSend(trimmed)
+                await self.doSendLegacy(trimmed)
             }
         } else {
-            Task { await doSend(trimmed) }
+            Task { await doSendLegacy(trimmed) }
         }
     }
 
-    private func doSend(_ text: String) async {
-        guard let wsClient else {
-            errorText = "Gateway client is not ready yet."
+    // MARK: - Native Anthropic Send (Primary)
+
+    private func doSendNative(_ text: String) async {
+        guard let client = anthropicClient else {
+            errorText = "API client not available."
             isLoading = false
             return
         }
 
-        // If recall is enabled, query Cognee first and prepend context
+        // Cognee memory recall (optional enhancement)
         var finalText = text
         if recallEnabled {
             recallContext = nil
@@ -128,11 +152,86 @@ final class PrimarySessionStore: ObservableObject {
             }
         }
 
-        // Grab pending screenshot if available, then clear it
+        // Screenshot attachment
         let imagePayload = screenCaptureStore?.pendingScreenshot
         screenCaptureStore?.clear()
 
-        // Light up specialist jewel
+        // Light up jewel
+        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
+
+        // Track in conversation history
+        conversationHistory.append(AnthropicMessage(role: "user", text: finalText))
+
+        // Build history (all but the last user message, which goes as `text`)
+        let history = conversationHistory.count > 1 ? Array(conversationHistory.dropLast()) : []
+
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            client.send(
+                text: finalText,
+                imageData: imagePayload,
+                history: history,
+                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                sessionKey: sessionKey,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isStreaming = true
+                        self.streamingText += delta
+                    }
+                },
+                onComplete: { [weak self] finalText, model in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let text = finalText.isEmpty ? self.streamingText : finalText
+                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
+                        self.conversationHistory.append(AnthropicMessage(role: "assistant", text: text))
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        // Remove the failed user message from history
+                        if self.conversationHistory.last?.role == "user" {
+                            self.conversationHistory.removeLast()
+                        }
+                        self.errorText = error
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                }
+            )
+        }
+    }
+
+    // MARK: - Legacy Gateway Send (Fallback)
+
+    private func doSendLegacy(_ text: String) async {
+        guard let wsClient else {
+            errorText = "Gateway client is not ready yet."
+            isLoading = false
+            return
+        }
+
+        var finalText = text
+        if recallEnabled {
+            recallContext = nil
+            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
+                recallContext = context
+                finalText = "[Memory Recall — the following context was retrieved from Cognee knowledge graph]\n\(context)\n\n[User Message]\n\(text)"
+            }
+        }
+
+        let imagePayload = screenCaptureStore?.pendingScreenshot
+        screenCaptureStore?.clear()
         rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
 
         await withCheckedContinuation { continuation in
@@ -176,6 +275,7 @@ final class PrimarySessionStore: ObservableObject {
     }
 
     func abort() {
+        anthropicClient?.abort(sessionKey: sessionKey)
         wsClient?.abort(sessionKey: sessionKey)
         isLoading = false
         isStreaming = false
@@ -214,6 +314,7 @@ struct PrimaryMessage: Identifiable {
 // MARK: - Primary Session View
 
 struct PrimarySessionView: View {
+    @EnvironmentObject var anthropic: AnthropicClient
     @EnvironmentObject var gatewayWS: GatewayWSClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var roster: AgentRosterStore
@@ -238,10 +339,10 @@ struct PrimarySessionView: View {
 
             VStack(spacing: 0) {
                 // Connection status bar (only shown when not connected)
-                if !gatewayWS.connected {
+                if !anthropic.connected && !gatewayWS.connected {
                     HStack(spacing: 8) {
                         ProgressView().progressViewStyle(.circular).scaleEffect(0.6).tint(Color(red: 0.95, green: 0.70, blue: 0.20))
-                        Text(gatewayWS.authenticating ? "Connecting to OpenClaw…" : "Reconnecting…")
+                        Text(connectionStatusText)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Color(red: 0.95, green: 0.70, blue: 0.20))
                         Spacer()
@@ -340,12 +441,13 @@ struct PrimarySessionView: View {
                 // Input bar
                 inputBar
             }
-            .animation(.easeInOut(duration: 0.18), value: gatewayWS.connected)
+            .animation(.easeInOut(duration: 0.18), value: anthropic.connected || gatewayWS.connected)
             .animation(.easeInOut(duration: 0.18), value: store.errorText != nil)
             .animation(.easeInOut(duration: 0.18), value: store.recallContext != nil)
             .animation(.easeInOut(duration: 0.18), value: screenCapture.pendingScreenshot != nil)
         }
         .onAppear {
+            store.bind(anthropicClient: anthropic)
             store.bind(wsClient: gatewayWS)
             store.bindRoster(roster)
             store.bindScreenCapture(screenCapture)
@@ -354,6 +456,19 @@ struct PrimarySessionView: View {
                 inputFocused = true
             }
         }
+    }
+
+    private var connectionStatusText: String {
+        if !anthropic.apiKeyConfigured {
+            return "No API key — open Settings to configure"
+        }
+        if anthropic.authenticating {
+            return "Connecting to Anthropic API…"
+        }
+        if let error = anthropic.lastError {
+            return error
+        }
+        return "Reconnecting…"
     }
 
     private var inputBar: some View {

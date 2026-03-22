@@ -1,3 +1,10 @@
+// MARK: - LEGACY — DO NOT USE IN NEW CODE
+// Gateway WebSocket client for the old OpenClaw gateway server.
+// Replaced by AnthropicClient.swift for native API access.
+// Kept temporarily as a fallback path during migration.
+// Types (GatewayWSClient, GatewayActiveSession, GatewayHistoryEntry)
+// are still referenced by ThreadStore, AgentRoster, and UI files.
+
 import Foundation
 import SwiftUI
 

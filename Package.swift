@@ -2,22 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "Junipero",
+    name: "ThrawnConsole",
     platforms: [
         .macOS(.v13)
-    ],
-    dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
     ],
     targets: [
         .executableTarget(
             name: "JuniperoApp",
-            dependencies: [
-                .product(name: "Sparkle", package: "Sparkle")
-            ],
             path: "Sources/JuniperoApp",
             resources: [
-                .copy("Resources/clock-reference-default.png")
+                .copy("Resources/clock-reference-default.png"),
+                .copy("Resources/Assets.xcassets")
             ]
         )
     ]

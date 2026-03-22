@@ -1,3 +1,8 @@
+// MARK: - LEGACY — DO NOT USE IN NEW CODE
+// OpenClaw HTTP client for the old gateway server.
+// Replaced by AnthropicClient.swift for native API access.
+// Kept temporarily for backward compatibility during migration.
+
 import Foundation
 
 struct OpenClawConfig: Codable {

@@ -40,8 +40,7 @@ enum ThrawnPreferencesStore {
     static let changedNotification = Notification.Name("ThrawnPreferencesChanged")
 
     private static var fileURL: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".junipero", isDirectory: true).appendingPathComponent("preferences.json")
+        ThrawnPaths.appSupportDir.appendingPathComponent("preferences.json")
     }
 
     static func load() -> ThrawnPreferences {

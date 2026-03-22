@@ -7,10 +7,8 @@ actor ChatDiagnostics {
     private let maxBytes = 1_000_000
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let dir = home.appendingPathComponent(".junipero", isDirectory: true)
+        let dir = ThrawnPaths.appSupportDir
         self.logURL = dir.appendingPathComponent("chat.log")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
     func log(_ message: String) async {

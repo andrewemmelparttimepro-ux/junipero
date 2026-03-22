@@ -139,6 +139,7 @@ struct FloatingCommandButton: View {
 }
 
 struct ThrawnHeaderBar: View {
+    @EnvironmentObject var anthropic: AnthropicClient
     @EnvironmentObject var gatewayWS: GatewayWSClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var updateManager: UpdateManager
@@ -256,7 +257,6 @@ struct ThrawnHeaderBar: View {
                     Button("Reindex Memory") { Task { await bootstrap.reindexCogneeMemory() } }
                     Button("Export Support Bundle") { Task { await bootstrap.exportSupportBundle() } }
                     Button("Check Updates") {
-                        sparkleUpdater.checkForUpdates()
                         Task { await updateManager.checkForUpdates() }
                     }
                     Divider()
@@ -291,20 +291,31 @@ struct ThrawnHeaderBar: View {
     }
 
     private var statusLabel: String {
+        // Native API takes priority
+        if anthropic.apiKeyConfigured {
+            if anthropic.authenticating { return "Connecting" }
+            if anthropic.connected { return "Online" }
+            if let err = anthropic.lastError { return err.count > 30 ? "Connection error" : err }
+            return "Offline"
+        }
+        // Legacy gateway fallback
         if gatewayWS.authenticating { return "Connecting" }
         if gatewayWS.connected { return "Online" }
         if let err = gatewayWS.lastError { return err.count > 30 ? "Connection error" : err }
-        return bootstrap.openClawHealthy ? "Online" : "Offline"
+        return "Offline"
     }
 
     private var statusColor: Color {
-        if gatewayWS.authenticating { return Color(red: 0.95, green: 0.70, blue: 0.20) }
-        if gatewayWS.connected { return Color(red: 0.30, green: 0.85, blue: 0.40) }
+        let isConnected = anthropic.connected || gatewayWS.connected
+        let isConnecting = anthropic.authenticating || gatewayWS.authenticating
+        if isConnecting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
+        if isConnected { return Color(red: 0.30, green: 0.85, blue: 0.40) }
         return Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
     private var runtimeDotColor: Color {
-        bootstrap.openClawHealthy ? Color(red: 0.30, green: 0.85, blue: 0.40) : Color(red: 0.85, green: 0.25, blue: 0.20)
+        let isConnected = anthropic.connected || gatewayWS.connected || bootstrap.apiHealthy
+        return isConnected ? Color(red: 0.30, green: 0.85, blue: 0.40) : Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
     private func headerBtn(_ label: String, icon: String, action: @escaping () -> Void) -> some View {

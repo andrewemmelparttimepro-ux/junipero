@@ -77,8 +77,8 @@ final class AgentRosterStore: ObservableObject {
         didSet { save() }
     }
 
-    private static let savePath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".openclaw/thrawn-agent-roster.json")
+    private static let savePath = ThrawnPaths.appSupportDir
+        .appendingPathComponent("thrawn-agent-roster.json")
 
     private static let defaults: [AgentStatus] = [
         AgentStatus(id: "thrawn",  name: "Thrawn",            role: "Lead",            state: .idle, detail: "Command ready",             sessionKey: "agent:main:main"),
@@ -94,12 +94,29 @@ final class AgentRosterStore: ObservableObject {
     private var threadStoreObserver: Any?
     private weak var gatewayClient: GatewayWSClient?
 
+    /// Maps cron job UUID → agent ID (e.g. "bd261208-..." → "r2d2")
+    /// Built from ~/.openclaw/cron/jobs.json so we can match cron session keys.
+    private var cronJobAgentMap: [String: String] = [:]
+
+    /// Legacy cron jobs path (for backward compat with OpenClaw cron system).
+    /// Native scheduler doesn't need this, but it's read for detecting externally-running agents.
+    private static let cronJobsPath = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".openclaw/cron/jobs.json")
+
+    /// Reference to the native agent scheduler for detecting active agents.
+    private weak var agentScheduler: AgentScheduler?
+
     func bindToGateway(_ client: GatewayWSClient) {
         gatewayClient = client
     }
 
+    func bindToScheduler(_ scheduler: AgentScheduler) {
+        self.agentScheduler = scheduler
+    }
+
     init() {
         load()
+        loadCronJobMap()
         startPolling()
     }
 
@@ -191,7 +208,69 @@ final class AgentRosterStore: ObservableObject {
         agents[index].lastTransition = Date()
     }
 
-    // Poll every 8s: live Gateway sessions + file-based override support
+    // MARK: - Cron job → agent mapping
+
+    /// Reads ~/.openclaw/cron/jobs.json and builds jobId → agentId map.
+    /// Job names follow the pattern "R2-D2 Heartbeat (:10)" — we extract the
+    /// agent name before " Heartbeat" or " Initiative", normalize to match roster IDs.
+    private func loadCronJobMap() {
+        guard let data = try? Data(contentsOf: Self.cronJobsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let jobs = json["jobs"] as? [[String: Any]] else { return }
+
+        var map: [String: String] = [:]
+        for job in jobs {
+            guard let jobId = job["id"] as? String,
+                  let name = job["name"] as? String else { continue }
+            // Extract agent name: everything before " Heartbeat" or " Initiative"
+            let agentDisplayName: String
+            if let range = name.range(of: " Heartbeat") {
+                agentDisplayName = String(name[name.startIndex..<range.lowerBound])
+            } else if let range = name.range(of: " Initiative") {
+                agentDisplayName = String(name[name.startIndex..<range.lowerBound])
+            } else {
+                continue
+            }
+            // Normalize: lowercase, strip hyphens (e.g. "R2-D2" → "r2d2", "Qui-Gon" → "quigon")
+            let agentId = agentDisplayName.lowercased().replacingOccurrences(of: "-", with: "")
+            if agents.contains(where: { $0.id == agentId }) {
+                map[jobId] = agentId
+            }
+        }
+        cronJobAgentMap = map
+    }
+
+    /// Checks jobs.json state for agents with recently started runs (fallback when
+    /// gateway sessions.list doesn't show the cron session).
+    private func detectActiveFromCronState() -> Set<String> {
+        guard let data = try? Data(contentsOf: Self.cronJobsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let jobs = json["jobs"] as? [[String: Any]] else { return [] }
+
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        var active: Set<String> = []
+
+        for job in jobs {
+            guard let jobId = job["id"] as? String,
+                  let agentId = cronJobAgentMap[jobId],
+                  let state = job["state"] as? [String: Any],
+                  let lastRunAtMs = state["lastRunAtMs"] as? Double else { continue }
+
+            // Use previous run duration as estimate, with a 5-minute ceiling
+            let lastDurationMs = (state["lastDurationMs"] as? Double) ?? 120_000
+            let estimatedWindow = min(max(lastDurationMs * 1.5, 60_000), 300_000)
+
+            // If the run started recently enough that it could still be going
+            if nowMs - lastRunAtMs < estimatedWindow {
+                active.insert(agentId)
+            }
+        }
+        return active
+    }
+
+    // MARK: - Polling
+
+    // Poll every 8s: live Gateway sessions + cron state + file-based override support
     private func startPolling() {
         Task {
             while !Task.isCancelled {
@@ -202,7 +281,14 @@ final class AgentRosterStore: ObservableObject {
         }
     }
 
+    /// Refresh counter — reload cron job map every ~60s (every 8th poll)
+    private var pollCount = 0
+
     private func refreshFromGateway() async {
+        // Periodically reload the cron job map in case jobs change
+        pollCount += 1
+        if pollCount % 8 == 0 { loadCronJobMap() }
+
         guard let client = gatewayClient else { return }
         let sessions = await client.sessionsList()
 
@@ -216,14 +302,37 @@ final class AgentRosterStore: ObservableObject {
                     activeNow.insert(agentId)
                 }
             }
-            // Also match by session key pattern (e.g. "agent:specialist:r2d2")
+
             let key = session.key
+
+            // Match cron sessions: key pattern "agent:main:cron:<jobId>:run:<runId>"
+            if key.hasPrefix("agent:main:cron:") {
+                let afterPrefix = String(key.dropFirst("agent:main:cron:".count))
+                if let runRange = afterPrefix.range(of: ":run:") {
+                    let jobId = String(afterPrefix[afterPrefix.startIndex..<runRange.lowerBound])
+                    if let agentId = cronJobAgentMap[jobId] {
+                        activeNow.insert(agentId)
+                    }
+                }
+            }
+
+            // Also match by session key pattern (e.g. "agent:specialist:r2d2")
             for agent in agents where agent.id != "thrawn" {
                 if key.lowercased().contains(agent.id) {
                     activeNow.insert(agent.id)
                 }
             }
         }
+
+        // Native scheduler: detect agents currently running heartbeats
+        if let scheduler = agentScheduler {
+            activeNow.formUnion(scheduler.runningAgents)
+        }
+
+        // Fallback: detect agents with recently started cron runs from jobs.json state
+        // This catches cases where the gateway session ended but the run was very recent
+        let cronActive = detectActiveFromCronState()
+        activeNow.formUnion(cronActive)
 
         // Update agents that are now active
         for agentId in activeNow {

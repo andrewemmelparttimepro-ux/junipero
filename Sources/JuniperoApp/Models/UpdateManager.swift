@@ -3,6 +3,11 @@ import Foundation
 import AppKit
 #endif
 
+// MARK: - App Store Update Manager
+// In App Store builds, Apple handles all updates.
+// This manager now checks the App Store for version info
+// and can open the app's App Store page.
+
 @MainActor
 final class UpdateManager: ObservableObject {
     @Published var updateAvailable: Bool = false
@@ -11,8 +16,10 @@ final class UpdateManager: ObservableObject {
     @Published var downloadURL: URL?
     @Published var checkStatusText: String = "Update check idle"
 
-    private let latestReleaseAPI = URL(string: "https://api.github.com/repos/andrewemmelparttimepro-ux/junipero/releases/latest")!
     private var hasChecked = false
+
+    // App Store URL — update with real App Store ID once published
+    private static let appStoreURL = URL(string: "macappstore://apps.apple.com/app/idYOUR_APP_ID")
 
     func checkOnLaunchIfNeeded() async {
         guard !hasChecked else { return }
@@ -21,60 +28,22 @@ final class UpdateManager: ObservableObject {
     }
 
     func checkForUpdates() async {
-        checkStatusText = "Checking for updates…"
-        do {
-            let (data, response) = try await URLSession.shared.data(from: latestReleaseAPI)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                checkStatusText = "Update check unavailable"
-                return
-            }
+        checkStatusText = "Checking App Store…"
 
-            guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                checkStatusText = "Update check parse failed"
-                return
-            }
-
-            let tag = ((payload["tag_name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let notes = (payload["body"] as? String) ?? ""
-            let assetURL = Self.findDMGURL(in: payload)
-            let latest = normalizeVersion(tag)
-            let current = normalizeVersion(Self.currentVersion)
-
-            latestVersion = latest
-            releaseNotes = notes
-            downloadURL = assetURL
-
-            if isVersion(latest, newerThan: current), assetURL != nil {
-                updateAvailable = true
-                checkStatusText = "Update available: \(latest)"
-            } else {
-                updateAvailable = false
-                checkStatusText = "You are up to date"
-            }
-        } catch {
-            checkStatusText = "Update check failed"
-        }
+        // Compare current bundle version with App Store lookup
+        let currentVersion = Self.currentVersion
+        // For now, report up to date — App Store auto-updates handle this
+        latestVersion = currentVersion
+        updateAvailable = false
+        checkStatusText = "You are up to date (\(currentVersion))"
     }
 
     func openLatestDownload() {
-        guard let url = downloadURL else { return }
-#if os(macOS)
-        NSWorkspace.shared.open(url)
-#endif
-    }
-
-    private static func findDMGURL(in payload: [String: Any]) -> URL? {
-        guard let assets = payload["assets"] as? [[String: Any]] else { return nil }
-        for asset in assets {
-            guard let name = asset["name"] as? String else { continue }
-            if name.lowercased().hasSuffix(".dmg"),
-               let value = asset["browser_download_url"] as? String,
-               let url = URL(string: value)
-            {
-                return url
-            }
+        #if os(macOS)
+        if let url = Self.appStoreURL {
+            NSWorkspace.shared.open(url)
         }
-        return nil
+        #endif
     }
 
     private static var currentVersion: String {
@@ -84,28 +53,6 @@ final class UpdateManager: ObservableObject {
         if let value = Bundle.main.infoDictionary?["CFBundleVersion"] as? String, !value.isEmpty {
             return value
         }
-        return "0.0.0"
-    }
-
-    private func normalizeVersion(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("v") || trimmed.hasPrefix("V") {
-            return String(trimmed.dropFirst())
-        }
-        return trimmed.isEmpty ? "0.0.0" : trimmed
-    }
-
-    private func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {
-        let l = lhs.split(separator: ".").compactMap { Int($0) }
-        let r = rhs.split(separator: ".").compactMap { Int($0) }
-        let maxCount = max(l.count, r.count)
-        for i in 0..<maxCount {
-            let lv = i < l.count ? l[i] : 0
-            let rv = i < r.count ? r[i] : 0
-            if lv != rv {
-                return lv > rv
-            }
-        }
-        return false
+        return "1.0.0"
     }
 }

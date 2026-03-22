@@ -1,3 +1,8 @@
+// MARK: - LEGACY — DO NOT USE IN NEW CODE
+// This file uses Process() and is NOT App Store compliant.
+// Kept only as a compile dependency for GatewayWebSocketClient (legacy fallback).
+// Will be removed once GatewayWebSocketClient is fully retired.
+
 import Foundation
 
 struct ShellCommandResult {

@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "ai.junipero.app"
+    private static let service = "com.thrawn.console"
     private static let account = "provider-token"
 
     static func saveProviderToken(_ token: String) -> Bool {

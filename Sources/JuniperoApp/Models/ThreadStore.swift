@@ -29,8 +29,11 @@ final class ThreadStore: ObservableObject {
     private var maxTotalInputChars = 16_000
     private var maxQueuedPerThread = 6
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
+    /// Native Anthropic API client — set via `bindAnthropicClient(_:)` from app entry.
+    /// Falls back to a local instance if not bound (shouldn't happen in normal flow).
+    private(set) var anthropic: AnthropicClient?
+    /// Legacy gateway client — kept temporarily for backward compat. Will be removed.
     let gatewayWS = GatewayWSClient()
-    private let legacyClient = OpenClawClient()
     private var threadDrafts: [UUID: String] = [:]
     private var threadAttachments: [UUID: [ChatAttachment]] = [:]
     private var queuedUserMessages: [UUID: [String]] = [:]
@@ -82,12 +85,10 @@ final class ThreadStore: ObservableObject {
     }
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.storageDir = home.appendingPathComponent(".junipero", isDirectory: true)
+        self.storageDir = ThrawnPaths.appSupportDir
         self.storageURL = storageDir.appendingPathComponent("threads.json")
         self.draftStateURL = storageDir.appendingPathComponent("drafts.json")
         self.draftEventLogURL = storageDir.appendingPathComponent("draft-events.log")
-        try? FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
         applyGuardrailPreset()
         preferenceObserver = NotificationCenter.default.addObserver(
             forName: ThrawnPreferencesStore.changedNotification,
@@ -100,6 +101,11 @@ final class ThreadStore: ObservableObject {
         }
         loadThreads()
         loadDraftState()
+    }
+
+    /// Bind the shared AnthropicClient from the app entry point.
+    func bindAnthropicClient(_ client: AnthropicClient) {
+        self.anthropic = client
     }
 
     deinit {
@@ -248,17 +254,21 @@ final class ThreadStore: ObservableObject {
         inFlightCount = inFlightTasks.count
     }
 
-    private func performRequest(threadId: UUID, messages: [OpenClawClient.InputMessage]) async {
-        // Use Gateway WebSocket if connected or connectable; fall back to legacy HTTP
-        let userText = messages.last(where: { $0.role == "user" })?.content ?? ""
+    private func performRequest(threadId: UUID, messages: [AnthropicMessage]) async {
         let startMs = Int(Date().timeIntervalSince1970 * 1000)
+        let userText = messages.last(where: { $0.role == "user" })?.content.compactMap(\.text).joined(separator: "\n") ?? ""
 
+        // PRIMARY PATH: Native Anthropic API (App Store compliant)
+        if let client = anthropic, client.apiKeyConfigured {
+            await performAnthropicRequest(client: client, threadId: threadId, messages: messages, userText: userText, startMs: startMs)
+            return
+        }
+
+        // LEGACY FALLBACK: Gateway (will be removed)
         if !userText.isEmpty {
-            // Ensure connected
             if !gatewayWS.connected {
                 gatewayWS.connect()
                 gatewayWS.refreshNow()
-                // Give it up to 4 seconds to connect
                 for _ in 0..<40 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if gatewayWS.connected { break }
@@ -271,30 +281,21 @@ final class ThreadStore: ObservableObject {
             }
         }
 
-        // Fallback to legacy HTTP client
-        do {
-            let result = try await legacyClient.send(messages: messages)
-            guard !Task.isCancelled else { return }
-            updateThreadSuccess(threadId, response: result.text, model: result.model, latencyMs: result.latencyMs)
-            connectivity = .online
-            lastErrorText = nil
-        } catch is CancellationError {
-        } catch {
-            guard !Task.isCancelled else { return }
-            let message = normalizeError(error)
-            updateThreadFailure(threadId, error: message)
-            connectivity = .offline
-            lastErrorText = message
-        }
+        // No API key, no gateway — show setup prompt
+        updateThreadFailure(threadId, error: "No API key configured. Open Settings to add your Anthropic API key.")
         inFlightTasks[threadId] = nil
         inFlightCount = inFlightTasks.count
     }
 
-    private func performGatewayRequest(threadId: UUID, text: String, startMs: Int) async {
-        // Safety timeout: if the gateway doesn't respond within 10 minutes, fail gracefully.
-        // Complex agent tasks (tool installs, multi-step workflows) can take several minutes.
+    // MARK: - Native Anthropic API (Primary Path)
+
+    private func performAnthropicRequest(client: AnthropicClient, threadId: UUID, messages: [AnthropicMessage], userText: String, startMs: Int) async {
+        // Build history: all messages except the last user message (which is the new one)
+        let history = messages.count > 1 ? Array(messages.dropLast()) : []
+
+        // Safety timeout: 10 minutes for complex tasks
         let safetyTimeout = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 600_000_000_000) // 10 minutes
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -311,7 +312,82 @@ final class ThreadStore: ObservableObject {
             var resumed = false
             var accumulated = ""
 
-            // Helper to safely resume exactly once
+            func safeResume() {
+                guard !resumed else { return }
+                resumed = true
+                safetyTimeout.cancel()
+                continuation.resume()
+            }
+
+            client.send(
+                text: userText,
+                history: history,
+                sessionKey: "thread:\(threadId.uuidString.lowercased())",
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        accumulated += delta
+                        if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
+                            if self.threads[index].messages.last?.role == .assistant {
+                                let lastIdx = self.threads[index].messages.count - 1
+                                self.threads[index].messages[lastIdx].text = accumulated
+                            } else {
+                                self.threads[index].messages.append(ChatMessage(role: .assistant, text: accumulated))
+                            }
+                        }
+                    }
+                },
+                onComplete: { [weak self] finalText, model in
+                    Task { @MainActor [weak self] in
+                        let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+                        let responseText = finalText.isEmpty ? accumulated : finalText
+                        if let self {
+                            self.updateThreadSuccess(threadId, response: responseText, model: model ?? "claude", latencyMs: latencyMs)
+                            self.connectivity = .online
+                            self.lastErrorText = nil
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        if let self {
+                            self.updateThreadFailure(threadId, error: error)
+                            self.connectivity = .offline
+                            self.lastErrorText = error
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
+                    }
+                }
+            )
+        }
+    }
+
+    // MARK: - Legacy Gateway (will be removed)
+
+    private func performGatewayRequest(threadId: UUID, text: String, startMs: Int) async {
+        let safetyTimeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let index = self.threads.firstIndex(where: { $0.id == threadId }),
+                   self.threads[index].isLoading {
+                    self.updateThreadFailure(threadId, error: "Request timed out after 10 minutes. Tap to retry.")
+                    self.inFlightTasks[threadId] = nil
+                    self.inFlightCount = self.inFlightTasks.count
+                }
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            var accumulated = ""
+
             func safeResume() {
                 guard !resumed else { return }
                 resumed = true
@@ -326,7 +402,6 @@ final class ThreadStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         accumulated += delta
-                        // Stream partial into the thread in real time
                         if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
                             if self.threads[index].messages.last?.role == .assistant {
                                 let lastIdx = self.threads[index].messages.count - 1
@@ -431,11 +506,11 @@ final class ThreadStore: ObservableObject {
         Task { await ChatDiagnostics.shared.log("send-drain thread=\(threadId.uuidString)") }
     }
 
-    private func buildInputMessages(for threadId: UUID) -> [OpenClawClient.InputMessage] {
+    private func buildInputMessages(for threadId: UUID) -> [AnthropicMessage] {
         guard let thread = threads.first(where: { $0.id == threadId }) else { return [] }
         let history = thread.messages.suffix(maxInputHistoryMessages)
         var totalChars = 0
-        var reversedSelection: [OpenClawClient.InputMessage] = []
+        var reversedSelection: [AnthropicMessage] = []
 
         for msg in history.reversed() {
             let role = msg.role == .assistant ? "assistant" : "user"
@@ -459,7 +534,7 @@ final class ThreadStore: ObservableObject {
             }
 
             totalChars += content.count
-            reversedSelection.append(OpenClawClient.InputMessage(role: role, content: content))
+            reversedSelection.append(AnthropicMessage(role: role, text: content))
             if totalChars >= maxTotalInputChars {
                 break
             }
@@ -500,8 +575,8 @@ final class ThreadStore: ObservableObject {
             return "Attachment is too large (max 5 MB). Resize or compress, then try again."
         }
 
-        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("openclaw rejected authentication") {
-            return "Authentication failed. Open Setup and verify your provider token."
+        if lower.contains("unauthorized") || lower.contains("authentication token") || lower.contains("rejected authentication") || lower.contains("invalid api key") {
+            return "Authentication failed. Check your API key in Settings."
         }
 
         if lower.contains("could not connect to the server")
@@ -510,26 +585,16 @@ final class ThreadStore: ObservableObject {
             || lower.contains("nsurlerrordomain code=-1004")
             || lower.contains("kcferror")
         {
-            return "Cannot reach OpenClaw right now. Use Heal or check that OpenClaw is running."
+            return "Cannot reach the AI service. Check your internet connection."
         }
 
-        if lower.contains("primary and fallback both failed") {
-            let fallbackMissingModel = lower.contains("model")
-                && lower.contains("not found")
-                && (lower.contains("kimi") || lower.contains("ollama"))
-            if fallbackMissingModel {
-                return "Primary is offline and local fallback model is missing. Open Setup and tap Fix Missing Model."
-            }
-            return "Primary and fallback both failed. Open Setup, run diagnostics, then retry."
-        }
-
-        if lower.contains("openclaw error 404") && lower.contains("model") && lower.contains("not found") {
-            return "Configured model was not found. Open Setup and select/install an available model."
+        if lower.contains("model") && lower.contains("not found") {
+            return "Configured model was not found. Check your model name in Settings."
         }
 
         // Prevent noisy framework/network dumps from reaching chat bubbles.
         if raw.count > 220 {
-            return "Request failed. Open Setup > Run Diagnostics for full details."
+            return "Request failed. Open Settings > Run Diagnostics for details."
         }
 
         return raw
@@ -539,6 +604,8 @@ final class ThreadStore: ObservableObject {
         inFlightTasks[id]?.cancel()
         inFlightTasks[id] = nil
         inFlightCount = max(0, inFlightTasks.count)
+        // Cancel on both native and legacy clients
+        anthropic?.abort(sessionKey: "thread:\(id.uuidString.lowercased())")
         gatewayWS.abort(sessionKey: gatewaySessionKey(for: id))
         guard updateThreadState else { return }
         if let index = threads.firstIndex(where: { $0.id == id }), threads[index].isLoading {

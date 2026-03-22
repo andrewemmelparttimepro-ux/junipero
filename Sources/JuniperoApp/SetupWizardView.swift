@@ -6,6 +6,7 @@ import SwiftUI
 
 struct SetupWizardView: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
+    @EnvironmentObject var anthropic: AnthropicClient
     @State private var scanOffset: CGFloat = -1.0
     @State private var glowPulse: Double = 0.6
     @State private var hexRotation: Double = 0
@@ -23,25 +24,17 @@ struct SetupWizardView: View {
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 20) {
-                        // Routing mode selector
-                        routingModeCard
-
-                        // Provider credentials (conditional)
-                        if bootstrap.setupMode == .bringYourOwn {
-                            credentialsCard
-                        }
+                        // API credentials (always shown — this is the core setup)
+                        credentialsCard
 
                         // Systems status grid
                         systemsStatusCard
 
-                        // Memory subsystem
+                        // Memory subsystem (optional)
                         memoryCard
 
                         // Capability & guardrails
                         capabilityCard
-
-                        // Local fallback
-                        localFallbackCard
 
                         // Action bar
                         actionBar
@@ -288,33 +281,17 @@ struct SetupWizardView: View {
 
     // MARK: - Cards
 
-    private var routingModeCard: some View {
-        terminalCard(label: "ROUTING PROTOCOL", icon: "arrow.triangle.branch") {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("OpenClaw manages all chat routing. Local Ollama remains dormant unless explicitly unlocked.")
+    private var credentialsCard: some View {
+        terminalCard(label: "AUTHENTICATION", icon: "key.fill") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Enter your Anthropic API key to connect Thrawn to Claude. Get one at console.anthropic.com.")
                     .font(.system(size: 11))
                     .foregroundColor(Color.white.opacity(0.55))
                     .lineSpacing(2)
 
-                Picker("Mode", selection: $bootstrap.setupMode) {
-                    ForEach(ThrawnBootstrap.SetupMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                terminalToggle("Route all traffic through OpenClaw", isOn: $bootstrap.alwaysRouteThroughOpenClaw)
-            }
-        }
-    }
-
-    private var credentialsCard: some View {
-        terminalCard(label: "AUTHENTICATION", icon: "key.fill") {
-            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
-                    fieldLabel("PROVIDER TOKEN")
-                    SecureField("Paste your OpenClaw/provider token", text: $bootstrap.providerToken)
+                    fieldLabel("API KEY")
+                    SecureField("sk-ant-...", text: $bootstrap.providerToken)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
                         .padding(10)
@@ -330,8 +307,8 @@ struct SetupWizardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
-                    fieldLabel("PRIMARY MODEL")
-                    TextField("anthropic/claude-sonnet-4-6", text: $bootstrap.providerModel)
+                    fieldLabel("MODEL")
+                    TextField("claude-sonnet-4-6", text: $bootstrap.providerModel)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
                         .padding(10)
@@ -350,7 +327,7 @@ struct SetupWizardView: View {
                     Image(systemName: "lock.shield.fill")
                         .font(.system(size: 8))
                         .foregroundColor(Color.chissPrimary.opacity(0.35))
-                    Text("Stored in macOS Keychain")
+                    Text("Stored in macOS Keychain · Never leaves your device")
                         .font(.system(size: 9.5, weight: .medium))
                         .foregroundColor(Color.white.opacity(0.35))
                 }
@@ -431,7 +408,7 @@ struct SetupWizardView: View {
     }
 
     private var memoryCard: some View {
-        terminalCard(label: "MEMORY SUBSYSTEM", icon: "brain") {
+        terminalCard(label: "MEMORY SUBSYSTEM · OPTIONAL", icon: "brain") {
             HStack(spacing: 12) {
                 // Brain status orb
                 ZStack {
@@ -441,7 +418,7 @@ struct SetupWizardView: View {
                                 colors: [
                                     bootstrap.cogneeHealthy
                                         ? Color.chissPrimary.opacity(0.40 * glowPulse)
-                                        : Color(red: 0.85, green: 0.25, blue: 0.20).opacity(0.20),
+                                        : Color.white.opacity(0.05),
                                     Color.clear
                                 ],
                                 center: .center,
@@ -460,18 +437,18 @@ struct SetupWizardView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(bootstrap.cogneeHealthy ? "COGNEE ONLINE" : "COGNEE OFFLINE")
+                    Text(bootstrap.cogneeHealthy ? "MEMORY CONNECTED" : "MEMORY NOT CONNECTED")
                         .font(.system(size: 10, weight: .bold))
                         .tracking(1.5)
                         .foregroundColor(
                             bootstrap.cogneeHealthy
                                 ? Color.chissPrimary.opacity(0.85)
-                                : Color(red: 1.0, green: 0.55, blue: 0.55).opacity(0.70)
+                                : Color.white.opacity(0.40)
                         )
-                    Text(bootstrap.cogneeStatusText)
+                    Text(bootstrap.cogneeHealthy ? bootstrap.cogneeStatusText : "Thrawn works without memory. Connect Cognee for enhanced recall.")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(Color.white.opacity(0.45))
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
 
                 Spacer()
@@ -505,31 +482,6 @@ struct SetupWizardView: View {
         }
     }
 
-    private var localFallbackCard: some View {
-        terminalCard(label: "LOCAL FALLBACK", icon: "desktopcomputer") {
-            VStack(alignment: .leading, spacing: 8) {
-                terminalToggle("Unlock local Ollama options", isOn: $bootstrap.unlockLocalOllamaOptions)
-
-                if bootstrap.unlockLocalOllamaOptions {
-                    terminalToggle("Enable Ollama fallback", isOn: $bootstrap.enableOllamaFallback)
-                        .padding(.leading, 12)
-
-                    if bootstrap.ollamaFallbackActive {
-                        terminalToggle("Prefer local-first routing", isOn: $bootstrap.preferLocalFirst)
-                            .padding(.leading, 12)
-                        terminalToggle("Auto-download qwen2.5-coder:7b", isOn: $bootstrap.autoInstallKimi)
-                            .padding(.leading, 12)
-                    } else {
-                        Text("Fallback armed only after explicit enable.")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(Color.white.opacity(0.30))
-                            .padding(.leading, 12)
-                    }
-                }
-            }
-        }
-    }
-
     // MARK: - Action Bar
 
     private var actionBar: some View {
@@ -546,10 +498,8 @@ struct SetupWizardView: View {
                     Task { await bootstrap.reindexCogneeMemory() }
                 }
 
-                if bootstrap.ollamaFallbackActive && bootstrap.missingOllamaModel {
-                    actionButton("Fix Model", icon: "wrench.fill") {
-                        Task { await bootstrap.installMissingFallbackModel() }
-                    }
+                actionButton("Export", icon: "square.and.arrow.up") {
+                    Task { await bootstrap.exportSupportBundle() }
                 }
             }
 
