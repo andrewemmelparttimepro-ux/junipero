@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentRailView: View {
     @EnvironmentObject var roster: AgentRosterStore
     @EnvironmentObject var nav: ConsoleNavigationStore
+    @EnvironmentObject var execution: ExecutionService
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -12,9 +13,16 @@ struct AgentRailView: View {
                     .tracking(2.5)
                     .foregroundColor(Color.chissPrimary.opacity(0.90))
                 Spacer()
-                Text("Fleet")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Color.chissPrimary.opacity(0.55))
+                HStack(spacing: 4) {
+                    Text("Fleet")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color.chissPrimary.opacity(0.55))
+                    if execution.accessMode.isUnleashed {
+                        Text("⚡")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color.sithGlow.opacity(0.85))
+                    }
+                }
             }
 
             VStack(spacing: 8) {

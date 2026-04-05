@@ -16,12 +16,19 @@ final class PrimarySessionStore: ObservableObject {
 
     let sessionKey: String
     private var anthropicClient: AnthropicClient?
+    private var geminiClient: GeminiAPIClient?
+    private var geminiOAuth: GeminiOAuthClient?
+    private var openAIClient: OpenAIClient?
     private var wsClient: GatewayWSClient?  // Legacy fallback
     private weak var rosterStore: AgentRosterStore?
     private weak var screenCaptureStore: ScreenCaptureStore?
     let cogneeClient = CogneeClient()
     /// Conversation history for the Anthropic API (messages sent in this session)
     private var conversationHistory: [AnthropicMessage] = []
+    /// Conversation history for the Gemini API
+    private var geminiHistory: [GeminiMessage] = []
+    /// Conversation history for the OpenAI API
+    private var openAIHistory: [OpenAIMessage] = []
 
     init(sessionKey: String = "main") {
         self.sessionKey = sessionKey
@@ -31,8 +38,17 @@ final class PrimarySessionStore: ObservableObject {
         self.anthropicClient = anthropicClient
     }
 
+    func bind(geminiClient: GeminiAPIClient, oauthClient: GeminiOAuthClient) {
+        self.geminiClient = geminiClient
+        self.geminiOAuth = oauthClient
+    }
+
     func bind(wsClient: GatewayWSClient) {
         self.wsClient = wsClient
+    }
+
+    func bind(openAIClient: OpenAIClient) {
+        self.openAIClient = openAIClient
     }
 
     func bindRoster(_ roster: AgentRosterStore) {
@@ -44,10 +60,19 @@ final class PrimarySessionStore: ObservableObject {
     }
 
     func connect() {
-        // Native API: just check if configured
+        // Check Gemini OAuth or API key
+        if let oAuth = geminiOAuth, oAuth.authenticated {
+            isConnected = true
+            return
+        }
+        if let gc = geminiClient, gc.apiKeyConfigured {
+            isConnected = true
+            return
+        }
+
+        // Native Anthropic API
         if let client = anthropicClient, client.apiKeyConfigured {
             isConnected = true
-            // Load persisted messages if any (native mode has no external history)
             return
         }
 
@@ -106,15 +131,44 @@ final class PrimarySessionStore: ObservableObject {
         streamingText = ""
         errorText = nil
 
-        // Primary: native Anthropic API
+        // Route based on active provider
+        let activeProvider = ProviderStateStore.load().activeProvider
+
+        switch activeProvider {
+        case .gemini:
+            if geminiClient != nil, (geminiOAuth?.authenticated == true || geminiClient?.apiKeyConfigured == true) {
+                Task { await doSendGemini(trimmed) }
+                return
+            }
+        case .claude:
+            if let client = anthropicClient, client.apiKeyConfigured {
+                Task { await doSendNative(trimmed) }
+                return
+            }
+        case .chatgpt:
+            if let client = openAIClient, client.apiKeyConfigured {
+                Task { await doSendOpenAI(trimmed) }
+                return
+            }
+        }
+
+        // Fallback: try any connected provider
+        if geminiClient != nil, (geminiOAuth?.authenticated == true || geminiClient?.apiKeyConfigured == true) {
+            Task { await doSendGemini(trimmed) }
+            return
+        }
         if let client = anthropicClient, client.apiKeyConfigured {
             Task { await doSendNative(trimmed) }
+            return
+        }
+        if let client = openAIClient, client.apiKeyConfigured {
+            Task { await doSendOpenAI(trimmed) }
             return
         }
 
         // Fallback: legacy gateway
         guard let wsClient else {
-            errorText = "No API key configured. Open Settings to add your Anthropic API key."
+            errorText = "No provider connected. Open Settings to sign in with Google or add an API key."
             isLoading = false
             return
         }
@@ -212,6 +266,164 @@ final class PrimarySessionStore: ObservableObject {
         }
     }
 
+    // MARK: - Gemini Send (Primary when signed in with Google)
+
+    private func doSendGemini(_ text: String) async {
+        guard let client = geminiClient else {
+            errorText = "Gemini client not available."
+            isLoading = false
+            return
+        }
+
+        // Cognee memory recall (optional enhancement)
+        var finalText = text
+        if recallEnabled {
+            recallContext = nil
+            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
+                recallContext = context
+                finalText = "[Memory Recall]\n\(context)\n\n[User Message]\n\(text)"
+            }
+        }
+
+        // Screenshot attachment
+        let imagePayload = screenCaptureStore?.pendingScreenshot
+        screenCaptureStore?.clear()
+
+        // Light up jewel
+        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
+
+        // Track in Gemini history
+        geminiHistory.append(GeminiMessage(role: "user", text: finalText))
+
+        // Build history (all but the last user message)
+        let history = geminiHistory.count > 1 ? Array(geminiHistory.dropLast()) : []
+
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            client.send(
+                text: finalText,
+                imageData: imagePayload,
+                history: history,
+                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                sessionKey: sessionKey,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isStreaming = true
+                        self.streamingText += delta
+                    }
+                },
+                onComplete: { [weak self] finalText, model in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let text = finalText.isEmpty ? self.streamingText : finalText
+                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
+                        self.geminiHistory.append(GeminiMessage(role: "model", text: text))
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        // Remove the failed user message from history
+                        if self.geminiHistory.last?.role == "user" {
+                            self.geminiHistory.removeLast()
+                        }
+                        self.errorText = error
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                }
+            )
+        }
+    }
+
+    // MARK: - OpenAI Send
+
+    private func doSendOpenAI(_ text: String) async {
+        guard let client = openAIClient else {
+            errorText = "OpenAI client not available."
+            isLoading = false
+            return
+        }
+
+        // Cognee memory recall (optional enhancement)
+        var finalText = text
+        if recallEnabled {
+            recallContext = nil
+            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
+                recallContext = context
+                finalText = "[Memory Recall]\n\(context)\n\n[User Message]\n\(text)"
+            }
+        }
+
+        // Screenshot attachment
+        let imagePayload = screenCaptureStore?.pendingScreenshot
+        screenCaptureStore?.clear()
+
+        // Light up jewel
+        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
+
+        // Track in OpenAI history
+        openAIHistory.append(OpenAIMessage(role: "user", text: finalText))
+
+        // Build history (all but the last user message)
+        let history = openAIHistory.count > 1 ? Array(openAIHistory.dropLast()) : []
+
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            client.send(
+                text: finalText,
+                imageData: imagePayload,
+                history: history,
+                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                sessionKey: sessionKey,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isStreaming = true
+                        self.streamingText += delta
+                    }
+                },
+                onComplete: { [weak self] finalText, model in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let text = finalText.isEmpty ? self.streamingText : finalText
+                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
+                        self.openAIHistory.append(OpenAIMessage(role: "assistant", text: text))
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        // Remove the failed user message from history
+                        if self.openAIHistory.last?.role == "user" {
+                            self.openAIHistory.removeLast()
+                        }
+                        self.errorText = error
+                        self.isLoading = false
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
+                        if !resumed { resumed = true; continuation.resume() }
+                    }
+                }
+            )
+        }
+    }
+
     // MARK: - Legacy Gateway Send (Fallback)
 
     private func doSendLegacy(_ text: String) async {
@@ -276,6 +488,8 @@ final class PrimarySessionStore: ObservableObject {
 
     func abort() {
         anthropicClient?.abort(sessionKey: sessionKey)
+        geminiClient?.abort(sessionKey: sessionKey)
+        openAIClient?.abort(sessionKey: sessionKey)
         wsClient?.abort(sessionKey: sessionKey)
         isLoading = false
         isStreaming = false
@@ -315,6 +529,9 @@ struct PrimaryMessage: Identifiable {
 
 struct PrimarySessionView: View {
     @EnvironmentObject var anthropic: AnthropicClient
+    @EnvironmentObject var geminiAPI: GeminiAPIClient
+    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
+    @EnvironmentObject var openAI: OpenAIClient
     @EnvironmentObject var gatewayWS: GatewayWSClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var roster: AgentRosterStore
@@ -339,7 +556,7 @@ struct PrimarySessionView: View {
 
             VStack(spacing: 0) {
                 // Connection status bar (only shown when not connected)
-                if !anthropic.connected && !gatewayWS.connected {
+                if !geminiOAuth.authenticated && !(geminiAPI.apiKeyConfigured) && !anthropic.connected && !openAI.apiKeyConfigured && !gatewayWS.connected {
                     HStack(spacing: 8) {
                         ProgressView().progressViewStyle(.circular).scaleEffect(0.6).tint(Color(red: 0.95, green: 0.70, blue: 0.20))
                         Text(connectionStatusText)
@@ -427,6 +644,22 @@ struct PrimarySessionView: View {
                             .foregroundColor(Color.sithGlow)
                             .lineLimit(2)
                         Spacer()
+                        if err.contains("No provider connected") || err.contains("API client not available") {
+                            Button {
+                                store.errorText = nil
+                                bootstrap.showSetup = true
+                            } label: {
+                                Text("Open Settings")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(Color.sithGlow)
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(Color.sithGlow.opacity(0.50), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
                         Button { store.errorText = nil } label: {
                             Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundColor(Color.sithGlow.opacity(0.70))
                         }
@@ -441,13 +674,15 @@ struct PrimarySessionView: View {
                 // Input bar
                 inputBar
             }
-            .animation(.easeInOut(duration: 0.18), value: anthropic.connected || gatewayWS.connected)
+            .animation(.easeInOut(duration: 0.18), value: anthropic.connected || geminiOAuth.authenticated || openAI.apiKeyConfigured || gatewayWS.connected)
             .animation(.easeInOut(duration: 0.18), value: store.errorText != nil)
             .animation(.easeInOut(duration: 0.18), value: store.recallContext != nil)
             .animation(.easeInOut(duration: 0.18), value: screenCapture.pendingScreenshot != nil)
         }
         .onAppear {
             store.bind(anthropicClient: anthropic)
+            store.bind(geminiClient: geminiAPI, oauthClient: geminiOAuth)
+            store.bind(openAIClient: openAI)
             store.bind(wsClient: gatewayWS)
             store.bindRoster(roster)
             store.bindScreenCapture(screenCapture)
@@ -459,8 +694,11 @@ struct PrimarySessionView: View {
     }
 
     private var connectionStatusText: String {
+        if geminiOAuth.authenticated {
+            return "Connected via Gemini"
+        }
         if !anthropic.apiKeyConfigured {
-            return "No API key — open Settings to configure"
+            return "No provider connected — open Settings to sign in"
         }
         if anthropic.authenticating {
             return "Connecting to Anthropic API…"

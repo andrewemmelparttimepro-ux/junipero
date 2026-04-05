@@ -6,3 +6,7 @@ DerivedData/
 *.o
 *.d
 dist/
+
+# Built app bundles
+*.app/
+

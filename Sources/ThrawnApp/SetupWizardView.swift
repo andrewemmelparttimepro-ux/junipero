@@ -7,10 +7,18 @@ import SwiftUI
 struct SetupWizardView: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var anthropic: AnthropicClient
+    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
+    @EnvironmentObject var openAI: OpenAIClient
+    @EnvironmentObject var geminiAPI: GeminiAPIClient
     @State private var scanOffset: CGFloat = -1.0
     @State private var glowPulse: Double = 0.6
     @State private var hexRotation: Double = 0
     @State private var systemsRevealed = false
+    @State private var selectedProvider: AIProvider? = .gemini
+    @State private var openAIToken: String = ""
+    @State private var openAIModel: String = AIProvider.chatgpt.defaultModel
+    @State private var geminiAPIKeyInput: String = ""
+    @State private var geminiModel: String = AIProvider.gemini.defaultModel
 
     var body: some View {
         ZStack {
@@ -282,57 +290,421 @@ struct SetupWizardView: View {
     // MARK: - Cards
 
     private var credentialsCard: some View {
-        terminalCard(label: "AUTHENTICATION", icon: "key.fill") {
+        terminalCard(label: "CONNECT AI PROVIDER", icon: "link.circle.fill") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Enter your Anthropic API key to connect Thrawn to Claude. Get one at console.anthropic.com.")
+                Text("Choose your AI provider to connect THRAWN. Gemini is recommended — sign in with your Google account for free.")
                     .font(.system(size: 11))
                     .foregroundColor(Color.white.opacity(0.55))
                     .lineSpacing(2)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    fieldLabel("API KEY")
-                    SecureField("sk-ant-...", text: $bootstrap.providerToken)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.black.opacity(0.40))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.chissPrimary.opacity(0.15), lineWidth: 1)
-                                )
-                        )
-                        .foregroundColor(Color.chissPrimary)
-                }
+                // Provider cards
+                VStack(spacing: 8) {
+                    // Gemini — Primary, OAuth
+                    providerCardButton(
+                        provider: .gemini,
+                        badge: "RECOMMENDED",
+                        isExpanded: selectedProvider == .gemini
+                    ) {
+                        withAnimation(.spring(response: 0.3)) { selectedProvider = .gemini }
+                    }
 
-                VStack(alignment: .leading, spacing: 5) {
-                    fieldLabel("MODEL")
-                    TextField("claude-sonnet-4-6", text: $bootstrap.providerModel)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.black.opacity(0.40))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.chissPrimary.opacity(0.15), lineWidth: 1)
-                                )
-                        )
-                        .foregroundColor(Color.chissPrimary)
-                }
+                    // Claude — API Key
+                    providerCardButton(
+                        provider: .claude,
+                        badge: nil,
+                        isExpanded: selectedProvider == .claude
+                    ) {
+                        withAnimation(.spring(response: 0.3)) { selectedProvider = .claude }
+                    }
 
-                HStack(spacing: 5) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.system(size: 8))
-                        .foregroundColor(Color.chissPrimary.opacity(0.35))
-                    Text("Stored in macOS Keychain · Never leaves your device")
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.35))
+                    // ChatGPT — API Key
+                    providerCardButton(
+                        provider: .chatgpt,
+                        badge: nil,
+                        isExpanded: selectedProvider == .chatgpt
+                    ) {
+                        withAnimation(.spring(response: 0.3)) { selectedProvider = .chatgpt }
+                    }
                 }
             }
         }
+    }
+
+    // MARK: - Provider Card Button
+
+    private func providerCardButton(provider: AIProvider, badge: String?, isExpanded: Bool, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 0) {
+            // Header row — always visible
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    // Provider icon with brand color
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: provider.brandGradient.map { $0.opacity(isExpanded ? 0.25 : 0.12) },
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 28, height: 28)
+                        Image(systemName: provider.icon)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(provider.brandColor)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(provider.displayName)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white.opacity(isExpanded ? 0.95 : 0.70))
+
+                            if let badge {
+                                Text(badge)
+                                    .font(.system(size: 7, weight: .black))
+                                    .tracking(1)
+                                    .foregroundColor(provider.brandColor)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill(provider.brandColor.opacity(0.12))
+                                            .overlay(Capsule().stroke(provider.brandColor.opacity(0.25), lineWidth: 0.5))
+                                    )
+                            }
+
+                            // Connected checkmark
+                            if isProviderConnected(provider) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
+                            }
+                        }
+
+                        Text(provider.subtitle)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundColor(.white.opacity(0.40))
+                    }
+
+                    Spacer()
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(0.25))
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isExpanded ? provider.brandColor.opacity(0.06) : Color.white.opacity(0.02))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(
+                                    isExpanded ? provider.brandColor.opacity(0.25) : Color.white.opacity(0.06),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+
+            // Expanded auth form
+            if isExpanded {
+                providerAuthForm(for: provider)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Provider Auth Forms
+
+    @ViewBuilder
+    private func providerAuthForm(for provider: AIProvider) -> some View {
+        switch provider {
+        case .gemini:
+            geminiOAuthForm
+        case .claude:
+            apiKeyForm(
+                provider: .claude,
+                placeholder: "sk-ant-api03-...",
+                getKeyLabel: "Get API Key from Anthropic",
+                token: $bootstrap.providerToken,
+                model: $bootstrap.providerModel
+            )
+        case .chatgpt:
+            apiKeyForm(
+                provider: .chatgpt,
+                placeholder: "sk-proj-...",
+                getKeyLabel: "Get API Key from OpenAI",
+                token: $openAIToken,
+                model: $openAIModel
+            )
+        }
+    }
+
+    private var geminiOAuthForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if geminiOAuth.authenticated {
+                // Signed in state
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.15))
+                            .frame(width: 28, height: 28)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Signed in as \(geminiOAuth.userEmail ?? "Google User")")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.80))
+                        Text("Gemini API connected · Free tier active")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(.white.opacity(0.45))
+                    }
+                    Spacer()
+                    Button("Sign Out") {
+                        geminiOAuth.signOut()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.45))
+                    .buttonStyle(.plain)
+                }
+            } else {
+                // Sign-in button
+                Button(action: {
+                    Task { await geminiOAuth.startOAuthFlow() }
+                }) {
+                    HStack(spacing: 8) {
+                        if geminiOAuth.authenticating {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .scaleEffect(0.5)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "person.crop.circle.badge.checkmark")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Text(geminiOAuth.authenticating ? "Signing in..." : "Sign in with Google")
+                            .font(.system(size: 12, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: AIProvider.gemini.brandGradient.map { $0.opacity(0.6) },
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(AIProvider.gemini.brandColor.opacity(0.4), lineWidth: 1)
+                            )
+                    )
+                    .shadow(color: AIProvider.gemini.brandColor.opacity(0.2), radius: 8)
+                }
+                .buttonStyle(.plain)
+                .disabled(geminiOAuth.authenticating)
+
+                // Or use API key
+                HStack(spacing: 4) {
+                    Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                    Text("or use API key")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.white.opacity(0.30))
+                    Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                }
+                .padding(.vertical, 2)
+
+                TextField("Gemini API key...", text: $geminiAPIKeyInput)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.black.opacity(0.35))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    )
+                    .foregroundColor(Color.chissPrimary)
+            }
+
+            if let error = geminiOAuth.lastError {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(Color(red: 1.0, green: 0.55, blue: 0.55))
+                    Text(error)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.75))
+                        .lineLimit(2)
+                }
+            }
+
+            // Model picker
+            VStack(alignment: .leading, spacing: 4) {
+                fieldLabel("MODEL")
+                Picker("", selection: $geminiModel) {
+                    ForEach(AIProvider.gemini.availableModels, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .padding(.leading, -8)
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private func apiKeyForm(
+        provider: AIProvider,
+        placeholder: String,
+        getKeyLabel: String,
+        token: Binding<String>,
+        model: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Deep link to get key
+            Button(action: {
+                if let url = provider.getKeyURL {
+                    #if os(macOS)
+                    NSWorkspace.shared.open(url)
+                    #endif
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 10))
+                    Text(getKeyLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundColor(provider.brandColor)
+            }
+            .buttonStyle(.plain)
+
+            // API key field
+            VStack(alignment: .leading, spacing: 5) {
+                fieldLabel("API KEY")
+                SecureField(placeholder, text: token)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.black.opacity(0.40))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(
+                                        keyValidationColor(for: token.wrappedValue, provider: provider),
+                                        lineWidth: 1
+                                    )
+                            )
+                    )
+                    .foregroundColor(Color.chissPrimary)
+
+                // Inline validation hint
+                if !token.wrappedValue.isEmpty {
+                    HStack(spacing: 4) {
+                        if isKeyFormatValid(token.wrappedValue, provider: provider) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 8))
+                                .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
+                            Text("Key format valid · \(provider.defaultModel)")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.8))
+                        } else {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 8))
+                                .foregroundColor(Color(red: 1.0, green: 0.55, blue: 0.55))
+                            Text("Unexpected key format")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundColor(Color(red: 1.0, green: 0.55, blue: 0.55).opacity(0.8))
+                        }
+                    }
+                }
+            }
+
+            // Model picker
+            VStack(alignment: .leading, spacing: 5) {
+                fieldLabel("MODEL")
+                Picker("", selection: model) {
+                    ForEach(provider.availableModels, id: \.self) { m in
+                        Text(m).tag(m)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .padding(.leading, -8)
+            }
+
+            HStack(spacing: 5) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 8))
+                    .foregroundColor(Color.chissPrimary.opacity(0.35))
+                Text("Stored in macOS Keychain · Never leaves your device")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.35))
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    // MARK: - Validation Helpers
+
+    private func isProviderConnected(_ provider: AIProvider) -> Bool {
+        switch provider {
+        case .gemini: return geminiOAuth.authenticated || !geminiAPIKeyInput.isEmpty
+        case .claude: return !bootstrap.providerToken.isEmpty
+        case .chatgpt: return !openAIToken.isEmpty
+        }
+    }
+
+    private func isKeyFormatValid(_ key: String, provider: AIProvider) -> Bool {
+        guard let prefix = provider.keyPrefix else { return !key.isEmpty }
+        return key.hasPrefix(prefix) && key.count > prefix.count + 10
+    }
+
+    private func keyValidationColor(for key: String, provider: AIProvider) -> Color {
+        if key.isEmpty { return Color.chissPrimary.opacity(0.15) }
+        return isKeyFormatValid(key, provider: provider)
+            ? Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.35)
+            : Color(red: 1.0, green: 0.55, blue: 0.55).opacity(0.25)
+    }
+
+    /// Save all entered provider keys and set the active provider.
+    private func saveProviderKeys() {
+        let provider = selectedProvider ?? .claude
+
+        // Save OpenAI key
+        let trimmedOpenAI = openAIToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedOpenAI.isEmpty {
+            openAI.setAPIKey(trimmedOpenAI)
+            if !openAIModel.isEmpty {
+                openAI.setModel(openAIModel)
+            }
+        }
+
+        // Save Gemini API key (when user chose "or use API key" instead of OAuth)
+        let trimmedGemini = geminiAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedGemini.isEmpty {
+            geminiAPI.setAPIKey(trimmedGemini)
+            if !geminiModel.isEmpty {
+                geminiAPI.setModel(geminiModel)
+            }
+        }
+
+        // Claude key is already handled through bootstrap.providerToken -> anthropic in completeOneClickSetup()
+
+        // Set active provider
+        var state = ProviderStateStore.load()
+        state.activeProvider = provider
+        ProviderStateStore.save(state)
     }
 
     private var systemsStatusCard: some View {
@@ -535,6 +907,8 @@ struct SetupWizardView: View {
                 Spacer()
 
                 Button(action: {
+                    // Save provider keys before setup completes
+                    saveProviderKeys()
                     Task { await bootstrap.completeOneClickSetup() }
                 }) {
                     HStack(spacing: 8) {

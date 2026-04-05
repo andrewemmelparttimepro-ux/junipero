@@ -13,6 +13,9 @@ extension Color {
 
 struct ContentView: View {
     @EnvironmentObject var flowTab: FlowTabStore
+    @EnvironmentObject var execution: ExecutionService
+
+    private var isUnleashed: Bool { execution.accessMode.isUnleashed }
 
     var body: some View {
         ZStack {
@@ -50,6 +53,37 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.22), value: flowTab.showFlow)
+        // Unleashed mode: subtle red edge glow
+        .overlay(
+            Group {
+                if isUnleashed {
+                    RoundedRectangle(cornerRadius: 0)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.sithGlow.opacity(0.15),
+                                    Color.sithRed.opacity(0.05),
+                                    Color.clear,
+                                    Color.sithRed.opacity(0.05),
+                                    Color.sithGlow.opacity(0.15)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 2
+                        )
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+        )
+        .animation(.easeInOut(duration: 0.4), value: isUnleashed)
+        // Unleash confirmation dialog
+        .sheet(isPresented: $execution.showUnleashConfirmation) {
+            UnleashConfirmationView()
+                .environmentObject(execution)
+        }
     }
 }
 

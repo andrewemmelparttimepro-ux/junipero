@@ -151,9 +151,9 @@ struct GatewayWSConfig {
             }
         }
 
-        // Also check junipero config for baseURL override
-        let juniperoConfig = home.appendingPathComponent(".junipero/config.json")
-        if let data = try? Data(contentsOf: juniperoConfig),
+        // Also check thrawn config for baseURL override
+        let thrawnConfig = home.appendingPathComponent(".thrawn/config.json")
+        if let data = try? Data(contentsOf: thrawnConfig),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let url = json["baseURL"] as? String, !url.isEmpty {
             baseURL = url

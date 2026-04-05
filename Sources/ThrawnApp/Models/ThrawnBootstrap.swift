@@ -103,6 +103,7 @@ final class ThrawnBootstrap: ObservableObject {
     @Published var lastSupportBundlePath: String?
     @Published private(set) var stepStates: [SetupStep: StepState] = [:]
     @Published var liabilityMode: LiabilityMode = .idiot
+    @Published var accessMode: AccessMode = .restricted
     @Published var probationInteractionCount: Int = 0
     @Published var probationStatusText: String = "Probation active"
 
@@ -115,6 +116,8 @@ final class ThrawnBootstrap: ObservableObject {
 
     // Reference to the native API client for health checks
     private weak var anthropicClient: AnthropicClient?
+    private weak var geminiOAuthClient: GeminiOAuthClient?
+    private weak var openAIClient: OpenAIClient?
 
     var cogneeBadgeText: String {
         if cogneeHealthy {
@@ -160,6 +163,16 @@ final class ThrawnBootstrap: ObservableObject {
     /// Bind the shared AnthropicClient for health checks.
     func bindAnthropicClient(_ client: AnthropicClient) {
         self.anthropicClient = client
+    }
+
+    /// Bind the shared GeminiOAuthClient for health checks.
+    func bindGeminiOAuth(_ client: GeminiOAuthClient) {
+        self.geminiOAuthClient = client
+    }
+
+    /// Bind the shared OpenAI client for health checks.
+    func bindOpenAIClient(_ client: OpenAIClient) {
+        self.openAIClient = client
     }
 
     // MARK: - Startup
@@ -290,16 +303,41 @@ final class ThrawnBootstrap: ObservableObject {
     }
 
     func refreshRuntimeStatus() async {
-        // Check Anthropic API health
-        let apiConnected = anthropicClient?.connected ?? false
-        apiHealthy = apiConnected
+        // Check all providers in priority order from ProviderStateStore
+        let activeProvider = ProviderStateStore.load().activeProvider
 
-        if apiConnected {
-            statusText = "Thrawn online"
-        } else if anthropicClient?.apiKeyConfigured == true {
+        // Check Gemini OAuth
+        if geminiOAuthClient?.authenticated == true {
+            apiHealthy = true
+            statusText = activeProvider == .gemini ? "Thrawn online · Gemini" : "Thrawn online · Gemini (fallback)"
+            await refreshCogneeHealth()
+            return
+        }
+
+        // Check Anthropic
+        let anthropicConnected = anthropicClient?.connected ?? false
+        if anthropicConnected {
+            apiHealthy = true
+            statusText = activeProvider == .claude ? "Thrawn online · Claude" : "Thrawn online · Claude (fallback)"
+            await refreshCogneeHealth()
+            return
+        }
+
+        // Check OpenAI
+        let openAIConnected = openAIClient?.connected ?? false
+        if openAIConnected {
+            apiHealthy = true
+            statusText = activeProvider == .chatgpt ? "Thrawn online · ChatGPT" : "Thrawn online · ChatGPT (fallback)"
+            await refreshCogneeHealth()
+            return
+        }
+
+        // Check if any key is configured but connection failed
+        apiHealthy = false
+        if anthropicClient?.apiKeyConfigured == true || openAIClient?.apiKeyConfigured == true {
             statusText = "API unreachable — retrying"
         } else {
-            statusText = "No API key configured"
+            statusText = "No provider connected"
         }
 
         // Check Cognee (optional — HTTP health check only)
@@ -380,6 +418,14 @@ final class ThrawnBootstrap: ObservableObject {
         // API connectivity
         let apiOk = anthropicClient?.connected ?? false
         lines.append("API Connection: \(apiOk ? "Online ✓" : "Offline ✗")")
+
+        // Access mode
+        let prefs = ThrawnPreferencesStore.load()
+        lines.append("Access Mode: \(prefs.effectiveAccessMode.label)")
+        if prefs.effectiveAccessMode == .unleashed {
+            let shellOk = FileManager.default.isExecutableFile(atPath: "/bin/zsh")
+            lines.append("Shell Available: \(shellOk ? "Yes ✓" : "No ✗")")
+        }
 
         // Cognee
         lines.append("Cognee API: \(cogneeHealthy ? "Connected ✓" : "Not connected")")
@@ -512,6 +558,7 @@ final class ThrawnBootstrap: ObservableObject {
     private func syncPreferences() {
         let prefs = ThrawnPreferencesStore.load()
         liabilityMode = prefs.effectiveLiabilityMode
+        accessMode = prefs.effectiveAccessMode
         probationInteractionCount = prefs.interactionCount
         if prefs.probationComplete {
             probationStatusText = "Probation complete. Advanced mode unlocked."

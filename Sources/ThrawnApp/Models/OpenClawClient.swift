@@ -677,7 +677,7 @@ actor OpenClawClient {
 
     private static func readThrawnConfig() -> OpenClawConfig? {
         let path = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".junipero", isDirectory: true)
+            .appendingPathComponent(".thrawn", isDirectory: true)
             .appendingPathComponent("config.json")
             .path
         guard let data = FileManager.default.contents(atPath: path) else { return nil }

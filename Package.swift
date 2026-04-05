@@ -8,8 +8,8 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "JuniperoApp",
-            path: "Sources/JuniperoApp",
+            name: "ThrawnApp",
+            path: "Sources/ThrawnApp",
             resources: [
                 .copy("Resources/clock-reference-default.png"),
                 .copy("Resources/Assets.xcassets")

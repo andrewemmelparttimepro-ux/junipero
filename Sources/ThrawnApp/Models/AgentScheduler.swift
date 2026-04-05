@@ -8,7 +8,8 @@ import SwiftUI
 // sends the agent's heartbeat prompt to the Anthropic API via
 // an isolated conversation and tracks the result.
 //
-// App Store compliant — no Process(), no cron, no external dependencies.
+// When in UNLEASHED mode, agents can execute shell commands via
+// ExecutionService — creating a real agentic loop.
 
 struct AgentHeartbeatConfig: Identifiable, Codable {
     let id: String              // Agent ID: "r2d2", "quigon", etc.
@@ -30,7 +31,11 @@ final class AgentScheduler: ObservableObject {
     private var timerTask: Task<Void, Never>?
     private var activeRuns: [String: Task<Void, Never>] = [:]
     private weak var anthropicClient: AnthropicClient?
+    private weak var geminiClient: GeminiAPIClient?
+    private weak var geminiOAuth: GeminiOAuthClient?
+    private weak var openAIClient: OpenAIClient?
     private weak var roster: AgentRosterStore?
+    private weak var executionService: ExecutionService?
 
     private static let configPath = ThrawnPaths.appSupportDir
         .appendingPathComponent("agent-scheduler.json")
@@ -50,9 +55,15 @@ final class AgentScheduler: ObservableObject {
 
     // MARK: - Binding
 
-    func bind(client: AnthropicClient, roster: AgentRosterStore) {
+    func bind(client: AnthropicClient, roster: AgentRosterStore, execution: ExecutionService? = nil,
+              geminiClient: GeminiAPIClient? = nil, geminiOAuth: GeminiOAuthClient? = nil,
+              openAIClient: OpenAIClient? = nil) {
         self.anthropicClient = client
         self.roster = roster
+        self.executionService = execution
+        self.geminiClient = geminiClient
+        self.geminiOAuth = geminiOAuth
+        self.openAIClient = openAIClient
     }
 
     // MARK: - Start/Stop
@@ -110,7 +121,6 @@ final class AgentScheduler: ObservableObject {
     // MARK: - Execute Heartbeat
 
     private func runHeartbeat(for agent: AgentHeartbeatConfig) {
-        guard let client = anthropicClient else { return }
         guard !runningAgents.contains(agent.id) else { return }
 
         runningAgents.insert(agent.id)
@@ -133,18 +143,20 @@ final class AgentScheduler: ObservableObject {
                 return
             }
 
-            // Send to Anthropic API (isolated conversation — no history)
+            // Send to the active provider (isolated conversation — no history)
             var responseText = ""
             var completed = false
             var errorMsg: String?
 
+            let systemPrompt = "You are \(agent.name), a specialist AI agent. Execute your heartbeat instructions precisely. Work autonomously."
+            let sessionKey = "agent:heartbeat:\(agent.id)"
+
             // Use a semaphore-like pattern with continuation
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                client.send(
+                self.sendToActiveProvider(
                     text: prompt,
-                    history: [],
-                    systemPrompt: "You are \(agent.name), a specialist AI agent. Execute your heartbeat instructions precisely. Work autonomously.",
-                    sessionKey: "agent:heartbeat:\(agent.id)",
+                    systemPrompt: systemPrompt,
+                    sessionKey: sessionKey,
                     onDelta: { delta in
                         responseText += delta
                     },
@@ -172,6 +184,13 @@ final class AgentScheduler: ObservableObject {
 
                     // Write output to agent's output file
                     self.writeAgentOutput(agent: agent, response: responseText, durationMs: Int(duration * 1000))
+
+                    // Execute any shell commands from the response (unleashed mode only)
+                    if let exec = self.executionService, exec.accessMode.isUnleashed {
+                        Task {
+                            await self.executeToolCalls(from: responseText, agent: agent)
+                        }
+                    }
 
                     // Transition: working → review → idle
                     self.roster?.setState(id: agent.id, state: .review, detail: "Heartbeat complete")
@@ -225,9 +244,35 @@ final class AgentScheduler: ObservableObject {
 
         if sections.isEmpty { return "" }
 
+        // Access-mode aware preamble
+        let accessBlock: String
+        if let exec = executionService, exec.accessMode.isUnleashed {
+            accessBlock = """
+            
+            ACCESS MODE: UNLEASHED — You have FULL ACCESS to this computer.
+            You can execute shell commands by wrapping them in ```bash code fences.
+            Results will be fed back to you. Execute commands autonomously.
+            Available: file read/write, git, npm, python, brew, system utilities, network.
+            
+            When you need to run a command, output it like this:
+            ```bash
+            your-command-here
+            ```
+            
+            """
+        } else {
+            accessBlock = """
+            
+            ACCESS MODE: RESTRICTED — You can analyze, plan, and respond with text only.
+            You cannot execute commands or modify files directly.
+            Provide clear instructions for the user to execute manually.
+            
+            """
+        }
+
         let preamble = """
         You are \(agent.name), part of the NDAI multi-agent team.
-
+        \(accessBlock)
         On this heartbeat:
         1. Read your instructions below carefully
         2. Check the task board for tasks assigned to you
@@ -244,6 +289,141 @@ final class AgentScheduler: ObservableObject {
         """
 
         return preamble + sections.joined(separator: "\n\n---\n\n")
+    }
+
+    // MARK: - Provider-Aware Send
+
+    /// Route a send request to the active provider from ProviderStateStore.
+    /// Falls back through available providers if the active one isn't connected.
+    private func sendToActiveProvider(
+        text: String,
+        systemPrompt: String?,
+        sessionKey: String,
+        onDelta: @escaping (String) -> Void,
+        onComplete: @escaping (String, String?) -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        let activeProvider = ProviderStateStore.load().activeProvider
+
+        // Try active provider first
+        switch activeProvider {
+        case .gemini:
+            if let oauth = geminiOAuth, oauth.authenticated, let client = geminiClient {
+                client.send(text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                            onDelta: onDelta, onComplete: onComplete, onError: onError)
+                return
+            }
+        case .claude:
+            if let client = anthropicClient, client.apiKeyConfigured {
+                client.send(text: text, history: [], systemPrompt: systemPrompt, sessionKey: sessionKey,
+                            onDelta: onDelta, onComplete: onComplete, onError: onError)
+                return
+            }
+        case .chatgpt:
+            if let client = openAIClient, client.apiKeyConfigured {
+                client.send(text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                            onDelta: onDelta, onComplete: onComplete, onError: onError)
+                return
+            }
+        }
+
+        // Fallback: try any connected provider
+        if let oauth = geminiOAuth, oauth.authenticated, let client = geminiClient {
+            client.send(text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                        onDelta: onDelta, onComplete: onComplete, onError: onError)
+            return
+        }
+        if let client = anthropicClient, client.apiKeyConfigured {
+            client.send(text: text, history: [], systemPrompt: systemPrompt, sessionKey: sessionKey,
+                        onDelta: onDelta, onComplete: onComplete, onError: onError)
+            return
+        }
+        if let client = openAIClient, client.apiKeyConfigured {
+            client.send(text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                        onDelta: onDelta, onComplete: onComplete, onError: onError)
+            return
+        }
+
+        onError("No AI provider connected. Open Settings to configure a provider.")
+    }
+
+    // MARK: - Tool Call Extraction & Execution
+
+    /// Parse agent response for bash code fences and execute them.
+    private func executeToolCalls(from response: String, agent: AgentHeartbeatConfig) async {
+        guard let exec = executionService else { return }
+
+        let commands = Self.extractBashCommands(from: response)
+        guard !commands.isEmpty else { return }
+
+        await MainActor.run {
+            self.roster?.setState(id: agent.id, state: .working, detail: "Executing \(commands.count) command(s)…")
+        }
+
+        var results: [(command: String, result: ShellCommandResult)] = []
+
+        for command in commands {
+            let result = await exec.run(command, agentId: agent.id)
+            results.append((command, result))
+        }
+
+        // Build a follow-up message with execution results
+        var feedback = "## Command Execution Results\n\n"
+        for (i, entry) in results.enumerated() {
+            feedback += "### Command \(i + 1): `\(entry.command.prefix(80))`\n"
+            feedback += "Exit code: \(entry.result.exitCode)\n"
+            if !entry.result.stdout.isEmpty {
+                feedback += "```\n\(String(entry.result.stdout.prefix(2000)))\n```\n"
+            }
+            if !entry.result.stderr.isEmpty {
+                feedback += "Stderr: \(String(entry.result.stderr.prefix(500)))\n"
+            }
+            feedback += "\n"
+        }
+
+        // Send results back to the agent for a follow-up response
+        let systemPrompt = "You are \(agent.name). You just executed commands on the computer. Review the results and report status. If there were errors, explain what happened."
+        let sessionKey = "agent:toolresult:\(agent.id)"
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.sendToActiveProvider(
+                text: feedback,
+                systemPrompt: systemPrompt,
+                sessionKey: sessionKey,
+                onDelta: { _ in },
+                onComplete: { [weak self] response, _ in
+                    self?.writeAgentOutput(agent: agent, response: response, durationMs: 0)
+                    continuation.resume()
+                },
+                onError: { _ in
+                    continuation.resume()
+                }
+            )
+        }
+    }
+
+    /// Extract bash commands from ```bash code fences in agent response.
+    static func extractBashCommands(from text: String) -> [String] {
+        var commands: [String] = []
+        let pattern = "```(?:bash|shell|sh|exec)\\s*\\n([\\s\\S]*?)\\n```"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return commands
+        }
+
+        let range = NSRange(text.startIndex..., in: text)
+        let matches = regex.matches(in: text, options: [], range: range)
+
+        for match in matches {
+            if match.numberOfRanges > 1,
+               let cmdRange = Range(match.range(at: 1), in: text) {
+                let command = String(text[cmdRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !command.isEmpty {
+                    commands.append(command)
+                }
+            }
+        }
+
+        return commands
     }
 
     // MARK: - Write Agent Output

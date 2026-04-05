@@ -74,10 +74,21 @@ enum ThrawnPaths {
         }
         // Dev time: walk up from the executable to find the source tree
         let execURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+
+        // Walk up to 8 parent directories looking for an OpsBundle sibling
+        var cursor = execURL
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent("OpsBundle").standardized
+            if fm.fileExists(atPath: candidate.path) { return candidate }
+            let parent = cursor.deletingLastPathComponent()
+            if parent.path == cursor.path { break }
+            cursor = parent
+        }
+
+        // Known source-tree locations
         let candidates = [
-            // Running from Xcode — binary is deep in DerivedData
-            execURL.appendingPathComponent("../../../OpsBundle"),
-            // Source tree direct
+            home.appendingPathComponent("Documents/thrawn-console/OpsBundle"),
+            home.appendingPathComponent("Desktop/thrawn-console/OpsBundle"),
             home.appendingPathComponent("Desktop/NDAI/09-Projects/Active/Thrawn-Console/thrawn-console-src/OpsBundle"),
         ]
         for c in candidates {

@@ -1,24 +1,32 @@
-// MARK: - LEGACY — DO NOT USE IN NEW CODE
-// This file uses Process() and is NOT App Store compliant.
-// Kept only as a compile dependency for GatewayWebSocketClient (legacy fallback).
-// Will be removed once GatewayWebSocketClient is fully retired.
-
 import Foundation
 
-struct ShellCommandResult {
+// MARK: - Shell Command Result
+
+struct ShellCommandResult: Sendable {
     let exitCode: Int32
     let stdout: String
     let stderr: String
+
+    var succeeded: Bool { exitCode == 0 }
+
+    var isRestricted: Bool {
+        stderr.hasPrefix("[RESTRICTED]")
+    }
 }
 
-enum ShellCommand {
-    /// Runs a shell command without blocking Swift's cooperative thread pool.
-    ///
-    /// Uses GCD (DispatchQueue.global) instead of Task.detached so that
-    /// blocking `waitUntilExit()` calls don't starve the async executor.
-    /// Also reads stdout/stderr concurrently to prevent pipe-buffer deadlocks
-    /// on large outputs (e.g. chat.history with many messages).
-    static func run(_ command: String) async -> ShellCommandResult {
+// MARK: - Direct Execution Backend
+//
+// Uses Process() to run shell commands directly.
+// Used for notarized DMG distribution (non-App-Store builds).
+// For App Store builds, XPCExecutionBackend talks to the embedded helper instead.
+
+final class DirectExecutionBackend: ExecutionBackend {
+    func isAvailable() async -> Bool {
+        // Always available when running outside the sandbox
+        return FileManager.default.isExecutableFile(atPath: "/bin/zsh")
+    }
+
+    func execute(_ command: String) async -> ShellCommandResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
@@ -69,5 +77,19 @@ enum ShellCommand {
                 }
             }
         }
+    }
+}
+
+// MARK: - Legacy Bridge
+//
+// Maintains backward compatibility for existing callers that use
+// ShellCommand.run() directly (GatewayWSClient, etc.).
+// All new code should go through ExecutionService instead.
+
+enum ShellCommand {
+    /// Direct shell execution — bypasses the safety toggle.
+    /// Legacy callers only. New code must use ExecutionService.run().
+    static func run(_ command: String) async -> ShellCommandResult {
+        await DirectExecutionBackend().execute(command)
     }
 }
