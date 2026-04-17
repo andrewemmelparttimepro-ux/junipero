@@ -11,18 +11,21 @@ struct ThrawnApp: App {
     @StateObject private var flowTab = FlowTabStore()
     @StateObject private var screenCapture = ScreenCaptureStore()
 
-    // Native API + agent system (App Store compliant — no external processes)
-    @StateObject private var anthropic = AnthropicClient()
-    @StateObject private var geminiAPI = GeminiAPIClient()
-    @StateObject private var geminiOAuth = GeminiOAuthClient()
-    @StateObject private var openAI = OpenAIClient()
+    // LLM clients
+    @StateObject private var ollama = OllamaClient()
+    @StateObject private var openaiClient = OpenAIClient(model: ProviderRouter.premiumOpenAIModel)
     @StateObject private var scheduler = AgentScheduler()
     @StateObject private var dispatcher = TaskDispatcher()
     @StateObject private var execution = ExecutionService()
+    @StateObject private var objectiveStore = ObjectiveStore()
+    @StateObject private var handoffStore = HandoffStore()
+    @StateObject private var loadoutStore = StandardLoadoutStore()
+    @StateObject private var specStore = AgentSpecStore()
+    @StateObject private var rankEvaluator = RankEvaluator()
 
-    // Legacy gateway client — kept for backward compat during migration.
-    // Will be fully removed once all callers switch to native API clients.
-    @StateObject private var gatewayWS = GatewayWSClient()
+    // Voice + briefings (native AVSpeechSynthesizer stack)
+    @StateObject private var voiceService = VoiceService()
+    @StateObject private var briefingService = BriefingService()
 
     var body: some Scene {
         WindowGroup {
@@ -34,66 +37,79 @@ struct ThrawnApp: App {
                 .environmentObject(roster)
                 .environmentObject(nav)
                 .environmentObject(flowTab)
-                .environmentObject(gatewayWS)
-                .environmentObject(anthropic)
-                .environmentObject(geminiAPI)
-                .environmentObject(geminiOAuth)
-                .environmentObject(openAI)
+                .environmentObject(ollama)
+                .environmentObject(openaiClient)
                 .environmentObject(scheduler)
                 .environmentObject(dispatcher)
                 .environmentObject(screenCapture)
                 .environmentObject(execution)
+                .environmentObject(objectiveStore)
+                .environmentObject(handoffStore)
+                .environmentObject(loadoutStore)
+                .environmentObject(specStore)
+                .environmentObject(rankEvaluator)
+                .environmentObject(voiceService)
+                .environmentObject(briefingService)
                 .frame(minWidth: 1200, minHeight: 800)
-                .sheet(isPresented: $bootstrap.showSetup) {
-                    SetupWizardView()
-                        .environmentObject(bootstrap)
-                        .environmentObject(anthropic)
-                        .environmentObject(geminiOAuth)
-                        .environmentObject(openAI)
-                        .environmentObject(geminiAPI)
-                }
                 .task {
+                    // 0. Flight recorder setup — workspace dirs + log rotation
+                    SystemPromptBuilder.ensureWorkspaceDirs()
+                    FlightRecorder.rotateOldLogs()
+                    FlightRecorder.logEvent(category: "app", action: "launch", detail: "Thrawn Console started")
+
                     // 1. Deploy operational code from OpsBundle → data directory
                     ThrawnPaths.deployOpsBundle()
 
-                    // 2. Start native API connections
-                    anthropic.connect()
-                    threadStore.bindAnthropicClient(anthropic)
-                    bootstrap.bindAnthropicClient(anthropic)
-                    bootstrap.bindGeminiOAuth(geminiOAuth)
+                    // 2. Connect to Ollama (local LLM) + OpenAI (premium thread routing)
+                    ollama.connect()
+                    threadStore.bindOllamaClient(ollama)
+                    threadStore.bindOpenAIClient(openaiClient)
+                    threadStore.bindExecutionService(execution)
+                    bootstrap.bindOllamaClient(ollama)
 
-                    // 2b. Gemini: bind OAuth → API client, then connect
-                    geminiAPI.bindOAuth(geminiOAuth)
-                    geminiOAuth.loadStoredTokens()
-                    geminiAPI.connect()
-                    threadStore.bindGeminiClient(geminiAPI, oauth: geminiOAuth)
-
-                    // 2c. OpenAI: bind + connect
-                    openAI.connect()
-                    threadStore.bindOpenAIClient(openAI)
-                    bootstrap.bindOpenAIClient(openAI)
-
-                    // 3. Legacy gateway (fallback — will be removed)
-                    gatewayWS.connectAndPrewarm()
-                    threadStore.gatewayWS.connect()
-                    threadStore.gatewayWS.refreshNow()
-
-                    // 4. Agent roster + jewel tracking
+                    // 3. Agent roster + jewel tracking
                     roster.bindToThreadStore(threadStore)
-                    roster.bindToGateway(gatewayWS)
                     roster.bindToScheduler(scheduler)
 
+                    // 4. Agent specs + standard loadout → tool registry
+                    specStore.bind(loadout: loadoutStore)
+                    ToolRegistry.specStore = specStore
+                    AgentSpecStore.ensureKnowledgeDirs(for: specStore.specs)
+                    rankEvaluator.bind(specs: specStore)
+
+                    // 4a. Voice + briefings (native AVSpeech stack)
+                    voiceService.bind(specStore: specStore)
+
                     // 5. Native agent scheduler + task dispatcher
-                    scheduler.bind(client: anthropic, roster: roster, execution: execution,
-                                   geminiClient: geminiAPI, geminiOAuth: geminiOAuth,
-                                   openAIClient: openAI)
+                    handoffStore.bind(objectives: objectiveStore, rankEvaluator: rankEvaluator)
+                    scheduler.bind(
+                        ollamaClient: ollama,
+                        roster: roster,
+                        execution: execution,
+                        objectives: objectiveStore,
+                        handoffs: handoffStore,
+                        specs: specStore,
+                        openai: openaiClient
+                    )
+                    // BriefingService needs the scheduler for one-shot sends,
+                    // spec store for the play order, and voice for file render.
+                    briefingService.bind(
+                        specStore: specStore,
+                        scheduler: scheduler,
+                        voice: voiceService
+                    )
+                    // Scheduler also gets a back-ref so its tick loop can
+                    // auto-fire SOD at 07:00 and EOD at 19:00 local.
+                    scheduler.bind(briefing: briefingService)
+                    // Voice service: heartbeat open/close announcements
+                    scheduler.bind(voice: voiceService)
                     scheduler.start()
                     dispatcher.start()
 
-                    // 6. Execution service health
+                    // 5. Execution service health
                     await execution.checkBackendHealth()
 
-                    // 7. Bootstrap
+                    // 6. Bootstrap (auto-completes — no API key needed)
                     await bootstrap.startIfNeeded()
                 }
         }

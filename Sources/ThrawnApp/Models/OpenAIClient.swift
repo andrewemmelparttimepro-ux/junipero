@@ -17,7 +17,7 @@ final class OpenAIClient: ObservableObject {
     private var apiKey: String = ""
     private var model: String
     private var activeRuns: [String: Task<Void, Never>] = [:]
-    private let baseURL = "https://api.openai.com/v1"
+    private var baseURL = "https://api.openai.com/v1"
 
     init(model: String = AIProvider.chatgpt.defaultModel) {
         self.model = model
@@ -27,8 +27,28 @@ final class OpenAIClient: ObservableObject {
     // MARK: - Configuration
 
     private func loadKey() {
-        apiKey = KeychainHelper.read(service: "com.thrawn.openai", account: "api-key") ?? ""
-        apiKeyConfigured = !apiKey.isEmpty
+        // 1. Keychain (primary — written by setAPIKey or by the app itself)
+        if let key = KeychainHelper.read(service: "com.thrawn.openai", account: "api-key"), !key.isEmpty {
+            apiKey = key
+            apiKeyConfigured = true
+            return
+        }
+        // 2. File fallback — ~/Library/Application Support/Thrawn/openai-config.json
+        //    Lets CLI tools or external setup write the key without keychain ACL issues.
+        //    On first successful read, promotes the key to keychain and deletes the file.
+        let configURL = ThrawnPaths.appSupportDir.appendingPathComponent("openai-config.json")
+        if let data = try? Data(contentsOf: configURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let key = json["apiKey"], !key.isEmpty {
+            apiKey = key
+            apiKeyConfigured = true
+            // Promote to keychain so future launches skip the file
+            KeychainHelper.save(service: "com.thrawn.openai", account: "api-key", value: key)
+            try? FileManager.default.removeItem(at: configURL)
+            return
+        }
+        apiKey = ""
+        apiKeyConfigured = false
     }
 
     func setAPIKey(_ key: String) {
@@ -40,6 +60,11 @@ final class OpenAIClient: ObservableObject {
 
     func setModel(_ model: String) {
         self.model = model
+    }
+
+    func setBaseURL(_ url: String?) {
+        let trimmed = (url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.baseURL = trimmed.isEmpty ? "https://api.openai.com/v1" : trimmed
     }
 
     // MARK: - Connection

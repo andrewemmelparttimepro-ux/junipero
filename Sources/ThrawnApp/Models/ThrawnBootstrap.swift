@@ -114,10 +114,8 @@ final class ThrawnBootstrap: ObservableObject {
     private var monitorTask: Task<Void, Never>?
     private var preferencesObserver: NSObjectProtocol?
 
-    // Reference to the native API client for health checks
-    private weak var anthropicClient: AnthropicClient?
-    private weak var geminiOAuthClient: GeminiOAuthClient?
-    private weak var openAIClient: OpenAIClient?
+    // Reference to the Ollama client for health checks
+    private weak var ollamaClient: OllamaClient?
 
     var cogneeBadgeText: String {
         if cogneeHealthy {
@@ -160,19 +158,9 @@ final class ThrawnBootstrap: ObservableObject {
         }
     }
 
-    /// Bind the shared AnthropicClient for health checks.
-    func bindAnthropicClient(_ client: AnthropicClient) {
-        self.anthropicClient = client
-    }
-
-    /// Bind the shared GeminiOAuthClient for health checks.
-    func bindGeminiOAuth(_ client: GeminiOAuthClient) {
-        self.geminiOAuthClient = client
-    }
-
-    /// Bind the shared OpenAI client for health checks.
-    func bindOpenAIClient(_ client: OpenAIClient) {
-        self.openAIClient = client
+    /// Bind the shared OllamaClient for health checks.
+    func bindOllamaClient(_ client: OllamaClient) {
+        self.ollamaClient = client
     }
 
     // MARK: - Startup
@@ -183,32 +171,18 @@ final class ThrawnBootstrap: ObservableObject {
         try? FileManager.default.createDirectory(at: thrawnDir, withIntermediateDirectories: true)
         resetStepStates()
 
-        // Migrate: check for existing API key
-        setStep(.migrate, .running)
-        migrateConfigIfNeeded()
+        // Migrate: no-op for Ollama (no API keys to migrate)
         setStep(.migrate, .done)
 
-        if readSetupState()?.completed == true {
-            // Already set up — verify API connectivity
-            setStep(.runtime, .running)
-            await refreshRuntimeStatus()
-            setStep(.runtime, apiHealthy ? .done : .failed)
-            setStep(.fallback, .done)
-            setStep(.verify, apiHealthy ? .done : .failed)
-            showSetup = false
-        } else {
-            // Check if API key exists from prior migration
-            let config = AnthropicConfig.load()
-            if config.isConfigured {
-                // Key exists, auto-complete setup
-                writeSetupState(SetupState(completed: true, setupDate: Date()))
-                await refreshRuntimeStatus()
-                showSetup = false
-            } else {
-                statusText = "Setup required — enter your API key"
-                showSetup = true
-            }
-        }
+        // Auto-complete setup — Ollama doesn't need API keys
+        writeSetupState(SetupState(completed: true, setupDate: Date()))
+
+        setStep(.runtime, .running)
+        await refreshRuntimeStatus()
+        setStep(.runtime, apiHealthy ? .done : .failed)
+        setStep(.fallback, .done)
+        setStep(.verify, apiHealthy ? .done : .failed)
+        showSetup = false
 
         startRuntimeMonitor()
     }
@@ -219,41 +193,18 @@ final class ThrawnBootstrap: ObservableObject {
         guard !isWorking else { return }
         isWorking = true
         errorText = nil
-        statusText = "Connecting to Anthropic API…"
+        statusText = "Connecting to Ollama…"
         resetStepStates()
 
-        // Step 1: Migrate
-        setStep(.migrate, .running)
-        migrateConfigIfNeeded()
+        // Step 1: Migrate (no-op for Ollama)
         setStep(.migrate, .done)
 
-        // Step 2: Save API key & verify connection
+        // Step 2: Verify Ollama connectivity
         setStep(.runtime, .running)
-
-        // If user entered a provider token, save it as the Anthropic API key
-        let trimmedToken = providerToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedToken.isEmpty {
-            anthropicClient?.setAPIKey(trimmedToken)
-        }
-
-        // Set model if specified
-        let trimmedModel = providerModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedModel.isEmpty {
-            let cleanModel = trimmedModel.replacingOccurrences(of: "anthropic/", with: "")
-            anthropicClient?.setModel(cleanModel)
-        }
-
-        // Verify connectivity
-        anthropicClient?.refreshNow()
-        // Wait up to 6 seconds for connection check
-        for _ in 0..<60 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            if anthropicClient?.connected == true { break }
-        }
-
-        apiHealthy = anthropicClient?.connected ?? false
+        await ollamaClient?.refreshConnectionStatus()
+        apiHealthy = ollamaClient?.connected ?? false
         setStep(.runtime, apiHealthy ? .done : .failed)
-        setStep(.fallback, .done) // No fallback needed with native API
+        setStep(.fallback, .done)
 
         // Step 3: Save config
         setStep(.save, .running)
@@ -270,9 +221,9 @@ final class ThrawnBootstrap: ObservableObject {
         isWorking = false
 
         if !apiHealthy {
-            errorText = "Could not connect to Anthropic API. Check your API key."
+            errorText = "Could not connect to Ollama. Make sure Ollama is running on localhost:11434."
         } else {
-            statusText = "Thrawn online"
+            statusText = "Thrawn online · Ollama"
         }
     }
 
@@ -303,41 +254,27 @@ final class ThrawnBootstrap: ObservableObject {
     }
 
     func refreshRuntimeStatus() async {
-        // Check all providers in priority order from ProviderStateStore
-        let activeProvider = ProviderStateStore.load().activeProvider
+        // Check Ollama connectivity
+        let ollamaConnected = ollamaClient?.connected ?? false
 
-        // Check Gemini OAuth
-        if geminiOAuthClient?.authenticated == true {
+        if ollamaConnected {
             apiHealthy = true
-            statusText = activeProvider == .gemini ? "Thrawn online · Gemini" : "Thrawn online · Gemini (fallback)"
-            await refreshCogneeHealth()
-            return
-        }
-
-        // Check Anthropic
-        let anthropicConnected = anthropicClient?.connected ?? false
-        if anthropicConnected {
-            apiHealthy = true
-            statusText = activeProvider == .claude ? "Thrawn online · Claude" : "Thrawn online · Claude (fallback)"
-            await refreshCogneeHealth()
-            return
-        }
-
-        // Check OpenAI
-        let openAIConnected = openAIClient?.connected ?? false
-        if openAIConnected {
-            apiHealthy = true
-            statusText = activeProvider == .chatgpt ? "Thrawn online · ChatGPT" : "Thrawn online · ChatGPT (fallback)"
-            await refreshCogneeHealth()
-            return
-        }
-
-        // Check if any key is configured but connection failed
-        apiHealthy = false
-        if anthropicClient?.apiKeyConfigured == true || openAIClient?.apiKeyConfigured == true {
-            statusText = "API unreachable — retrying"
+            let model = ollamaClient?.selectedModel ?? "unknown"
+            statusText = "Thrawn online · Ollama (\(model))"
+            ollamaHealthy = true
         } else {
-            statusText = "No provider connected"
+            apiHealthy = false
+            ollamaHealthy = false
+            // Try refreshing Ollama connection
+            await ollamaClient?.refreshConnectionStatus()
+            if ollamaClient?.connected == true {
+                apiHealthy = true
+                ollamaHealthy = true
+                let model = ollamaClient?.selectedModel ?? "unknown"
+                statusText = "Thrawn online · Ollama (\(model))"
+            } else {
+                statusText = "Ollama not running — start Ollama on localhost:11434"
+            }
         }
 
         // Check Cognee (optional — HTTP health check only)
@@ -415,9 +352,9 @@ final class ThrawnBootstrap: ObservableObject {
         lines.append("API Key: \(config.isConfigured ? "Configured ✓" : "MISSING ✗")")
         lines.append("Model: \(config.model)")
 
-        // API connectivity
-        let apiOk = anthropicClient?.connected ?? false
-        lines.append("API Connection: \(apiOk ? "Online ✓" : "Offline ✗")")
+        // Ollama connectivity
+        let apiOk = ollamaClient?.connected ?? false
+        lines.append("Ollama Connection: \(apiOk ? "Online ✓" : "Offline ✗")")
 
         // Access mode
         let prefs = ThrawnPreferencesStore.load()
@@ -488,27 +425,7 @@ final class ThrawnBootstrap: ObservableObject {
     // MARK: - Config Persistence
 
     private func migrateConfigIfNeeded() {
-        // Check for old OpenClaw token and migrate to Anthropic keychain
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let authPath = home.appendingPathComponent(".openclaw/auth.json")
-        guard let data = try? Data(contentsOf: authPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let profiles = json["profiles"] as? [String: [String: Any]] else { return }
-
-        for (_, profile) in profiles {
-            if let token = profile["token"] as? String, !token.isEmpty {
-                // Check if we already have an API key
-                let existing = KeychainHelper.read(service: "com.thrawn.anthropic", account: "api-key")
-                if existing == nil || existing?.isEmpty == true {
-                    // Looks like an Anthropic key?
-                    if token.hasPrefix("sk-ant-") {
-                        KeychainHelper.save(service: "com.thrawn.anthropic", account: "api-key", value: token)
-                        anthropicClient?.reloadConfig()
-                    }
-                }
-                break
-            }
-        }
+        // No-op for Ollama mode — no API keys to migrate
     }
 
     private struct ThrawnConfig: Codable {

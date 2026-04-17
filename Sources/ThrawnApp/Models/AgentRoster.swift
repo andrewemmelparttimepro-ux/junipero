@@ -86,13 +86,16 @@ final class AgentRosterStore: ObservableObject {
         AgentStatus(id: "c3po",   name: "C-3PO",             role: "Data",            state: .idle, detail: "Schema and API standby",     sessionKey: "agent:specialist:c3po"),
         AgentStatus(id: "quigon", name: "Qui-Gon",           role: "Research",        state: .idle, detail: "Research standby",            sessionKey: "agent:specialist:quigon"),
         AgentStatus(id: "lando",  name: "Lando Calrissian",  role: "Marketing & Copy",state: .idle, detail: "Copy standby",               sessionKey: "agent:specialist:lando"),
-        AgentStatus(id: "boba",   name: "Boba Fett",         role: "QA & Recon",      state: .idle, detail: "Validation queue clear",     sessionKey: "agent:specialist:boba")
+        AgentStatus(id: "boba",   name: "Boba Fett",         role: "QA & Recon",      state: .idle, detail: "Validation queue clear",     sessionKey: "agent:specialist:boba"),
+        AgentStatus(id: "bart",   name: "Bart",              role: "Research V2",     state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:bart"),
+        AgentStatus(id: "hunter", name: "Hunter",            role: "Lead Gen & OSINT",state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:hunter"),
+        AgentStatus(id: "alborland", name: "Al Borland",     role: "Life Ops",        state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:alborland"),
     ]
 
     // Track which agents have active in-flight requests
     private var activeAgentSessions: Set<String> = []
     private var threadStoreObserver: Any?
-    private weak var gatewayClient: GatewayWSClient?
+    // Gateway client removed — Ollama only
 
     /// Maps cron job UUID → agent ID (e.g. "bd261208-..." → "r2d2")
     /// Built from ~/.openclaw/cron/jobs.json so we can match cron session keys.
@@ -105,10 +108,6 @@ final class AgentRosterStore: ObservableObject {
 
     /// Reference to the native agent scheduler for detecting active agents.
     private weak var agentScheduler: AgentScheduler?
-
-    func bindToGateway(_ client: GatewayWSClient) {
-        gatewayClient = client
-    }
 
     func bindToScheduler(_ scheduler: AgentScheduler) {
         self.agentScheduler = scheduler
@@ -289,40 +288,8 @@ final class AgentRosterStore: ObservableObject {
         pollCount += 1
         if pollCount % 8 == 0 { loadCronJobMap() }
 
-        guard let client = gatewayClient else { return }
-        let sessions = await client.sessionsList()
-
-        // Build set of currently active agent IDs from live sessions
+        // Build set of currently active agent IDs
         var activeNow: Set<String> = []
-        for session in sessions {
-            // Match by label (preferred: Thrawn sets label="r2d2" when spawning R2)
-            if let label = session.label?.lowercased(), !label.isEmpty {
-                let agentId = label.replacingOccurrences(of: "-", with: "")
-                if agents.contains(where: { $0.id == agentId }) {
-                    activeNow.insert(agentId)
-                }
-            }
-
-            let key = session.key
-
-            // Match cron sessions: key pattern "agent:main:cron:<jobId>:run:<runId>"
-            if key.hasPrefix("agent:main:cron:") {
-                let afterPrefix = String(key.dropFirst("agent:main:cron:".count))
-                if let runRange = afterPrefix.range(of: ":run:") {
-                    let jobId = String(afterPrefix[afterPrefix.startIndex..<runRange.lowerBound])
-                    if let agentId = cronJobAgentMap[jobId] {
-                        activeNow.insert(agentId)
-                    }
-                }
-            }
-
-            // Also match by session key pattern (e.g. "agent:specialist:r2d2")
-            for agent in agents where agent.id != "thrawn" {
-                if key.lowercased().contains(agent.id) {
-                    activeNow.insert(agent.id)
-                }
-            }
-        }
 
         // Native scheduler: detect agents currently running heartbeats
         if let scheduler = agentScheduler {

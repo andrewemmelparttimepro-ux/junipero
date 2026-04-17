@@ -15,40 +15,36 @@ final class PrimarySessionStore: ObservableObject {
     @Published var recallContext: String?
 
     let sessionKey: String
+    /// Agent ID for specialist chats. Nil = Thrawn (main chat).
+    let agentId: String?
+    private var ollamaClient: OllamaClient?
+    private var openaiClient: OpenAIClient?
     private var anthropicClient: AnthropicClient?
-    private var geminiClient: GeminiAPIClient?
-    private var geminiOAuth: GeminiOAuthClient?
-    private var openAIClient: OpenAIClient?
-    private var wsClient: GatewayWSClient?  // Legacy fallback
     private weak var rosterStore: AgentRosterStore?
     private weak var screenCaptureStore: ScreenCaptureStore?
+    private weak var executionService: ExecutionService?
     let cogneeClient = CogneeClient()
-    /// Conversation history for the Anthropic API (messages sent in this session)
-    private var conversationHistory: [AnthropicMessage] = []
-    /// Conversation history for the Gemini API
-    private var geminiHistory: [GeminiMessage] = []
-    /// Conversation history for the OpenAI API
-    private var openAIHistory: [OpenAIMessage] = []
+    /// Conversation history for Ollama
+    private var conversationHistory: [OllamaMessage] = []
+    /// Max tool execution rounds per user message (prevent infinite loops)
+    private let maxToolRounds = 8
 
-    init(sessionKey: String = "main") {
+    init(sessionKey: String = "main", agentId: String? = nil) {
         self.sessionKey = sessionKey
+        self.agentId = agentId
+        SystemPromptBuilder.ensureWorkspaceDirs()
     }
 
-    func bind(anthropicClient: AnthropicClient) {
-        self.anthropicClient = anthropicClient
+    func bind(ollamaClient: OllamaClient) {
+        self.ollamaClient = ollamaClient
     }
 
-    func bind(geminiClient: GeminiAPIClient, oauthClient: GeminiOAuthClient) {
-        self.geminiClient = geminiClient
-        self.geminiOAuth = oauthClient
+    func bindOpenAI(_ client: OpenAIClient) {
+        self.openaiClient = client
     }
 
-    func bind(wsClient: GatewayWSClient) {
-        self.wsClient = wsClient
-    }
-
-    func bind(openAIClient: OpenAIClient) {
-        self.openAIClient = openAIClient
+    func bindAnthropic(_ client: AnthropicClient) {
+        self.anthropicClient = client
     }
 
     func bindRoster(_ roster: AgentRosterStore) {
@@ -59,64 +55,22 @@ final class PrimarySessionStore: ObservableObject {
         self.screenCaptureStore = store
     }
 
+    func bindExecution(_ service: ExecutionService) {
+        self.executionService = service
+    }
+
     func connect() {
-        // Check Gemini OAuth or API key
-        if let oAuth = geminiOAuth, oAuth.authenticated {
+        if let client = ollamaClient, client.connected {
             isConnected = true
             return
         }
-        if let gc = geminiClient, gc.apiKeyConfigured {
-            isConnected = true
-            return
-        }
-
-        // Native Anthropic API
-        if let client = anthropicClient, client.apiKeyConfigured {
-            isConnected = true
-            return
-        }
-
-        // Legacy gateway fallback
-        guard let wsClient else {
-            isConnected = false
-            return
-        }
-        if !wsClient.connected {
-            wsClient.connect()
-            wsClient.refreshNow()
-        }
+        // Wait for Ollama to become available
         Task {
             for _ in 0..<40 {
                 try? await Task.sleep(nanoseconds: 150_000_000)
-                if wsClient.connected { break }
+                if ollamaClient?.connected == true { break }
             }
-            isConnected = wsClient.connected
-            if isConnected { loadHistory() }
-        }
-    }
-
-    func loadHistory() {
-        // Native mode: no external history to load (conversations are in-memory)
-        guard anthropicClient == nil || !(anthropicClient?.apiKeyConfigured ?? false) else { return }
-
-        // Legacy gateway fallback
-        guard let wsClient else { return }
-        wsClient.fetchHistory(sessionKey: sessionKey) { [weak self] entries in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.messages = entries.compactMap { entry in
-                    let text = entry.resolvedContent
-                    let images = entry.resolvedImages
-                    guard !text.isEmpty || !images.isEmpty else { return nil }
-                    return PrimaryMessage(
-                        role: entry.role == "assistant" ? .assistant : .user,
-                        text: text,
-                        model: entry.model,
-                        timestamp: Self.parseDate(entry.timestamp),
-                        images: images
-                    )
-                }
-            }
+            isConnected = ollamaClient?.connected ?? false
         }
     }
 
@@ -131,67 +85,68 @@ final class PrimarySessionStore: ObservableObject {
         streamingText = ""
         errorText = nil
 
-        // Route based on active provider
-        let activeProvider = ProviderStateStore.load().activeProvider
-
-        switch activeProvider {
-        case .gemini:
-            if geminiClient != nil, (geminiOAuth?.authenticated == true || geminiClient?.apiKeyConfigured == true) {
-                Task { await doSendGemini(trimmed) }
+        // Resolve which backend to use based on agent's tier
+        let route = resolveRoute()
+        switch route.backend {
+        case .openai:
+            guard let openai = openaiClient, openai.apiKeyConfigured else {
+                errorText = "OpenAI API key not configured. Add it in Settings."
+                isLoading = false
                 return
             }
-        case .claude:
-            if let client = anthropicClient, client.apiKeyConfigured {
-                Task { await doSendNative(trimmed) }
+        case .anthropic:
+            guard let anthropic = anthropicClient, anthropic.apiKeyConfigured else {
+                errorText = "Anthropic API key not configured. Add it in Settings."
+                isLoading = false
                 return
             }
-        case .chatgpt:
-            if let client = openAIClient, client.apiKeyConfigured {
-                Task { await doSendOpenAI(trimmed) }
+        case .ollama:
+            guard ollamaClient != nil, ollamaClient?.connected == true else {
+                errorText = "Ollama not connected. Make sure Ollama is running on localhost:11434."
+                isLoading = false
                 return
             }
         }
 
-        // Fallback: try any connected provider
-        if geminiClient != nil, (geminiOAuth?.authenticated == true || geminiClient?.apiKeyConfigured == true) {
-            Task { await doSendGemini(trimmed) }
-            return
-        }
-        if let client = anthropicClient, client.apiKeyConfigured {
-            Task { await doSendNative(trimmed) }
-            return
-        }
-        if let client = openAIClient, client.apiKeyConfigured {
-            Task { await doSendOpenAI(trimmed) }
-            return
-        }
+        Task { await doSendRouted(trimmed, route: route) }
+    }
 
-        // Fallback: legacy gateway
-        guard let wsClient else {
-            errorText = "No provider connected. Open Settings to sign in with Google or add an API key."
-            isLoading = false
-            return
+    // MARK: - Route Resolution
+    //
+    // For specialist agent chats, check their spec tier and resolve to a
+    // concrete backend. Main chat / Thrawn always goes to Ollama.
+
+    private func resolveRoute() -> RoutedProvider {
+        guard let agentId,
+              let specStore = ToolRegistry.specStore else {
+            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: false)
         }
-        if !wsClient.connected {
-            wsClient.connect()
-            wsClient.refreshNow()
-            Task {
-                for _ in 0..<40 {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    if wsClient.connected { break }
-                }
-                await self.doSendLegacy(trimmed)
+        let tier = specStore.resolvedTier(forAgentId: agentId)
+        // Build a lightweight router check
+        switch tier {
+        case .local:
+            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: false)
+        case .cheap:
+            if let a = anthropicClient, a.apiKeyConfigured {
+                return RoutedProvider(backend: .anthropic, model: ProviderRouter.cheapAnthropicModel, isFallback: false)
             }
-        } else {
-            Task { await doSendLegacy(trimmed) }
+            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: true)
+        case .premium:
+            if let o = openaiClient, o.apiKeyConfigured {
+                return RoutedProvider(backend: .openai, model: ProviderRouter.premiumOpenAIModel, isFallback: false)
+            }
+            if let a = anthropicClient, a.apiKeyConfigured {
+                return RoutedProvider(backend: .anthropic, model: ProviderRouter.premiumAnthropicModel, isFallback: true)
+            }
+            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: true)
         }
     }
 
-    // MARK: - Native Anthropic Send (Primary)
+    // MARK: - Routed Send (with tool execution loop)
 
-    private func doSendNative(_ text: String) async {
-        guard let client = anthropicClient else {
-            errorText = "API client not available."
+    private func doSendRouted(_ text: String, route: RoutedProvider) async {
+        guard ollamaClient != nil || openaiClient != nil || anthropicClient != nil else {
+            errorText = "No LLM client available."
             isLoading = false
             return
         }
@@ -212,20 +167,178 @@ final class PrimarySessionStore: ObservableObject {
 
         // Light up jewel
         rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
+
+        // Build system prompt — agent-specific for specialist chats,
+        // Thrawn identity for the main command session.
+        let accessMode = executionService?.accessMode ?? .restricted
+        let modelLabel: String
+        switch route.backend {
+        case .ollama:  modelLabel = "Ollama (\(ollamaClient?.selectedModel ?? ProviderRouter.localModel))"
+        case .openai:  modelLabel = "OpenAI (\(route.model))"
+        case .anthropic: modelLabel = "Anthropic (\(route.model))"
+        }
+        let systemPrompt: String
+        if let agentId {
+            systemPrompt = SystemPromptBuilder.buildAgentPrompt(
+                agentId: agentId,
+                accessMode: accessMode,
+                modelLabel: modelLabel
+            )
+        } else {
+            systemPrompt = SystemPromptBuilder.buildMainPrompt(
+                accessMode: accessMode,
+                modelLabel: modelLabel
+            )
+        }
 
         // Track in conversation history
-        conversationHistory.append(AnthropicMessage(role: "user", text: finalText))
+        conversationHistory.append(OllamaMessage(role: "user", text: finalText))
 
-        // Build history (all but the last user message, which goes as `text`)
-        let history = conversationHistory.count > 1 ? Array(conversationHistory.dropLast()) : []
+        // === ReAct Loop: send → get response → extract tools → execute → feed back → repeat ===
+        var currentText = finalText
+        var currentImage = imagePayload
+        var toolRound = 0
 
+        while toolRound < maxToolRounds {
+            let history = conversationHistory.count > 1 ? Array(conversationHistory.dropLast()) : []
+
+            // Send to the resolved backend and wait for full response
+            let response: SendResult
+            switch route.backend {
+            case .openai:
+                response = await sendAndWaitOpenAI(
+                    text: currentText,
+                    history: history,
+                    systemPrompt: systemPrompt
+                )
+            case .anthropic:
+                response = await sendAndWaitAnthropic(
+                    text: currentText,
+                    history: history,
+                    systemPrompt: systemPrompt
+                )
+            case .ollama:
+                response = await sendAndWait(
+                    client: ollamaClient!,
+                    text: currentText,
+                    imageData: currentImage,
+                    history: history,
+                    systemPrompt: systemPrompt
+                )
+            }
+
+            // Clear image after first round
+            currentImage = nil
+
+            switch response {
+            case .success(let text, let model):
+                // Add assistant response to history
+                conversationHistory.append(OllamaMessage(role: "assistant", text: text))
+
+                // Show the response in the UI
+                messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
+
+                // Extract bash commands from the response
+                let commands = AgentScheduler.extractBashCommands(from: text)
+
+                // If no commands or restricted mode, we're done
+                guard !commands.isEmpty, let exec = executionService, exec.accessMode.isUnleashed else {
+                    isLoading = false
+                    isStreaming = false
+                    streamingText = ""
+                    rosterStore?.markSessionComplete(sessionKey, detail: "Response received")
+                    return
+                }
+
+                // Execute commands and collect results
+                var toolResults: [String] = []
+                for command in commands {
+                    rosterStore?.markSessionActive(sessionKey, detail: "Executing: \(String(command.prefix(40)))…")
+
+                    let result = await exec.run(command, agentId: "thrawn")
+
+                    var resultBlock = "$ \(command)\n"
+                    if !result.stdout.isEmpty {
+                        resultBlock += result.stdout
+                    }
+                    if !result.stderr.isEmpty {
+                        resultBlock += (result.stdout.isEmpty ? "" : "\n") + "[stderr] \(result.stderr)"
+                    }
+                    resultBlock += "\n[exit code: \(result.exitCode)]"
+                    toolResults.append(resultBlock)
+                }
+
+                // Show tool output in the UI
+                let toolOutputText = toolResults.joined(separator: "\n\n")
+                messages.append(PrimaryMessage(role: .user, text: "```\n\(toolOutputText)\n```", model: nil))
+
+                // Feed tool results back to the model as the next user message
+                let feedbackText = """
+                [TOOL EXECUTION RESULTS]
+                The following commands were executed on the host system:
+
+                \(toolOutputText)
+
+                [END TOOL RESULTS]
+                Continue with the task. If more commands are needed, output them in ```bash fences. \
+                If the task is complete, summarize what was done.
+                """
+
+                conversationHistory.append(OllamaMessage(role: "user", text: feedbackText))
+                currentText = feedbackText
+                toolRound += 1
+
+                // Brief pause between rounds
+                try? await Task.sleep(nanoseconds: 200_000_000)
+
+            case .failure(let error):
+                // Remove the failed user message from history
+                if conversationHistory.last?.role == "user" {
+                    conversationHistory.removeLast()
+                }
+                errorText = error
+                isLoading = false
+                isStreaming = false
+                streamingText = ""
+                rosterStore?.markSessionError(sessionKey, detail: error)
+                return
+            }
+        }
+
+        // Hit max tool rounds
+        messages.append(PrimaryMessage(
+            role: .assistant,
+            text: "[Tool execution limit reached (\(maxToolRounds) rounds). Pausing for Commander input.]",
+            model: nil
+        ))
+        isLoading = false
+        isStreaming = false
+        streamingText = ""
+    }
+
+    // MARK: - Send and Wait Helper
+
+    private enum SendResult {
+        case success(String, String?)
+        case failure(String)
+    }
+
+    private func sendAndWait(
+        client: OllamaClient,
+        text: String,
+        imageData: Data?,
+        history: [OllamaMessage],
+        systemPrompt: String
+    ) async -> SendResult {
         await withCheckedContinuation { continuation in
             var resumed = false
+            self.streamingText = ""
+
             client.send(
-                text: finalText,
-                imageData: imagePayload,
+                text: text,
+                imageData: imageData,
                 history: history,
-                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                systemPrompt: systemPrompt,
                 sessionKey: sessionKey,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
@@ -238,73 +351,39 @@ final class PrimarySessionStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         let text = finalText.isEmpty ? self.streamingText : finalText
-                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
-                        self.conversationHistory.append(AnthropicMessage(role: "assistant", text: text))
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .success(text, model)) }
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        // Remove the failed user message from history
-                        if self.conversationHistory.last?.role == "user" {
-                            self.conversationHistory.removeLast()
-                        }
-                        self.errorText = error
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .failure(error)) }
                     }
                 }
             )
         }
     }
 
-    // MARK: - Gemini Send (Primary when signed in with Google)
+    // MARK: - OpenAI Send and Wait
 
-    private func doSendGemini(_ text: String) async {
-        guard let client = geminiClient else {
-            errorText = "Gemini client not available."
-            isLoading = false
-            return
-        }
-
-        // Cognee memory recall (optional enhancement)
-        var finalText = text
-        if recallEnabled {
-            recallContext = nil
-            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
-                recallContext = context
-                finalText = "[Memory Recall]\n\(context)\n\n[User Message]\n\(text)"
-            }
-        }
-
-        // Screenshot attachment
-        let imagePayload = screenCaptureStore?.pendingScreenshot
-        screenCaptureStore?.clear()
-
-        // Light up jewel
-        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
-
-        // Track in Gemini history
-        geminiHistory.append(GeminiMessage(role: "user", text: finalText))
-
-        // Build history (all but the last user message)
-        let history = geminiHistory.count > 1 ? Array(geminiHistory.dropLast()) : []
-
-        await withCheckedContinuation { continuation in
+    private func sendAndWaitOpenAI(
+        text: String,
+        history: [OllamaMessage],
+        systemPrompt: String
+    ) async -> SendResult {
+        guard let client = openaiClient else { return .failure("OpenAI client not available.") }
+        let openaiHistory = history.map { OpenAIMessage(role: $0.role, text: $0.content) }
+        return await withCheckedContinuation { continuation in
             var resumed = false
+            self.streamingText = ""
             client.send(
-                text: finalText,
-                imageData: imagePayload,
-                history: history,
-                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                text: text,
+                history: openaiHistory,
+                systemPrompt: systemPrompt,
                 sessionKey: sessionKey,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
@@ -317,73 +396,41 @@ final class PrimarySessionStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         let text = finalText.isEmpty ? self.streamingText : finalText
-                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
-                        self.geminiHistory.append(GeminiMessage(role: "model", text: text))
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .success(text, model ?? ProviderRouter.premiumOpenAIModel)) }
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        // Remove the failed user message from history
-                        if self.geminiHistory.last?.role == "user" {
-                            self.geminiHistory.removeLast()
-                        }
-                        self.errorText = error
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .failure(error)) }
                     }
                 }
             )
         }
     }
 
-    // MARK: - OpenAI Send
+    // MARK: - Anthropic Send and Wait
 
-    private func doSendOpenAI(_ text: String) async {
-        guard let client = openAIClient else {
-            errorText = "OpenAI client not available."
-            isLoading = false
-            return
+    private func sendAndWaitAnthropic(
+        text: String,
+        history: [OllamaMessage],
+        systemPrompt: String
+    ) async -> SendResult {
+        guard let client = anthropicClient else { return .failure("Anthropic client not available.") }
+        let anthropicHistory = history.map { msg in
+            AnthropicMessage(role: msg.role, content: [AnthropicContentBlock(type: "text", text: msg.content)])
         }
-
-        // Cognee memory recall (optional enhancement)
-        var finalText = text
-        if recallEnabled {
-            recallContext = nil
-            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
-                recallContext = context
-                finalText = "[Memory Recall]\n\(context)\n\n[User Message]\n\(text)"
-            }
-        }
-
-        // Screenshot attachment
-        let imagePayload = screenCaptureStore?.pendingScreenshot
-        screenCaptureStore?.clear()
-
-        // Light up jewel
-        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
-
-        // Track in OpenAI history
-        openAIHistory.append(OpenAIMessage(role: "user", text: finalText))
-
-        // Build history (all but the last user message)
-        let history = openAIHistory.count > 1 ? Array(openAIHistory.dropLast()) : []
-
-        await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             var resumed = false
+            self.streamingText = ""
             client.send(
-                text: finalText,
-                imageData: imagePayload,
-                history: history,
-                systemPrompt: "You are Thrawn, a strategic AI command agent. You serve the user directly. Be precise, thorough, and proactive.",
+                text: text,
+                history: anthropicHistory,
+                systemPrompt: systemPrompt,
                 sessionKey: sessionKey,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
@@ -396,90 +443,17 @@ final class PrimarySessionStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         let text = finalText.isEmpty ? self.streamingText : finalText
-                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
-                        self.openAIHistory.append(OpenAIMessage(role: "assistant", text: text))
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .success(text, model ?? "anthropic")) }
                     }
                 },
                 onError: { [weak self] error in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        // Remove the failed user message from history
-                        if self.openAIHistory.last?.role == "user" {
-                            self.openAIHistory.removeLast()
-                        }
-                        self.errorText = error
-                        self.isLoading = false
                         self.isStreaming = false
                         self.streamingText = ""
-                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
-                        if !resumed { resumed = true; continuation.resume() }
-                    }
-                }
-            )
-        }
-    }
-
-    // MARK: - Legacy Gateway Send (Fallback)
-
-    private func doSendLegacy(_ text: String) async {
-        guard let wsClient else {
-            errorText = "Gateway client is not ready yet."
-            isLoading = false
-            return
-        }
-
-        var finalText = text
-        if recallEnabled {
-            recallContext = nil
-            if let context = await cogneeClient.recall(query: text, maxResults: 5) {
-                recallContext = context
-                finalText = "[Memory Recall — the following context was retrieved from Cognee knowledge graph]\n\(context)\n\n[User Message]\n\(text)"
-            }
-        }
-
-        let imagePayload = screenCaptureStore?.pendingScreenshot
-        screenCaptureStore?.clear()
-        rosterStore?.markSessionActive(sessionKey, detail: "Processing request…")
-
-        await withCheckedContinuation { continuation in
-            var resumed = false
-            wsClient.send(
-                text: finalText,
-                imageData: imagePayload,
-                sessionKey: sessionKey,
-                onDelta: { [weak self] delta in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.isStreaming = true
-                        self.streamingText += delta
-                    }
-                },
-                onComplete: { [weak self] finalText, model in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let text = finalText.isEmpty ? self.streamingText : finalText
-                        self.messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
-                        self.isLoading = false
-                        self.isStreaming = false
-                        self.streamingText = ""
-                        self.rosterStore?.markSessionComplete(self.sessionKey, detail: "Response received")
-                        if !resumed { resumed = true; continuation.resume() }
-                    }
-                },
-                onError: { [weak self] error in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.errorText = error
-                        self.isLoading = false
-                        self.isStreaming = false
-                        self.streamingText = ""
-                        self.rosterStore?.markSessionError(self.sessionKey, detail: error)
-                        if !resumed { resumed = true; continuation.resume() }
+                        if !resumed { resumed = true; continuation.resume(returning: .failure(error)) }
                     }
                 }
             )
@@ -487,10 +461,7 @@ final class PrimarySessionStore: ObservableObject {
     }
 
     func abort() {
-        anthropicClient?.abort(sessionKey: sessionKey)
-        geminiClient?.abort(sessionKey: sessionKey)
-        openAIClient?.abort(sessionKey: sessionKey)
-        wsClient?.abort(sessionKey: sessionKey)
+        ollamaClient?.cancelAll()
         isLoading = false
         isStreaming = false
         streamingText = ""
@@ -528,14 +499,12 @@ struct PrimaryMessage: Identifiable {
 // MARK: - Primary Session View
 
 struct PrimarySessionView: View {
-    @EnvironmentObject var anthropic: AnthropicClient
-    @EnvironmentObject var geminiAPI: GeminiAPIClient
-    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
-    @EnvironmentObject var openAI: OpenAIClient
-    @EnvironmentObject var gatewayWS: GatewayWSClient
+    @EnvironmentObject var ollama: OllamaClient
+    @EnvironmentObject var openai: OpenAIClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var roster: AgentRosterStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
+    @EnvironmentObject var execution: ExecutionService
     @StateObject private var store: PrimarySessionStore
     @State private var inputText = ""
     @FocusState private var inputFocused: Bool
@@ -544,8 +513,8 @@ struct PrimarySessionView: View {
     let agentName: String
     let agentInitial: String
 
-    init(sessionKey: String = "main", agentName: String = "Thrawn", agentInitial: String = "T") {
-        _store = StateObject(wrappedValue: PrimarySessionStore(sessionKey: sessionKey))
+    init(sessionKey: String = "main", agentName: String = "Thrawn", agentInitial: String = "T", agentId: String? = nil) {
+        _store = StateObject(wrappedValue: PrimarySessionStore(sessionKey: sessionKey, agentId: agentId))
         self.agentName = agentName
         self.agentInitial = agentInitial
     }
@@ -556,7 +525,7 @@ struct PrimarySessionView: View {
 
             VStack(spacing: 0) {
                 // Connection status bar (only shown when not connected)
-                if !geminiOAuth.authenticated && !(geminiAPI.apiKeyConfigured) && !anthropic.connected && !openAI.apiKeyConfigured && !gatewayWS.connected {
+                if !ollama.connected {
                     HStack(spacing: 8) {
                         ProgressView().progressViewStyle(.circular).scaleEffect(0.6).tint(Color(red: 0.95, green: 0.70, blue: 0.20))
                         Text(connectionStatusText)
@@ -674,18 +643,17 @@ struct PrimarySessionView: View {
                 // Input bar
                 inputBar
             }
-            .animation(.easeInOut(duration: 0.18), value: anthropic.connected || geminiOAuth.authenticated || openAI.apiKeyConfigured || gatewayWS.connected)
+            .animation(.easeInOut(duration: 0.18), value: ollama.connected)
             .animation(.easeInOut(duration: 0.18), value: store.errorText != nil)
             .animation(.easeInOut(duration: 0.18), value: store.recallContext != nil)
             .animation(.easeInOut(duration: 0.18), value: screenCapture.pendingScreenshot != nil)
         }
         .onAppear {
-            store.bind(anthropicClient: anthropic)
-            store.bind(geminiClient: geminiAPI, oauthClient: geminiOAuth)
-            store.bind(openAIClient: openAI)
-            store.bind(wsClient: gatewayWS)
+            store.bind(ollamaClient: ollama)
+            store.bindOpenAI(openai)
             store.bindRoster(roster)
             store.bindScreenCapture(screenCapture)
+            store.bindExecution(execution)
             store.connect()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 inputFocused = true
@@ -694,19 +662,16 @@ struct PrimarySessionView: View {
     }
 
     private var connectionStatusText: String {
-        if geminiOAuth.authenticated {
-            return "Connected via Gemini"
+        if ollama.connected {
+            return "Connected to Ollama · \(ollama.selectedModel)"
         }
-        if !anthropic.apiKeyConfigured {
-            return "No provider connected — open Settings to sign in"
+        if ollama.authenticating {
+            return "Connecting to Ollama…"
         }
-        if anthropic.authenticating {
-            return "Connecting to Anthropic API…"
-        }
-        if let error = anthropic.lastError {
+        if let error = ollama.lastError {
             return error
         }
-        return "Reconnecting…"
+        return "Ollama not running — start Ollama on localhost:11434"
     }
 
     private var inputBar: some View {

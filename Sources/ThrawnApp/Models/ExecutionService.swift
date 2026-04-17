@@ -79,6 +79,25 @@ final class ExecutionService: ObservableObject {
             durationMs: duration
         )
 
+        // Log to FlightRecorder
+        FlightRecorder.logExec(
+            agent: agentId,
+            command: command,
+            exitCode: result.exitCode,
+            durationMs: duration,
+            stdoutLength: result.stdout.count,
+            stderrLength: result.stderr.count,
+            stderrPreview: result.stderr.isEmpty ? nil : result.stderr
+        )
+
+        if result.exitCode != 0 {
+            FlightRecorder.logError(
+                source: "exec:\(agentId ?? "user")",
+                message: "Command failed (exit \(result.exitCode)): \(String(command.prefix(200)))",
+                context: ["stderr": String(result.stderr.prefix(300))]
+            )
+        }
+
         // Keep last 200 commands in history
         commandHistory.append(entry)
         if commandHistory.count > 200 {

@@ -3,9 +3,20 @@ import SwiftUI
 struct ConsoleSectionSwitcher: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
 
+    private let sections = ConsoleSection.allCases
+    private var topRow: [ConsoleSection] { Array(sections.prefix(4)) }
+    private var bottomRow: [ConsoleSection] { Array(sections.dropFirst(4)) }
+
     var body: some View {
+        VStack(spacing: 6) {
+            sectionRow(topRow)
+            sectionRow(bottomRow)
+        }
+    }
+
+    private func sectionRow(_ items: [ConsoleSection]) -> some View {
         HStack(spacing: 6) {
-            ForEach(ConsoleSection.allCases) { section in
+            ForEach(items) { section in
                 Button { nav.selectedSection = section; nav.dismissAgent() } label: {
                     HStack(spacing: 5) {
                         Image(systemName: section.icon)
@@ -14,7 +25,7 @@ struct ConsoleSectionSwitcher: View {
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .foregroundColor(nav.selectedSection == section ? .white : Color.white.opacity(0.55))
-                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)
                     .background(
                         Capsule()
@@ -40,20 +51,27 @@ struct ConsoleSectionBody: View {
     @EnvironmentObject var roster: AgentRosterStore
 
     var body: some View {
+        // 3D memory graph takes priority when active
+        if nav.showMemoryGraph {
+            MemoryGraphView()
         // If a specialist agent is selected, show their dedicated chat session
-        if let agentId = nav.selectedAgentId,
+        } else if let agentId = nav.selectedAgentId,
            let agent = roster.agents.first(where: { $0.id == agentId }) {
             SpecialistChatView(agent: agent)
         } else {
             switch nav.selectedSection {
             case .command:
                 CommandTabView()
+            case .objectives:
+                ObjectivesView()
+            case .handoffs:
+                HandoffsView()
+            case .briefings:
+                BriefingsView()
+            case .agents:
+                AgentsConsoleView()
             case .threads:
                 ThreadListView()
-            case .tasks:
-                FlowBoardView(embedded: true)
-            case .review:
-                ReviewQueueView()
             case .approvals:
                 ApprovalsView()
             case .deliverables:
@@ -128,11 +146,12 @@ struct SpecialistChatView: View {
                 Rectangle().fill(agent.state.chissColor.opacity(0.15)).frame(height: 1)
             }
 
-            // The chat view targeting this agent's session key
+            // The chat view targeting this agent's session key + identity
             PrimarySessionView(
                 sessionKey: agent.sessionKey,
                 agentName: agent.name,
-                agentInitial: agentInitial(for: agent)
+                agentInitial: agentInitial(for: agent),
+                agentId: agent.id
             )
         }
     }

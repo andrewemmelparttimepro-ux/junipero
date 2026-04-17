@@ -3,9 +3,7 @@ import SwiftUI
 struct LeftPanelView: View {
     @EnvironmentObject var execution: ExecutionService
     @EnvironmentObject var bootstrap: ThrawnBootstrap
-    @EnvironmentObject var anthropic: AnthropicClient
-    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
-    @EnvironmentObject var openAI: OpenAIClient
+    @EnvironmentObject var ollama: OllamaClient
 
     var body: some View {
         HStack(spacing: 16) {
@@ -17,12 +15,8 @@ struct LeftPanelView: View {
                 AgentRailView()
                     .frame(width: 310)
 
-                // Safety toggle — only visible after probation
-                if ThrawnPreferencesStore.load().canToggleAccess {
-                    SafetyToggleView()
-                        .frame(width: 310)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                // Unleashed toggle moved into the agent rail's dropdown menu
+                // (hidden by default — "unleashed is just standard now")
             }
 
             VStack(spacing: 0) {
@@ -44,41 +38,13 @@ struct LeftPanelView: View {
 // MARK: - Provider Status Card
 
 struct ProviderStatusCard: View {
-    @EnvironmentObject var anthropic: AnthropicClient
-    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
-    @EnvironmentObject var geminiAPI: GeminiAPIClient
-    @EnvironmentObject var openAI: OpenAIClient
+    @EnvironmentObject var ollama: OllamaClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @State private var hovered = false
     @State private var glowPulse: CGFloat = 0.6
 
     private var isConnected: Bool {
-        geminiOAuth.authenticated || geminiAPI.apiKeyConfigured || anthropic.connected || openAI.apiKeyConfigured
-    }
-
-    private var activeProviderName: String {
-        let state = ProviderStateStore.load()
-        switch state.activeProvider {
-        case .gemini:
-            if geminiOAuth.authenticated || geminiAPI.apiKeyConfigured { return "Gemini" }
-        case .claude:
-            if anthropic.connected { return "Claude" }
-        case .chatgpt:
-            if openAI.apiKeyConfigured { return "ChatGPT" }
-        }
-        // Fallback to whatever is connected
-        if geminiOAuth.authenticated || geminiAPI.apiKeyConfigured { return "Gemini" }
-        if anthropic.connected { return "Claude" }
-        if openAI.apiKeyConfigured { return "ChatGPT" }
-        return "None"
-    }
-
-    private var activeProviderColor: Color {
-        let state = ProviderStateStore.load()
-        if isConnected {
-            return state.activeProvider.brandColor
-        }
-        return Color.white.opacity(0.3)
+        ollama.connected
     }
 
     var body: some View {
@@ -92,60 +58,97 @@ struct ProviderStatusCard: View {
     // MARK: - Connected State
 
     private var connectedView: some View {
-        HStack(spacing: 12) {
-            // Provider icon with pulse
-            ZStack {
-                Circle()
-                    .fill(activeProviderColor.opacity(0.15))
-                    .frame(width: 36, height: 36)
-                    .shadow(color: activeProviderColor.opacity(0.3 * glowPulse), radius: 8)
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                // Ollama icon with pulse
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.15))
+                        .frame(width: 36, height: 36)
+                        .shadow(color: Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.3 * glowPulse), radius: 8)
 
-                Image(systemName: isConnected ? "checkmark.circle.fill" : "xmark.circle")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("CONNECTED")
-                        .font(.system(size: 10, weight: .black))
-                        .tracking(2)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
-
-                    Text("·")
-                        .foregroundColor(.white.opacity(0.25))
-
-                    Text(activeProviderName.uppercased())
-                        .font(.system(size: 10, weight: .bold))
-                        .tracking(1)
-                        .foregroundColor(activeProviderColor)
                 }
 
-                if let email = geminiOAuth.userEmail, geminiOAuth.authenticated {
-                    Text(email)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("CONNECTED")
+                            .font(.system(size: 10, weight: .black))
+                            .tracking(2)
+                            .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
+
+                        Text("·")
+                            .foregroundColor(.white.opacity(0.25))
+
+                        Text("OLLAMA")
+                            .font(.system(size: 10, weight: .bold))
+                            .tracking(1)
+                            .foregroundColor(Color.chissPrimary)
+                    }
+
+                    Text("\(ollama.models.count) models available")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.45))
                         .lineLimit(1)
-                } else {
-                    Text(bootstrap.statusText)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.45))
-                        .lineLimit(1)
                 }
+
+                Spacer()
+
+                // Refresh models
+                Button {
+                    Task { await ollama.fetchModels() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color.chissPrimary.opacity(0.5))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh model list")
             }
 
-            Spacer()
-
-            // Settings gear
-            Button {
-                bootstrap.showSetup = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color.chissPrimary.opacity(0.5))
-                    .frame(width: 28, height: 28)
+            // Model dropdown
+            if !ollama.models.isEmpty {
+                Menu {
+                    ForEach(ollama.models, id: \.self) { model in
+                        Button {
+                            ollama.selectModel(model)
+                        } label: {
+                            HStack {
+                                Text(model)
+                                if model == ollama.selectedModel {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 10, weight: .bold))
+                        Text(ollama.selectedModel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundColor(Color.chissPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.chissPrimary.opacity(0.06))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -168,7 +171,7 @@ struct ProviderStatusCard: View {
 
     private var disconnectedView: some View {
         Button {
-            bootstrap.showSetup = true
+            ollama.connect()
         } label: {
             VStack(spacing: 14) {
                 // Large icon with animated pulse
@@ -199,38 +202,34 @@ struct ProviderStatusCard: View {
                 }
 
                 VStack(spacing: 4) {
-                    Text("SIGN IN TO GET STARTED")
+                    Text("OLLAMA NOT RUNNING")
                         .font(.system(size: 11, weight: .black))
                         .tracking(2)
                         .foregroundColor(Color.chissPrimary)
 
-                    Text("Connect Google, Claude, or ChatGPT")
+                    Text("Start Ollama on localhost:11434")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.50))
                 }
 
-                // Provider pills
-                HStack(spacing: 8) {
-                    ForEach(AIProvider.allCases) { provider in
-                        HStack(spacing: 4) {
-                            Image(systemName: provider.icon)
-                                .font(.system(size: 9, weight: .bold))
-                            Text(provider.shortName)
-                                .font(.system(size: 9.5, weight: .semibold))
-                        }
-                        .foregroundColor(provider.brandColor.opacity(0.85))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(provider.brandColor.opacity(0.08))
-                                .overlay(
-                                    Capsule()
-                                        .stroke(provider.brandColor.opacity(0.20), lineWidth: 0.5)
-                                )
-                        )
-                    }
+                // Retry button
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Retry Connection")
+                        .font(.system(size: 9.5, weight: .semibold))
                 }
+                .foregroundColor(Color.chissPrimary.opacity(0.85))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.chissPrimary.opacity(0.08))
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.chissPrimary.opacity(0.20), lineWidth: 0.5)
+                        )
+                )
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)

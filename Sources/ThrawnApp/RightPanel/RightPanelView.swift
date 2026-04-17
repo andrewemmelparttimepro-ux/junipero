@@ -15,7 +15,7 @@ struct RightPanelView: View {
                 // Console section switcher
                 ConsoleSectionSwitcher()
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 12)
                     .background(Color.obsidianMid.opacity(0.85))
                     .overlay(alignment: .bottom) {
                         Rectangle().fill(Color.chissPrimary.opacity(0.10)).frame(height: 1)
@@ -139,14 +139,13 @@ struct FloatingCommandButton: View {
 }
 
 struct ThrawnHeaderBar: View {
-    @EnvironmentObject var anthropic: AnthropicClient
-    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
-    @EnvironmentObject var gatewayWS: GatewayWSClient
+    @EnvironmentObject var ollama: OllamaClient
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
     @EnvironmentObject var flowTab: FlowTabStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
+    @EnvironmentObject var nav: ConsoleNavigationStore
 
     var body: some View {
         HStack(spacing: 12) {
@@ -178,88 +177,86 @@ struct ThrawnHeaderBar: View {
                 }
             }
 
-            Spacer()
-
-            // Runtime badge
+            // Runtime badge — adjacent to identity, not pushed right
             HStack(spacing: 6) {
                 Text(bootstrap.statusText)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(Color.chissPrimary.opacity(0.70))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 180, alignment: .leading)
                 Circle()
                     .fill(runtimeDotColor)
                     .frame(width: 7, height: 7)
                     .shadow(color: runtimeDotColor.opacity(0.80), radius: 4)
             }
 
-            // Cognee memory brain indicator
-            CogneeMemoryBrain(
-                healthy: bootstrap.cogneeHealthy,
-                syncing: bootstrap.cogneePendingFiles > 0 || bootstrap.cogneeStatusText.localizedCaseInsensitiveContains("sync")
-            )
-            .help(bootstrap.cogneeBadgeText)
+            Spacer()
 
-            // Action buttons
-            HStack(spacing: 6) {
-                // Vision: full-screen capture shutter
-                Button {
-                    screenCapture.captureFullScreen()
-                } label: {
-                    HStack(spacing: 4) {
+            // Memory brain — tap to open 3D memory graph
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    nav.showMemoryGraph.toggle()
+                }
+            } label: {
+                CogneeMemoryBrain(
+                    healthy: bootstrap.cogneeHealthy,
+                    syncing: bootstrap.cogneePendingFiles > 0 || bootstrap.cogneeStatusText.localizedCaseInsensitiveContains("sync")
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Memory Graph — visualize agent activity and knowledge")
+
+            // Action buttons — icon-only, tooltips on hover
+            HStack(spacing: 4) {
+                // Vision: camera shutter — shows file size badge when screenshot is pending
+                Button { screenCapture.captureFullScreen() } label: {
+                    ZStack(alignment: .topTrailing) {
                         Image(systemName: screenCapture.pendingScreenshot != nil ? "camera.fill" : "camera")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(
+                                screenCapture.pendingScreenshot != nil
+                                    ? Color(red: 0.55, green: 0.82, blue: 0.95)
+                                    : Color.chissPrimary.opacity(0.80)
+                            )
                         if screenCapture.isCapturing {
                             ProgressView()
                                 .progressViewStyle(.circular)
-                                .scaleEffect(0.45)
+                                .scaleEffect(0.38)
                                 .tint(Color.chissPrimary)
-                                .frame(width: 10, height: 10)
+                                .frame(width: 8, height: 8)
+                                .offset(x: 6, y: -6)
                         } else if screenCapture.pendingScreenshot != nil {
-                            Text(screenCapture.fileSizeLabel)
-                                .font(.system(size: 9, weight: .bold))
-                        } else {
-                            Text("Vision")
-                                .font(.system(size: 10.5, weight: .semibold))
+                            // Small dot badge to indicate pending
+                            Circle()
+                                .fill(Color(red: 0.55, green: 0.82, blue: 0.95))
+                                .frame(width: 6, height: 6)
+                                .offset(x: 4, y: -4)
                         }
                     }
-                    .foregroundColor(
-                        screenCapture.pendingScreenshot != nil
-                            ? Color(red: 0.55, green: 0.82, blue: 0.95)
-                            : Color.chissPrimary.opacity(0.80)
-                    )
-                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(width: 30, height: 28)
                     .background(
-                        Capsule()
+                        Circle()
                             .fill(screenCapture.pendingScreenshot != nil
-                                ? Color(red: 0.55, green: 0.82, blue: 0.95).opacity(0.12)
-                                : Color.white.opacity(0.06))
-                            .overlay(
-                                Capsule().stroke(
-                                    screenCapture.pendingScreenshot != nil
-                                        ? Color(red: 0.55, green: 0.82, blue: 0.95).opacity(0.40)
-                                        : Color.chissPrimary.opacity(0.18),
-                                    lineWidth: 1
-                                )
-                            )
+                                  ? Color(red: 0.55, green: 0.82, blue: 0.95).opacity(0.12)
+                                  : Color.white.opacity(0.06))
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Capture full screen — attach to your next message so Thrawn can see what you see")
+                .help("Vision — capture full screen and attach to next message")
 
-                headerBtn("Flow", icon: "square.grid.2x2.fill") {
+                iconBtn("square.grid.2x2.fill", help: "Flow board") {
                     withAnimation(.easeInOut(duration: 0.22)) { flowTab.showFlow.toggle() }
                 }
-                headerBtn("Setup", icon: "gearshape") { bootstrap.showSetup = true }
-                headerBtn("Heal", icon: "waveform.path.ecg") { Task { await bootstrap.refreshRuntimeStatus() } }
+                iconBtn("gearshape", help: "Setup") { bootstrap.showSetup = true }
+                iconBtn("waveform.path.ecg", help: "Heal — refresh runtime status") {
+                    Task { await bootstrap.refreshRuntimeStatus() }
+                }
+
                 Menu {
                     Button("Run Diagnostics") { Task { await bootstrap.runFullHealthTest() } }
                     Button("Reindex Memory") { Task { await bootstrap.reindexCogneeMemory() } }
                     Button("Export Support Bundle") { Task { await bootstrap.exportSupportBundle() } }
-                    Button("Check Updates") {
-                        Task { await updateManager.checkForUpdates() }
-                    }
+                    Button("Check Updates") { Task { await updateManager.checkForUpdates() } }
                     Divider()
                     Button("Guardrails: Standard") { bootstrap.setLiabilityMode(.idiot) }
                     Button("Guardrails: Disabled") { bootstrap.setLiabilityMode(.myFault) }
@@ -269,7 +266,7 @@ struct ThrawnHeaderBar: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Color.chissPrimary.opacity(0.75))
                         .frame(width: 30, height: 28)
-                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                        .background(Circle().fill(Color.white.opacity(0.06)))
                 }
                 .buttonStyle(.plain)
             }
@@ -292,46 +289,33 @@ struct ThrawnHeaderBar: View {
     }
 
     private var statusLabel: String {
-        // Gemini OAuth takes priority
-        if geminiOAuth.authenticated { return "Online · Gemini" }
-        // Native Anthropic API
-        if anthropic.apiKeyConfigured {
-            if anthropic.authenticating { return "Connecting" }
-            if anthropic.connected { return "Online" }
-            if let err = anthropic.lastError { return err.count > 30 ? "Connection error" : err }
-            return "Offline"
-        }
-        // Legacy gateway fallback
-        if gatewayWS.authenticating { return "Connecting" }
-        if gatewayWS.connected { return "Online" }
-        if let err = gatewayWS.lastError { return err.count > 30 ? "Connection error" : err }
-        return "No provider connected"
+        if ollama.connected { return "Online · Ollama" }
+        if ollama.authenticating { return "Connecting" }
+        if let err = ollama.lastError { return err.count > 30 ? "Connection error" : err }
+        return "Ollama offline"
     }
 
     private var statusColor: Color {
-        let isConnected = geminiOAuth.authenticated || anthropic.connected || gatewayWS.connected
-        let isConnecting = anthropic.authenticating || gatewayWS.authenticating
-        if isConnecting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
-        if isConnected { return Color(red: 0.30, green: 0.85, blue: 0.40) }
+        if ollama.authenticating { return Color(red: 0.95, green: 0.70, blue: 0.20) }
+        if ollama.connected { return Color(red: 0.30, green: 0.85, blue: 0.40) }
         return Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
     private var runtimeDotColor: Color {
-        let isConnected = geminiOAuth.authenticated || anthropic.connected || gatewayWS.connected || bootstrap.apiHealthy
+        let isConnected = ollama.connected || bootstrap.apiHealthy
         return isConnected ? Color(red: 0.30, green: 0.85, blue: 0.40) : Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
-    private func headerBtn(_ label: String, icon: String, action: @escaping () -> Void) -> some View {
+    private func iconBtn(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 10, weight: .bold))
-                Text(label).font(.system(size: 10.5, weight: .semibold))
-            }
-            .foregroundColor(Color.chissPrimary.opacity(0.80))
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Capsule().fill(Color.white.opacity(0.06)).overlay(Capsule().stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1)))
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color.chissPrimary.opacity(0.80))
+                .frame(width: 30, height: 28)
+                .background(Circle().fill(Color.white.opacity(0.06)))
         }
         .buttonStyle(.plain)
+        .help(help)
     }
 }
 

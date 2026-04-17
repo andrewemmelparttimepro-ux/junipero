@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build/release"
 APP_NAME="Thrawn"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
-INSTALL_DIR="$HOME/Applications"
+INSTALL_DIR="/Applications"
 
 echo "═══════════════════════════════════════"
 echo "  THRAWN — Build & Install"

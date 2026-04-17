@@ -18,7 +18,7 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .gemini:  return "Google Gemini"
         case .claude:  return "Claude"
-        case .chatgpt: return "ChatGPT"
+        case .chatgpt: return "GPT (OpenAI Standard)"
         }
     }
 
@@ -26,7 +26,7 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .gemini:  return "Gemini"
         case .claude:  return "Claude"
-        case .chatgpt: return "ChatGPT"
+        case .chatgpt: return "GPT Standard"
         }
     }
 
@@ -34,7 +34,7 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .gemini:  return "Sign in with Google • Free tier included"
         case .claude:  return "Best for code & reasoning • API key"
-        case .chatgpt: return "GPT-4o & reasoning models • API key"
+        case .chatgpt: return "OpenAI & compatible models (Ollama, OpenRouter)"
         }
     }
 
@@ -134,7 +134,7 @@ struct ProviderState: Codable {
     var connectedProviders: [AIProvider: ProviderCredential]
 
     static let `default` = ProviderState(
-        activeProvider: .gemini,
+        activeProvider: .chatgpt,
         connectedProviders: [:]
     )
 }
@@ -149,6 +149,8 @@ struct ProviderCredential: Codable {
     // For OAuth providers
     var hasRefreshToken: Bool
     var userEmail: String?
+    // For OpenAI Compatible Providers
+    var customBaseURL: String?
 }
 
 // MARK: - Provider State Store

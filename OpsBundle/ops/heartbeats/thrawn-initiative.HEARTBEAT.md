@@ -1,6 +1,6 @@
 # Thrawn Initiative Heartbeat
 
-This beat fires at :30 every hour. Its purpose is proactive work generation when the system is idle.
+This beat fires at :30 every hour. Its purpose is to keep the factory moving and ensure no objective stalls.
 
 ## Gate check
 
@@ -8,78 +8,61 @@ If Andrew has sent a message in the current thread within the last 30 minutes, r
 
 ## Priority stack (work top to bottom, stop when you act)
 
-### 1. Board hygiene
-- Tasks stuck in `Review` with no movement for 2+ hours → investigate, approve if delivered, or spawn a fix task
-- Tasks in `Blocked` where the blocker may have been resolved → move back to `Ready`
-- Tasks in `In Progress` with no recent notes or agent output → flag as stale, ping the owner
-- Tasks with no Owner → assign to the correct specialist
-- Tasks in `Inbox` → triage, assign owner, move to `Ready`
+### 1. Objective advancement
+Read the **Active Objectives** in your context. For each active objective:
+- Are there tasks for the current phase? If not, create them.
+- Are tasks stuck (no movement in 2+ hours)? Re-route or break into smaller pieces.
+- Is the phase complete (all tasks Done)? The system advances automatically.
+- Is the pipeline thin (fewer than 3 active tasks across all objectives)? Create more.
 
-### 2. Unblock other agents
+**The factory never runs dry.** This is your #1 job.
+
+### 2. Board hygiene
+- Tasks stuck with no movement for 2+ hours → investigate, route or close
+- Tasks in Blocked where the blocker may have been resolved → set Status to Ready
+- Tasks with no Owner → assign to the correct specialist, set Status to Ready
+- Tasks in Inbox → triage, assign Owner, set Status to Ready
+
+### 3. Unblock other agents
 - Is there a brief, spec, or decision that would give an idle agent work?
 - Can a large task be broken into smaller pieces that can be parallelized?
 - Does an agent need input from another agent? Write the bridge artifact.
 
-### 3. Goal gap analysis
-- Read `USER.md` for Andrew's stated goals and active projects
-- Read the project directories in `projects/` for current state
-- Compare what's on the board to what Andrew is trying to accomplish
-- If a project goal has no tasks covering it, draft a new task in `Inbox` with a clear title, owner suggestion, and deliverable
+### 4. Stall detection
+- If an objective has had no task movement in 4+ hours, something is wrong.
+- Diagnose: is the agent failing? Is the task too vague? Is the model struggling?
+- Take corrective action: rewrite the task with clearer instructions, route to a different agent, or break it down further.
 
-### 4. Proactive research triggers
-- If a project is mid-build, what's the next phase?
-- Queue research tasks for Qui-Gon on upcoming needs
-- Queue copy/positioning tasks for Lando if product truth has changed
-- Flag what Boba should QA next based on recent completions
-
-### 5. Net-new ideas (only if 1-4 produced nothing)
-- Based on Andrew's goals and current project momentum, what are 1-3 high-value actions that would move things forward?
-- Ground these in real context — no invented busywork
-- Draft as `Inbox` tasks with clear rationale in Notes
+### 5. NDAI fallback (only if no objectives exist)
+If there are NO active objectives:
+- Based on Andrew's goals and NDAI business context, what are the highest-value actions?
+- Create 1-3 concrete tasks assigned to the right specialist with Status = Ready
+- Focus areas: product reliability, marketing, operational efficiency, competitive positioning
 
 ## Output format
 
-Read the current `ops/agent-updates.json` (it's always a JSON array — `[]` when empty). Append your entries and write the whole file back.
+Write to YOUR update file (absolute path provided in preamble). Just overwrite it.
 
 ```json
 [
   {
-    "action": "move",
-    "task_id": "TASK-039",
-    "field": "Status",
-    "value": "Done",
-    "agent": "Thrawn",
-    "timestamp": "2026-03-18T10:00:00"
-  },
-  {
-    "action": "update",
-    "task_id": "TASK-039",
-    "field": "Notes",
-    "value": "Validated — QA pass confirmed",
-    "agent": "Thrawn",
-    "timestamp": "2026-03-18T10:00:00"
-  },
-  {
     "action": "create",
     "task_id": "TASK-NEW",
-    "title": "Research Vercel edge config for Open Mat",
+    "title": "Research X for competitive analysis objective",
     "owner": "Qui-Gon",
-    "status": "Inbox",
+    "status": "Ready",
     "priority": "Medium",
-    "notes": "Next phase after TASK-026 deploy",
-    "agent": "Thrawn",
-    "timestamp": "2026-03-18T10:00:00"
+    "notes": "Phase 1 task for OBJ-1234",
+    "agent": "Thrawn"
   }
 ]
 ```
 
-For new tasks, use `"task_id": "TASK-NEW"` — the dispatcher will auto-assign the next TASK-NNN ID.
-
-**Do NOT edit TASK_BOARD.md directly.** Write to `ops/agent-updates.json`. The dispatcher handles all board mutations.
-
 ## Discipline
 
-- Never generate more than 3 new tasks per initiative beat
-- Every new task must have a clear deliverable and owner
-- If the board is healthy and goals are covered, reply `HEARTBEAT_OK` — doing nothing is a valid outcome
+- Never generate more than 5 new tasks per initiative beat
+- Every new task must have a clear deliverable and owner with Status = Ready
+- If objectives are healthy and pipeline is full, reply `HEARTBEAT_OK`
 - Quality over quantity. One well-scoped task beats five vague ones.
+
+**Do NOT edit TASK_BOARD.md directly.** Write to your update file. The dispatcher handles all board mutations.

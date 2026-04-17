@@ -134,21 +134,43 @@ struct FlowBoardView: View {
                             HStack(alignment: .top, spacing: 16) {
                                 ForEach(FlowLane.allCases) { lane in
                                     let laneTasks = filteredTasks.filter { $0.flowLane == lane }
-                                    FlowLaneColumn(
-                                        lane: lane,
-                                        tasks: laneTasks,
-                                        isDropTarget: dropTargetLane == lane,
-                                        onSelect: { selectedTaskId = $0.id },
-                                        onDrop: { taskId in
-                                            withAnimation(.spring(response: 0.3)) {
-                                                store.moveTask(taskId, to: lane.rawValue)
-                                                dropTargetLane = nil
-                                            }
-                                        },
-                                        onDropEnter: { dropTargetLane = lane },
-                                        onDropExit: { if dropTargetLane == lane { dropTargetLane = nil } }
-                                    )
-                                    .frame(width: 260)
+
+                                    if lane == .done {
+                                        DoneStackColumn(
+                                            tasks: laneTasks,
+                                            isDropTarget: dropTargetLane == lane,
+                                            onSelect: { selectedTaskId = $0.id },
+                                            onClear: { taskId in store.deleteTask(taskId) },
+                                            onClearAll: {
+                                                for t in laneTasks { store.deleteTask(t.id) }
+                                            },
+                                            onDrop: { taskId in
+                                                withAnimation(.spring(response: 0.3)) {
+                                                    store.moveTask(taskId, to: lane.rawValue)
+                                                    dropTargetLane = nil
+                                                }
+                                            },
+                                            onDropEnter: { dropTargetLane = lane },
+                                            onDropExit: { if dropTargetLane == lane { dropTargetLane = nil } }
+                                        )
+                                        .frame(width: 260)
+                                    } else {
+                                        FlowLaneColumn(
+                                            lane: lane,
+                                            tasks: laneTasks,
+                                            isDropTarget: dropTargetLane == lane,
+                                            onSelect: { selectedTaskId = $0.id },
+                                            onDrop: { taskId in
+                                                withAnimation(.spring(response: 0.3)) {
+                                                    store.moveTask(taskId, to: lane.rawValue)
+                                                    dropTargetLane = nil
+                                                }
+                                            },
+                                            onDropEnter: { dropTargetLane = lane },
+                                            onDropExit: { if dropTargetLane == lane { dropTargetLane = nil } }
+                                        )
+                                        .frame(width: 260)
+                                    }
                                 }
                             }
                             .padding(.horizontal, 28)
@@ -345,6 +367,339 @@ struct FlowLaneColumn: View {
     }
 }
 
+// MARK: - Done Stack Column (notification-style collapsed stack)
+
+struct DoneStackColumn: View {
+    let tasks: [ParsedTask]
+    var isDropTarget: Bool = false
+    let onSelect: (ParsedTask) -> Void
+    let onClear: (String) -> Void
+    let onClearAll: () -> Void
+    var onDrop: ((String) -> Void)? = nil
+    var onDropEnter: (() -> Void)? = nil
+    var onDropExit: (() -> Void)? = nil
+
+    @State private var expanded = false
+
+    private let lane = FlowLane.done
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Lane header
+            HStack(spacing: 8) {
+                Image(systemName: lane.icon)
+                    .font(.system(size: 11, weight: .bold)).foregroundColor(lane.accentColor)
+                    .shadow(color: lane.glowColor.opacity(0.70), radius: 6)
+                Text("DONE")
+                    .font(.system(size: 10, weight: .heavy)).tracking(1.5)
+                    .foregroundColor(lane.accentColor).shadow(color: lane.glowColor.opacity(0.50), radius: 5)
+                Spacer()
+                Text("\(tasks.count)")
+                    .font(.system(size: 10, weight: .bold)).foregroundColor(lane.accentColor.opacity(0.80))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(lane.accentColor.opacity(0.14)))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.obsidianMid)
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isDropTarget ? lane.accentColor.opacity(0.70) : lane.accentColor.opacity(0.30), lineWidth: isDropTarget ? 2 : 1))
+                    .shadow(color: lane.glowColor.opacity(isDropTarget ? 0.40 : 0.18), radius: isDropTarget ? 14 : 8)
+            )
+
+            if tasks.isEmpty {
+                // Empty state
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(lane.accentColor.opacity(0.15), style: StrokeStyle(lineWidth: 1, dash: [5]))
+                    Text("Empty")
+                        .font(.system(size: 11)).foregroundColor(Color.white.opacity(0.22))
+                }
+                .frame(minHeight: 52)
+            } else if !expanded {
+                // Collapsed stack — shows top card with stacked cards peeking behind
+                Button {
+                    withAnimation(.spring(response: 0.3)) { expanded = true }
+                } label: {
+                    ZStack(alignment: .top) {
+                        // Background cards (stacked effect)
+                        if tasks.count > 2 {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.obsidianMid.opacity(0.5))
+                                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(lane.accentColor.opacity(0.08), lineWidth: 1))
+                                .frame(height: 60)
+                                .offset(y: 8)
+                                .padding(.horizontal, 8)
+                        }
+                        if tasks.count > 1 {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.obsidianMid.opacity(0.7))
+                                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(lane.accentColor.opacity(0.12), lineWidth: 1))
+                                .frame(height: 60)
+                                .offset(y: 4)
+                                .padding(.horizontal, 4)
+                        }
+
+                        // Top card
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(tasks[0].id)
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundColor(lane.accentColor.opacity(0.65))
+                                Spacer()
+                                HStack(spacing: 4) {
+                                    Image(systemName: "square.stack.3d.up.fill")
+                                        .font(.system(size: 10, weight: .bold))
+                                    Text("\(tasks.count)")
+                                        .font(.system(size: 11, weight: .heavy))
+                                }
+                                .foregroundColor(lane.accentColor)
+                            }
+                            Text(tasks[0].title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.9))
+                                .lineLimit(2)
+
+                            Text("Tap to review completed tasks")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(lane.accentColor.opacity(0.5))
+                        }
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.obsidianMid)
+                                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(lane.accentColor.opacity(0.22), lineWidth: 1))
+                        )
+                        .shadow(color: lane.glowColor.opacity(0.10), radius: 5)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                // Expanded — notification-style list
+                VStack(spacing: 0) {
+                    // Clear All button
+                    HStack {
+                        Button {
+                            withAnimation(.spring(response: 0.3)) { expanded = false }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("COLLAPSE")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .tracking(0.8)
+                            }
+                            .foregroundColor(.white.opacity(0.4))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.white.opacity(0.06)))
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button {
+                            withAnimation(.spring(response: 0.3)) {
+                                onClearAll()
+                                expanded = false
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("CLEAR ALL")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .tracking(0.8)
+                            }
+                            .foregroundColor(.sithGlow.opacity(0.8))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.sithRed.opacity(0.12))
+                                .overlay(Capsule().stroke(Color.sithGlow.opacity(0.2), lineWidth: 1)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.bottom, 8)
+
+                    // Notification cards
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(spacing: 6) {
+                            ForEach(tasks) { task in
+                                DoneNotificationCard(
+                                    task: task,
+                                    onTap: { onSelect(task) },
+                                    onClear: { withAnimation(.spring(response: 0.25)) { onClear(task.id) } }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .dropDestination(for: TaskDragItem.self) { items, _ in
+            guard let item = items.first else { return false }
+            onDrop?(item.taskId)
+            return true
+        } isTargeted: { targeted in
+            if targeted { onDropEnter?() } else { onDropExit?() }
+        }
+    }
+}
+
+// MARK: - Done Notification Card
+
+struct DoneNotificationCard: View {
+    let task: ParsedTask
+    let onTap: () -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Tap to open detail
+            Button(action: onTap) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Color(red: 0.35, green: 0.75, blue: 0.50).opacity(0.6))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(task.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.85))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+
+                        HStack(spacing: 6) {
+                            Text(task.id)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.3))
+                            if !task.owner.isEmpty {
+                                Text(task.owner)
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(Color(red: 0.35, green: 0.75, blue: 0.50).opacity(0.5))
+                            }
+                        }
+                    }
+
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+
+            // Dismiss (clear) button
+            Button(action: onClear) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white.opacity(0.3))
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.white.opacity(0.06)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.obsidianMid.opacity(0.9))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(red: 0.35, green: 0.75, blue: 0.50).opacity(0.12), lineWidth: 1))
+        )
+    }
+}
+
+// MARK: - Heartbeat Countdown
+
+/// Maps agent names/IDs to their heartbeat schedule.
+/// Thrawn fires every 15 min, others fire at their minuteOffset once per hour.
+struct HeartbeatCountdown {
+    private static let scheduleByName: [String: (offset: Int, interval: Int)] = [
+        "Thrawn":  (0,  15),
+        "R2-D2":   (10, 60),
+        "C-3PO":   (20, 60),
+        "Qui-Gon": (30, 60),
+        "Lando":   (40, 60),
+        "Boba":    (50, 60),
+    ]
+    private static let scheduleById: [String: (offset: Int, interval: Int)] = [
+        "thrawn":  (0,  15),
+        "r2d2":    (10, 60),
+        "c3po":    (20, 60),
+        "quigon":  (30, 60),
+        "lando":   (40, 60),
+        "boba":    (50, 60),
+    ]
+
+    static func secondsUntilNext(for key: String) -> Int? {
+        guard let schedule = scheduleByName[key] ?? scheduleById[key] else { return nil }
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinute = calendar.component(.minute, from: now)
+        let currentSecond = calendar.component(.second, from: now)
+        let totalSecondsIntoHour = currentMinute * 60 + currentSecond
+
+        if schedule.interval == 15 {
+            let currentInCycle = totalSecondsIntoHour % (15 * 60)
+            let remaining = (15 * 60) - currentInCycle
+            return remaining <= 0 ? 15 * 60 : remaining
+        } else {
+            let targetSecondsIntoHour = schedule.offset * 60
+            var remaining = targetSecondsIntoHour - totalSecondsIntoHour
+            if remaining <= 0 { remaining += 3600 }
+            return remaining
+        }
+    }
+
+    static func format(_ seconds: Int) -> String {
+        let m = seconds / 60
+        let s = seconds % 60
+        if m > 0 {
+            return "\(m)m \(String(format: "%02d", s))s"
+        }
+        return "\(s)s"
+    }
+}
+
+/// Live countdown badge — glows red, pulses when imminent.
+struct HeartbeatCountdownBadge: View {
+    let owner: String
+    var compact: Bool = false
+    @State private var secondsLeft: Int = 0
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var isImminent: Bool { secondsLeft <= 60 }
+    private var isClose: Bool { secondsLeft <= 180 }
+
+    private var glowColor: Color {
+        if isImminent { return Color(red: 1.0, green: 0.25, blue: 0.20) }   // bright red
+        if isClose    { return Color(red: 0.95, green: 0.45, blue: 0.25) }   // orange
+        return Color(red: 0.85, green: 0.30, blue: 0.25).opacity(0.55)       // dim red
+    }
+
+    var body: some View {
+        Group {
+            if HeartbeatCountdown.secondsUntilNext(for: owner) != nil {
+                HStack(spacing: compact ? 2 : 3) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: compact ? 5 : 6))
+                        .foregroundColor(glowColor)
+                        .shadow(color: isImminent ? glowColor.opacity(0.90) : .clear, radius: isImminent ? 6 : 0)
+                    Text(HeartbeatCountdown.format(secondsLeft))
+                        .font(.system(size: compact ? 8 : 8.5, weight: .medium, design: .monospaced))
+                        .foregroundColor(glowColor)
+                        .shadow(color: isImminent ? glowColor.opacity(0.70) : .clear, radius: isImminent ? 4 : 0)
+                }
+                .onReceive(timer) { _ in
+                    secondsLeft = HeartbeatCountdown.secondsUntilNext(for: owner) ?? 0
+                }
+                .onAppear {
+                    secondsLeft = HeartbeatCountdown.secondsUntilNext(for: owner) ?? 0
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Task Card View (draggable)
 
 struct FlowTaskCardView: View {
@@ -383,12 +738,15 @@ struct FlowTaskCardView: View {
 
                 HStack(spacing: 6) {
                     if !task.owner.isEmpty {
-                        Text(task.owner)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(isBlocked ? Color.sithGlow : Color.chissPrimary)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Capsule().fill(isBlocked ? Color.sithRed.opacity(0.18) : Color.chissDeep.opacity(0.50))
-                                .overlay(Capsule().stroke(isBlocked ? Color.sithGlow.opacity(0.40) : Color.chissPrimary.opacity(0.28), lineWidth: 1)))
+                        HStack(spacing: 5) {
+                            Text(task.owner)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(isBlocked ? Color.sithGlow : Color.chissPrimary)
+                            HeartbeatCountdownBadge(owner: task.owner)
+                        }
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(isBlocked ? Color.sithRed.opacity(0.18) : Color.chissDeep.opacity(0.50))
+                            .overlay(Capsule().stroke(isBlocked ? Color.sithGlow.opacity(0.40) : Color.chissPrimary.opacity(0.28), lineWidth: 1)))
                     }
                     Spacer()
                     if !task.priority.isEmpty {

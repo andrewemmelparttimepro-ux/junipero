@@ -30,7 +30,7 @@ final class GeminiOAuthClient: ObservableObject {
 
     // OAuth2 configuration — Desktop app client
     // Replace with your own registered Client ID from Google Cloud Console
-    private let clientId = "REDACTED-OLD-CLIENT.apps.googleusercontent.com"
+    private let clientId = "REDACTED-NEW-CLIENT.apps.googleusercontent.com"
     private let clientSecret = "GOCSPX-***REDACTED***"
     // OAuth2 scopes:
     // - openid + email + profile → native sign-in identity
@@ -43,7 +43,7 @@ final class GeminiOAuthClient: ObservableObject {
     ].joined(separator: " ")
 
     /// Version tag — bump this when scopes change to force re-auth
-    private let scopeVersion = "v3-cloud-platform"
+    private let scopeVersion = "v4-thrawn-project"
 
     private let keychainService = "com.thrawn.gemini.oauth"
     private let keychainRefreshAccount = "refresh-token"

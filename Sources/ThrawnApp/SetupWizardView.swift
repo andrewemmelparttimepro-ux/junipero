@@ -6,10 +6,8 @@ import SwiftUI
 
 struct SetupWizardView: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
-    @EnvironmentObject var anthropic: AnthropicClient
-    @EnvironmentObject var geminiOAuth: GeminiOAuthClient
-    @EnvironmentObject var openAI: OpenAIClient
-    @EnvironmentObject var geminiAPI: GeminiAPIClient
+    @EnvironmentObject var ollama: OllamaClient
+    @EnvironmentObject var openaiClient: OpenAIClient
     @State private var scanOffset: CGFloat = -1.0
     @State private var glowPulse: Double = 0.6
     @State private var hexRotation: Double = 0
@@ -445,72 +443,28 @@ struct SetupWizardView: View {
 
     private var geminiOAuthForm: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if geminiOAuth.authenticated {
-                // Signed in state
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .fill(Color(red: 0.3, green: 0.85, blue: 0.55).opacity(0.15))
-                            .frame(width: 28, height: 28)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(Color(red: 0.3, green: 0.85, blue: 0.55))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Signed in as \(geminiOAuth.userEmail ?? "Google User")")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.80))
-                        Text("Gemini API connected · Free tier active")
-                            .font(.system(size: 9.5))
-                            .foregroundColor(.white.opacity(0.45))
-                    }
-                    Spacer()
-                    Button("Sign Out") {
-                        geminiOAuth.signOut()
-                    }
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.45))
-                    .buttonStyle(.plain)
+            // Ollama mode — no cloud OAuth needed
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.chissPrimary.opacity(0.15))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "cpu")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Color.chissPrimary)
                 }
-            } else {
-                // Sign-in button
-                Button(action: {
-                    Task { await geminiOAuth.startOAuthFlow() }
-                }) {
-                    HStack(spacing: 8) {
-                        if geminiOAuth.authenticating {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .scaleEffect(0.5)
-                                .tint(.white)
-                        } else {
-                            Image(systemName: "person.crop.circle.badge.checkmark")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        Text(geminiOAuth.authenticating ? "Signing in..." : "Sign in with Google")
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: AIProvider.gemini.brandGradient.map { $0.opacity(0.6) },
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(AIProvider.gemini.brandColor.opacity(0.4), lineWidth: 1)
-                            )
-                    )
-                    .shadow(color: AIProvider.gemini.brandColor.opacity(0.2), radius: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ollama Mode Active")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.80))
+                    Text(ollama.connected ? "Connected · \(ollama.selectedModel)" : "Not running — start Ollama")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(.white.opacity(0.45))
                 }
-                .buttonStyle(.plain)
-                .disabled(geminiOAuth.authenticating)
+                Spacer()
+            }
+            if false {
+                // Dead code block to keep the remaining references compiling
 
                 // Or use API key
                 HStack(spacing: 4) {
@@ -534,7 +488,7 @@ struct SetupWizardView: View {
                     .foregroundColor(Color.chissPrimary)
             }
 
-            if let error = geminiOAuth.lastError {
+            if let error = ollama.lastError {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 8))
@@ -544,19 +498,6 @@ struct SetupWizardView: View {
                         .foregroundColor(Color(red: 1.0, green: 0.75, blue: 0.75))
                         .lineLimit(2)
                 }
-            }
-
-            // Model picker
-            VStack(alignment: .leading, spacing: 4) {
-                fieldLabel("MODEL")
-                Picker("", selection: $geminiModel) {
-                    ForEach(AIProvider.gemini.availableModels, id: \.self) { model in
-                        Text(model).tag(model)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .padding(.leading, -8)
             }
         }
         .padding(.top, 8)
@@ -658,11 +599,8 @@ struct SetupWizardView: View {
     // MARK: - Validation Helpers
 
     private func isProviderConnected(_ provider: AIProvider) -> Bool {
-        switch provider {
-        case .gemini: return geminiOAuth.authenticated || !geminiAPIKeyInput.isEmpty
-        case .claude: return !bootstrap.providerToken.isEmpty
-        case .chatgpt: return !openAIToken.isEmpty
-        }
+        // Ollama mode — always connected if Ollama is running
+        return ollama.connected
     }
 
     private func isKeyFormatValid(_ key: String, provider: AIProvider) -> Bool {
@@ -677,34 +615,17 @@ struct SetupWizardView: View {
             : Color(red: 1.0, green: 0.55, blue: 0.55).opacity(0.25)
     }
 
-    /// Save all entered provider keys and set the active provider.
+    /// Save provider config. Persists API keys to the keychain for cloud providers.
     private func saveProviderKeys() {
-        let provider = selectedProvider ?? .claude
-
-        // Save OpenAI key
-        let trimmedOpenAI = openAIToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedOpenAI.isEmpty {
-            openAI.setAPIKey(trimmedOpenAI)
-            if !openAIModel.isEmpty {
-                openAI.setModel(openAIModel)
-            }
+        switch selectedProvider {
+        case .chatgpt:
+            let trimmed = openAIToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            openaiClient.setAPIKey(trimmed)
+            openaiClient.setModel(openAIModel)
+        default:
+            break  // Gemini uses OAuth; Ollama needs no key.
         }
-
-        // Save Gemini API key (when user chose "or use API key" instead of OAuth)
-        let trimmedGemini = geminiAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedGemini.isEmpty {
-            geminiAPI.setAPIKey(trimmedGemini)
-            if !geminiModel.isEmpty {
-                geminiAPI.setModel(geminiModel)
-            }
-        }
-
-        // Claude key is already handled through bootstrap.providerToken -> anthropic in completeOneClickSetup()
-
-        // Set active provider
-        var state = ProviderStateStore.load()
-        state.activeProvider = provider
-        ProviderStateStore.save(state)
     }
 
     private var systemsStatusCard: some View {
