@@ -29,9 +29,19 @@ final class GeminiOAuthClient: ObservableObject {
     private var tokenExpiresAt: Date?
 
     // OAuth2 configuration — Desktop app client
-    // Replace with your own registered Client ID from Google Cloud Console
-    private let clientId = "REDACTED-NEW-CLIENT.apps.googleusercontent.com"
-    private let clientSecret = "GOCSPX-***REDACTED***"
+    // Register your own desktop OAuth client in Google Cloud Console and
+    // supply the values via environment variables (THRAWN_GEMINI_CLIENT_ID /
+    // THRAWN_GEMINI_CLIENT_SECRET) or Keychain (service: com.thrawn.gemini.oauth,
+    // accounts: client-id / client-secret). Nothing is hardcoded so the source
+    // tree stays safe to commit and publish.
+    private let clientId: String = {
+        if let env = ProcessInfo.processInfo.environment["THRAWN_GEMINI_CLIENT_ID"], !env.isEmpty { return env }
+        return KeychainHelper.read(service: "com.thrawn.gemini.oauth", account: "client-id") ?? ""
+    }()
+    private let clientSecret: String = {
+        if let env = ProcessInfo.processInfo.environment["THRAWN_GEMINI_CLIENT_SECRET"], !env.isEmpty { return env }
+        return KeychainHelper.read(service: "com.thrawn.gemini.oauth", account: "client-secret") ?? ""
+    }()
     // OAuth2 scopes:
     // - openid + email + profile → native sign-in identity
     // - cloud-platform → access Gemini API (universal, no per-project API enabling needed)
