@@ -85,83 +85,86 @@ struct AgentRailView: View {
                 }
             }
 
-            VStack(spacing: 8) {
-                // ── Core Squad ────────────────────────────────────────────
-                ForEach(coreAgents) { agent in
-                    AgentRailCard(
-                        agent: agent,
-                        isSelected: nav.selectedAgentId == agent.id,
-                        isCore: true,
-                        onTap: { selectAgent(agent) }
-                    )
-                }
-
-                // ── V2 Divider ────────────────────────────────────────────
-                if !v2Agents.isEmpty {
-                    HStack(spacing: 8) {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.07))
-                            .frame(height: 1)
-                        Text("V2")
-                            .font(.system(size: 8, weight: .black))
-                            .tracking(2.5)
-                            .foregroundColor(Color(red: 0.98, green: 0.72, blue: 0.18).opacity(0.50))
-                        Rectangle()
-                            .fill(Color.white.opacity(0.07))
-                            .frame(height: 1)
-                    }
-                    .padding(.vertical, 4)
-
-                    // ── V2 Agents ─────────────────────────────────────────
-                    ForEach(v2Agents) { agent in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    // ── Core Squad ────────────────────────────────────────────
+                    ForEach(coreAgents) { agent in
                         AgentRailCard(
                             agent: agent,
                             isSelected: nav.selectedAgentId == agent.id,
-                            isCore: false,
+                            isCore: true,
                             onTap: { selectAgent(agent) }
                         )
                     }
-                }
 
-                // ── Extra Pinned Slots ────────────────────────────────────
-                // Drop zone: drag agents from the right-panel roster to pin
-                // additional agents here beyond the standard roster.
-                if !extraPinnedAgents.isEmpty {
-                    HStack(spacing: 8) {
-                        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
-                        Text("PINNED")
-                            .font(.system(size: 8, weight: .black))
-                            .tracking(2.5)
-                            .foregroundColor(Color.chissPrimary.opacity(0.35))
-                        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                    // ── V2 Divider ────────────────────────────────────────────
+                    if !v2Agents.isEmpty {
+                        HStack(spacing: 8) {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.07))
+                                .frame(height: 1)
+                            Text("V2")
+                                .font(.system(size: 8, weight: .black))
+                                .tracking(2.5)
+                                .foregroundColor(Color(red: 0.98, green: 0.72, blue: 0.18).opacity(0.50))
+                            Rectangle()
+                                .fill(Color.white.opacity(0.07))
+                                .frame(height: 1)
+                        }
+                        .padding(.vertical, 4)
+
+                        // ── V2 Agents ─────────────────────────────────────────
+                        ForEach(v2Agents) { agent in
+                            AgentRailCard(
+                                agent: agent,
+                                isSelected: nav.selectedAgentId == agent.id,
+                                isCore: false,
+                                onTap: { selectAgent(agent) }
+                            )
+                        }
                     }
-                    .padding(.vertical, 4)
 
-                    ForEach(extraPinnedAgents) { agent in
-                        AgentRailCard(
-                            agent: agent,
-                            isSelected: nav.selectedAgentId == agent.id,
-                            isCore: false,
-                            onTap: { selectAgent(agent) },
-                            onRemove: {
-                                withAnimation(.spring(response: 0.28)) {
-                                    nav.unpinAgent(agent.id)
+                    // ── Extra Pinned Slots ────────────────────────────────────
+                    // Drop zone: drag agents from the right-panel roster to pin
+                    // additional agents here beyond the standard roster.
+                    if !extraPinnedAgents.isEmpty {
+                        HStack(spacing: 8) {
+                            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                            Text("PINNED")
+                                .font(.system(size: 8, weight: .black))
+                                .tracking(2.5)
+                                .foregroundColor(Color.chissPrimary.opacity(0.35))
+                            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                        }
+                        .padding(.vertical, 4)
+
+                        ForEach(extraPinnedAgents) { agent in
+                            AgentRailCard(
+                                agent: agent,
+                                isSelected: nav.selectedAgentId == agent.id,
+                                isCore: false,
+                                onTap: { selectAgent(agent) },
+                                onRemove: {
+                                    withAnimation(.spring(response: 0.28)) {
+                                        nav.unpinAgent(agent.id)
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
-                }
 
-                // Empty drop slot when there's room for more pinned agents
-                if nav.pinnedLeftPanelAgents.count < 2 || extraPinnedAgents.count < 2 {
-                    EmptyAgentSlot(isHighlighted: isDropTargeted)
+                    // Empty drop slot when there's room for more pinned agents
+                    if nav.pinnedLeftPanelAgents.count < 2 || extraPinnedAgents.count < 2 {
+                        EmptyAgentSlot(isHighlighted: isDropTargeted)
+                    }
+
+                    // Bottom breathing room so the last card doesn't kiss the rail's edge
+                    Color.clear.frame(height: 4)
+                }
+                .onDrop(of: [UTType.plainText], isTargeted: $isDropTargeted) { providers in
+                    handleDrop(providers)
                 }
             }
-            .onDrop(of: [UTType.plainText], isTargeted: $isDropTargeted) { providers in
-                handleDrop(providers)
-            }
-
-            Spacer()
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

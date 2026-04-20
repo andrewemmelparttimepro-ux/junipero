@@ -6,7 +6,7 @@ struct LeftPanelView: View {
     @EnvironmentObject var ollama: OllamaClient
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 12) {
                 // Provider status — always visible, sign-in CTA when not connected
                 ProviderStatusCard()
@@ -14,10 +14,12 @@ struct LeftPanelView: View {
 
                 AgentRailView()
                     .frame(width: 310)
+                    .frame(maxHeight: .infinity)
 
                 // Unleashed toggle moved into the agent rail's dropdown menu
                 // (hidden by default — "unleashed is just standard now")
             }
+            .frame(maxHeight: .infinity)
 
             VStack(spacing: 0) {
                 Spacer(minLength: 12)
@@ -31,7 +33,8 @@ struct LeftPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 22)
-        .padding(.vertical, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 18)
     }
 }
 

@@ -7,6 +7,16 @@ struct RightPanelView: View {
     @EnvironmentObject var threadStore: ThreadStore
     @State private var showPopupChat = false
 
+    /// Hide the floating composer when the user is already inside an active
+    /// thread or specialist chat — it would just collide with the reply bar.
+    private var showFloatingComposer: Bool {
+        if showPopupChat { return false }
+        if nav.showMemoryGraph { return false }
+        if nav.selectedAgentId != nil { return false }
+        if nav.selectedSection == .command && threadStore.selectedThreadId != nil { return false }
+        return true
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             VStack(spacing: 0) {
@@ -50,7 +60,7 @@ struct RightPanelView: View {
             }
 
             // Floating Command button
-            if !showPopupChat {
+            if showFloatingComposer {
                 FloatingCommandButton(
                     unreadCount: threadStore.unreadThreadCount,
                     action: {
@@ -65,6 +75,7 @@ struct RightPanelView: View {
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showPopupChat)
+        .animation(.easeInOut(duration: 0.18), value: showFloatingComposer)
     }
 
     private func closePopupChat() {

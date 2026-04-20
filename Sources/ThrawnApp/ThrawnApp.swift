@@ -50,7 +50,7 @@ struct ThrawnApp: App {
                 .environmentObject(rankEvaluator)
                 .environmentObject(voiceService)
                 .environmentObject(briefingService)
-                .frame(minWidth: 1200, minHeight: 800)
+                .frame(minWidth: 1180, minHeight: 720)
                 .task {
                     // 0. Flight recorder setup — workspace dirs + log rotation
                     SystemPromptBuilder.ensureWorkspaceDirs()
@@ -114,6 +114,6 @@ struct ThrawnApp: App {
                 }
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1400, height: 900)
+        .defaultSize(width: 1320, height: 840)
     }
 }

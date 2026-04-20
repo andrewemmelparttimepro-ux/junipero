@@ -17,14 +17,20 @@ struct ContentView: View {
 
     private var isUnleashed: Bool { execution.accessMode.isUnleashed }
 
+    // Reserve clearance for the macOS traffic lights. The title bar is hidden
+    // (.hiddenTitleBar) but the close/min/zoom buttons still float above the
+    // content, so the top strip of the window needs to stay chrome-free.
+    private let trafficLightInset: CGFloat = 30
+
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             ThrawnObsidianBackdrop()
                 .ignoresSafeArea()
 
             if flowTab.showFlow {
                 FlowBoardView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, trafficLightInset)
                     .transition(.opacity)
             } else {
                 HStack(spacing: 0) {
@@ -35,9 +41,9 @@ struct ContentView: View {
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.chissPrimary.opacity(0.08),
-                                    Color.chissPrimary.opacity(0.22),
-                                    Color.chissPrimary.opacity(0.08),
+                                    Color.chissPrimary.opacity(0.04),
+                                    Color.chissPrimary.opacity(0.18),
+                                    Color.chissPrimary.opacity(0.04),
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -49,6 +55,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, trafficLightInset)
                 .transition(.opacity)
             }
         }
