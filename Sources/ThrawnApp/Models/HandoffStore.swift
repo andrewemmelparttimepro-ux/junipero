@@ -68,7 +68,14 @@ final class HandoffStore: ObservableObject {
 
     private var handoffsDir: URL {
         let dir = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/handoffs")
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:dir",
+                message: "Could not create handoffs dir \(dir.path): \(error.localizedDescription)"
+            )
+        }
         return dir
     }
 
@@ -126,7 +133,14 @@ final class HandoffStore: ObservableObject {
         // Write to disk
         let filename = "\(dayKey)-\(kind.rawValue).md"
         let reportURL = handoffsDir.appendingPathComponent(filename)
-        try? markdown.write(to: reportURL, atomically: true, encoding: .utf8)
+        do {
+            try markdown.write(to: reportURL, atomically: true, encoding: .utf8)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:write",
+                message: "Could not write \(filename): \(error.localizedDescription)"
+            )
+        }
 
         // Build summary line
         let summary = "\(kind.displayName) — Health \(metrics.overallHealthPercent)%, " +
@@ -413,8 +427,14 @@ final class HandoffStore: ObservableObject {
             ).path,
         ]
         let pointerURL = handoffsDir.appendingPathComponent("LATEST.json")
-        if let data = try? JSONSerialization.data(withJSONObject: pointer, options: [.prettyPrinted]) {
-            try? data.write(to: pointerURL, options: .atomic)
+        do {
+            let data = try JSONSerialization.data(withJSONObject: pointer, options: [.prettyPrinted])
+            try data.write(to: pointerURL, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:pointer",
+                message: "Could not write LATEST.json pointer: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -422,9 +442,32 @@ final class HandoffStore: ObservableObject {
 
     private func save() {
         let dir = indexFile.deletingLastPathComponent()
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(handoffs) {
-            try? data.write(to: indexFile, options: .atomic)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:save",
+                message: "createDirectory \(dir.path) failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(handoffs)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:save",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: indexFile, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "handoff:save",
+                message: "Write \(indexFile.lastPathComponent) failed: \(error.localizedDescription)"
+            )
         }
     }
 

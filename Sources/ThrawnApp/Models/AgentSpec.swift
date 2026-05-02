@@ -39,7 +39,7 @@ enum AgentRank: String, Codable, CaseIterable {
 //
 // Which pool of models an agent is allowed to use. The ProviderRouter
 // (Step 4) maps tier → concrete model. Dev-ops squad sits on `.local`
-// (Ollama + kimi-k2.5).
+// (Ollama + kimi-k2.6).
 
 enum ModelTier: String, Codable, CaseIterable {
     case local    // Ollama / on-box models — free, fast enough, good default

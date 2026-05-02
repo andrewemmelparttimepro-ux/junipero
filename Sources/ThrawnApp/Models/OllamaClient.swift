@@ -131,9 +131,12 @@ final class OllamaClient: ObservableObject {
         // Cancel existing run for this session
         activeRuns[sessionKey]?.cancel()
 
-        let task = Task.detached { [weak self, baseURL] in
+        // No `self` references inside this detached task — the closure works
+        // entirely off captured locals (baseURL, effectiveModel, text, etc.)
+        // and the user-supplied callbacks. Dropping `[weak self]` clears the
+        // unused-self warning without changing behavior.
+        let task = Task.detached { [baseURL] in
             let selectedModel = effectiveModel
-            guard let self else { return }
 
             do {
                 guard let url = URL(string: "\(baseURL)/api/chat") else {
@@ -224,8 +227,10 @@ final class OllamaClient: ObservableObject {
                         }
 
                         // Terminal HTTP error (non-retryable or retries exhausted).
+                        // Bind to immutable values before crossing concurrency boundary.
                         let suffix = attempt > 1 ? " (after \(attempt) attempts)" : ""
-                        await MainActor.run { onError(errMsg + suffix) }
+                        let finalMsg = errMsg + suffix
+                        await MainActor.run { onError(finalMsg) }
                         return
 
                     } catch is CancellationError {
@@ -246,22 +251,45 @@ final class OllamaClient: ObservableObject {
                             continue
                         }
 
+                        // Bind to immutable value before crossing concurrency boundary.
                         let suffix = attempt > 1 ? " (after \(attempt) attempts)" : ""
-                        await MainActor.run { onError(lastErrorDetail + suffix) }
+                        let finalMsg = lastErrorDetail + suffix
+                        await MainActor.run { onError(finalMsg) }
                         return
                     }
                 }
 
                 guard asyncBytes != nil, response != nil else {
                     let suffix = attempt > 1 ? " (after \(attempt) attempts)" : ""
-                    await MainActor.run { onError(lastErrorDetail.isEmpty ? "Ollama unreachable." : lastErrorDetail + suffix) }
+                    let finalMsg = lastErrorDetail.isEmpty ? "Ollama unreachable." : lastErrorDetail + suffix
+                    await MainActor.run { onError(finalMsg) }
                     return
                 }
 
                 var accumulated = ""
 
+                // Idle watchdog: if Ollama sends headers but stops emitting
+                // tokens (model hung, runtime stalled), abort cleanly rather
+                // than waiting the full URL request timeout. 90s is generous
+                // — even slow first-token-latency models start within ~30s.
+                let idleWatchdog = StreamIdleWatchdog(timeoutSeconds: 90)
+                let streamTask = Task.currentPriority  // capture for logging only
+                _ = streamTask
+                let watchdogTask = startStreamIdleWatchdog(idleWatchdog) { idle in
+                    FlightRecorder.logError(
+                        source: "ollama:idle",
+                        message: "Stream idle for \(Int(idle))s — aborting (session=\(sessionKey))"
+                    )
+                    // Cancelling URLSession.AsyncBytes via Task cancel is
+                    // the cleanest way to break out of the for-await loop.
+                    // The outer detached task will see Task.isCancelled
+                    // on its next iteration and bail.
+                }
+                defer { watchdogTask.cancel() }
+
                 for try await line in asyncBytes.lines {
                     if Task.isCancelled { break }
+                    await idleWatchdog.touch()
 
                     guard let lineData = line.data(using: .utf8),
                           let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
@@ -280,25 +308,31 @@ final class OllamaClient: ObservableObject {
                     }
 
                     if let done = json["done"] as? Bool, done {
+                        await idleWatchdog.stop()
                         let modelName = json["model"] as? String ?? selectedModel
+                        // Snapshot accumulated to immutable values before crossing
+                        // concurrency boundary — Swift 6 sendability requires it.
+                        let finalText = accumulated
                         FlightRecorder.logLLM(
                             agent: "chat", model: selectedModel,
                             promptLength: text.count,
-                            responseLength: accumulated.count,
+                            responseLength: finalText.count,
                             durationMs: 0,
                             sessionKey: sessionKey,
                             systemPromptLength: systemPrompt?.count ?? 0,
                             success: true,
-                            responseSummary: accumulated
+                            responseSummary: finalText
                         )
-                        await MainActor.run { onComplete(accumulated, modelName) }
+                        await MainActor.run { onComplete(finalText, modelName) }
                         return
                     }
                 }
 
-                // If we get here without "done":true, complete with what we have
-                if !accumulated.isEmpty {
-                    await MainActor.run { onComplete(accumulated, selectedModel) }
+                // If we get here without "done":true, complete with what we have.
+                // Snapshot to immutable value for safe concurrency crossing.
+                let finalText = accumulated
+                if !finalText.isEmpty {
+                    await MainActor.run { onComplete(finalText, selectedModel) }
                 } else if !Task.isCancelled {
                     await MainActor.run { onError("Empty response from Ollama.") }
                 }

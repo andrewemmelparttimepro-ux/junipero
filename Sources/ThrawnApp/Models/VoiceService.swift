@@ -574,8 +574,23 @@ final class VoiceService: NSObject, ObservableObject {
             quietHoursEnd: quietHoursEnd,
             maxQueueDepth: maxQueueDepth
         )
-        if let data = try? JSONEncoder().encode(s) {
-            try? data.write(to: Self.settingsPath, options: .atomic)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(s)
+        } catch {
+            FlightRecorder.logError(
+                source: "voice:saveSettings",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: Self.settingsPath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "voice:saveSettings",
+                message: "Write \(Self.settingsPath.lastPathComponent) failed: \(error.localizedDescription)"
+            )
         }
     }
 

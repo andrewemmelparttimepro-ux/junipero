@@ -178,8 +178,24 @@ final class AgentSpecStore: ObservableObject {
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(specs) else { return }
-        try? data.write(to: Self.savePath)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(specs)
+        } catch {
+            FlightRecorder.logError(
+                source: "specstore:save",
+                message: "JSON encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: Self.savePath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "specstore:save",
+                message: "Write \(Self.savePath.lastPathComponent) failed: \(error.localizedDescription)"
+            )
+        }
     }
 
     /// Preserve any persisted spec, but add defaults for any dev-ops
@@ -203,7 +219,15 @@ final class AgentSpecStore: ObservableObject {
         for spec in specs {
             guard let rel = spec.knowledgeDir else { continue }
             let abs = ThrawnPaths.appSupportDir.appendingPathComponent(rel)
-            try? fm.createDirectory(at: abs, withIntermediateDirectories: true)
+            do {
+                try fm.createDirectory(at: abs, withIntermediateDirectories: true)
+            } catch {
+                FlightRecorder.logError(
+                    source: "specstore:ensureKnowledgeDirs",
+                    message: "Could not create \(abs.path): \(error.localizedDescription)"
+                )
+                continue
+            }
             let readme = abs.appendingPathComponent("README.md")
             if !fm.fileExists(atPath: readme.path) {
                 let content = """
@@ -216,7 +240,14 @@ final class AgentSpecStore: ObservableObject {
                 Role: \(spec.role)
                 Purpose: \(spec.purpose)
                 """
-                try? content.write(to: readme, atomically: true, encoding: .utf8)
+                do {
+                    try content.write(to: readme, atomically: true, encoding: .utf8)
+                } catch {
+                    FlightRecorder.logError(
+                        source: "specstore:ensureKnowledgeDirs",
+                        message: "Could not write README at \(readme.path): \(error.localizedDescription)"
+                    )
+                }
             }
         }
     }
@@ -226,7 +257,7 @@ final class AgentSpecStore: ObservableObject {
     // One spec per dev-ops agent. All inherit tools and tier from the
     // Standard Loadout so pre-Step-2 behavior is exactly preserved:
     //   tools  -> ["bash", "file_read", "task_write"]
-    //   tier   -> .local (Ollama + kimi-k2.5)
+    //   tier   -> .local (Ollama + kimi-k2.6)
     //   rank   -> .b (pinned, not subject to auto-promo/demo)
     //
     // Personas and purposes are kept terse here — the real personality

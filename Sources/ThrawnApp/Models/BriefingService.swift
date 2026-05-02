@@ -86,10 +86,17 @@ final class BriefingService: NSObject, ObservableObject {
     override init() {
         super.init()
         loadState()
-        try? FileManager.default.createDirectory(
-            at: Self.rootDir,
-            withIntermediateDirectories: true
-        )
+        do {
+            try FileManager.default.createDirectory(
+                at: Self.rootDir,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:init",
+                message: "Could not create rootDir \(Self.rootDir.path): \(error.localizedDescription)"
+            )
+        }
     }
 
     func bind(
@@ -131,7 +138,14 @@ final class BriefingService: NSObject, ObservableObject {
 
         let ordered = Self.playOrder(for: store.specs)
         let dayDir = Self.kindFolder(for: Date(), kind: kind)
-        try? FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:generate",
+                message: "Could not create dayDir \(dayDir.path) — briefing may fail to persist: \(error.localizedDescription)"
+            )
+        }
 
         FlightRecorder.logEvent(
             category: "briefing", action: "start",
@@ -275,7 +289,14 @@ final class BriefingService: NSObject, ObservableObject {
         ## Spoken briefing
         \(payload.spoken)
         """
-        try? md.write(to: textURL, atomically: true, encoding: .utf8)
+        do {
+            try md.write(to: textURL, atomically: true, encoding: .utf8)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:writeText",
+                message: "Could not write \(textURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
 
         // Audio file (.caf) — Apple native, no transcode
         let audioURL = dayDir.appendingPathComponent("\(spec.id).caf")
@@ -503,8 +524,24 @@ final class BriefingService: NSObject, ObservableObject {
 
     private func saveIndex(_ entries: [BriefingEntry], kind: BriefingKind, dayDir: URL) {
         let indexURL = dayDir.appendingPathComponent("index.json")
-        guard let data = try? JSONEncoder.briefingEncoder.encode(entries) else { return }
-        try? data.write(to: indexURL, options: .atomic)
+        let data: Data
+        do {
+            data = try JSONEncoder.briefingEncoder.encode(entries)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:saveIndex",
+                message: "Could not encode index for \(kind.rawValue): \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: indexURL, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:saveIndex",
+                message: "Could not write \(indexURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
     }
 
     private func loadDay(kind: BriefingKind, date: Date) -> [BriefingEntry] {
@@ -525,8 +562,23 @@ final class BriefingService: NSObject, ObservableObject {
             lastRunAt.map { ($0.key.rawValue, $0.value) }
         )
         let state = PersistedState(lastRunAt: mapped)
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: Self.statePath, options: .atomic)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(state)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:saveState",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: Self.statePath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "briefing:saveState",
+                message: "Write \(Self.statePath.path) failed: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -553,28 +605,29 @@ final class BriefingService: NSObject, ObservableObject {
     // MARK: - Playback queue
 
     private func playCurrent() {
-        guard playIndex < playQueue.count else {
-            // Done — stop and return.
-            stopPlayback()
-            return
-        }
-        let entry = playQueue[playIndex]
-        guard let url = entry.audioPath,
-              let newPlayer = try? AVAudioPlayer(contentsOf: url) else {
-            // Skip this one and try the next
+        // Iterative skip-loop instead of recursion — guards against stack
+        // overflow if every audio file is unreadable (would have been one
+        // recursion level per agent).
+        while playIndex < playQueue.count {
+            let entry = playQueue[playIndex]
+            if let url = entry.audioPath,
+               let newPlayer = try? AVAudioPlayer(contentsOf: url) {
+                newPlayer.delegate = self
+                newPlayer.prepareToPlay()
+                self.player = newPlayer
+                self.currentlyPlayingAgentId = entry.agentId
+                newPlayer.play()
+                return
+            }
+            // Audio unreadable — skip and try the next entry
             FlightRecorder.logEvent(
                 category: "briefing", action: "play-skip",
                 detail: "\(entry.agentId): audio unreadable"
             )
             playIndex += 1
-            playCurrent()
-            return
         }
-        newPlayer.delegate = self
-        newPlayer.prepareToPlay()
-        self.player = newPlayer
-        self.currentlyPlayingAgentId = entry.agentId
-        newPlayer.play()
+        // Exhausted the queue without finding a playable entry.
+        stopPlayback()
     }
 }
 

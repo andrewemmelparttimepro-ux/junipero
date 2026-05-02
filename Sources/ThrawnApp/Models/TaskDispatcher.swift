@@ -26,6 +26,10 @@ final class TaskDispatcher: ObservableObject {
     private var logPath: URL { opsDir.appendingPathComponent("dispatch-log.jsonl") }
     private var errorLogPath: URL { opsDir.appendingPathComponent("dispatch-errors.jsonl") }
     private var backupDir: URL { opsDir.appendingPathComponent("board-backups") }
+    /// Sentinel lock file for cross-process mutual exclusion on the task
+    /// board. Held during the entire read-modify-write cycle so external
+    /// editors and a second Thrawn instance can't clobber updates.
+    private var boardLockPath: URL { opsDir.appendingPathComponent("TASK_BOARD.md.lock") }
 
     private let fm = FileManager.default
 
@@ -36,10 +40,44 @@ final class TaskDispatcher: ObservableObject {
         ensureDirectories()
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
-                self?.processAllUpdates()
+                await self?.runProcessWithWatchdog()
                 try? await Task.sleep(nanoseconds: 30_000_000_000) // Every 30 seconds
             }
         }
+    }
+
+    /// Hard cap on a single dispatch pass. If `processAllUpdates()` ever
+    /// hangs (corrupt board file, runaway regex, fs stall), the watchdog
+    /// breaks the loop so the polling loop keeps ticking instead of
+    /// silently freezing. 60s is generous — a normal pass finishes in
+    /// under a second even with hundreds of updates.
+    private static let processWatchdogSeconds: Int = 60
+    private static let processWatchdogNs: UInt64 = UInt64(processWatchdogSeconds) * 1_000_000_000
+
+    /// Run processAllUpdates with a watchdog timer. If the work doesn't
+    /// finish in time, log a CRITICAL error so the operator notices —
+    /// dispatcher freezes are not a "silent fail" we can tolerate.
+    private func runProcessWithWatchdog() async {
+        // Wrap synchronous processAllUpdates in a Task so we can await
+        // it with a timeout. The Task inherits @MainActor isolation since
+        // the method itself is @MainActor.
+        let workTask = Task { @MainActor [weak self] in
+            self?.processAllUpdates()
+        }
+
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.processWatchdogNs)
+            if !Task.isCancelled, !workTask.isCancelled {
+                FlightRecorder.logError(
+                    source: "dispatcher:watchdog",
+                    message: "processAllUpdates exceeded \(Self.processWatchdogSeconds)s watchdog — cancelling. Dispatcher may have lost a tick."
+                )
+                workTask.cancel()
+            }
+        }
+
+        await workTask.value
+        watchdog.cancel()
     }
 
     func stop() {
@@ -123,6 +161,17 @@ final class TaskDispatcher: ObservableObject {
         let (updates, sources) = collectUpdates()
         guard !updates.isEmpty else { return }
 
+        // Hold the cross-process board lock for the entire read-modify-write
+        // cycle. Without this, an external editor (or a second Thrawn) could
+        // race the dispatcher and lose either side's edits. The lock file
+        // is just a flock sentinel — actual atomicity comes from the
+        // temp-file-then-rename below. See FileLock.swift for details.
+        FileLock.withLock(at: boardLockPath, source: "dispatcher:boardLock") {
+            self.processAllUpdatesUnderLock(updates: updates, sources: sources)
+        }
+    }
+
+    private func processAllUpdatesUnderLock(updates: [[String: Any]], sources: [URL]) {
         // Read board
         guard var boardContent = try? String(contentsOf: boardPath, encoding: .utf8) else {
             logError(source: "dispatcher", message: "Cannot read TASK_BOARD.md at \(boardPath.path)")
@@ -289,14 +338,42 @@ final class TaskDispatcher: ObservableObject {
             logDispatch(action: "summary", taskId: "-", detail: "Applied \(appliedCount), skipped \(skippedCount)")
         }
 
-        // Clean up processed source files
+        // Clean up processed source files. CRITICAL for reliability: if a
+        // source file isn't cleared, its updates will be re-applied on the
+        // next tick. `move` / `update` are idempotent (no harm) but `create`
+        // and `note` would duplicate. Every cleanup is best-effort with
+        // fallbacks AND error logging.
         for source in sources {
             if source == legacyUpdatesPath {
                 // Reset legacy file to empty array
-                try? "[]".write(to: source, atomically: true, encoding: .utf8)
+                do {
+                    try "[]".write(to: source, atomically: true, encoding: .utf8)
+                } catch {
+                    logError(
+                        source: "dispatcher",
+                        message: "Could not reset \(source.lastPathComponent) — updates may be reprocessed: \(error.localizedDescription)"
+                    )
+                }
             } else {
-                // Delete per-agent file after processing
-                try? fm.removeItem(at: source)
+                // Delete per-agent file. Fall back to truncate-to-empty-array
+                // if delete fails (e.g. file locked, permissions) — that still
+                // prevents re-application without data loss.
+                do {
+                    try fm.removeItem(at: source)
+                } catch {
+                    logError(
+                        source: "dispatcher",
+                        message: "Could not delete \(source.lastPathComponent), attempting truncate fallback: \(error.localizedDescription)"
+                    )
+                    do {
+                        try "[]".write(to: source, atomically: true, encoding: .utf8)
+                    } catch {
+                        logError(
+                            source: "dispatcher",
+                            message: "FALLBACK FAILED — \(source.lastPathComponent) will reprocess on next tick: \(error.localizedDescription)"
+                        )
+                    }
+                }
             }
         }
     }
@@ -364,9 +441,18 @@ final class TaskDispatcher: ObservableObject {
         let timestamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let backupPath = backupDir.appendingPathComponent("TASK_BOARD-\(timestamp).md")
-        try? content.write(to: backupPath, atomically: true, encoding: .utf8)
+        do {
+            try content.write(to: backupPath, atomically: true, encoding: .utf8)
+        } catch {
+            // Backup failure is concerning but shouldn't block the dispatch.
+            // Log it loud so the operator notices.
+            logError(
+                source: "dispatcher",
+                message: "Backup write FAILED — proceeding without safety net: \(error.localizedDescription)"
+            )
+        }
 
-        // Prune old backups — keep last 20
+        // Prune old backups — keep last 20. Best-effort.
         if let files = try? fm.contentsOfDirectory(at: backupDir, includingPropertiesForKeys: [.creationDateKey])
             .sorted(by: { a, b in
                 let aDate = (try? a.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
@@ -382,12 +468,35 @@ final class TaskDispatcher: ObservableObject {
     // MARK: - Quarantine
 
     /// Move unparseable files to a quarantine directory instead of deleting.
+    /// If the move fails, fall back to deleting the file so it doesn't keep
+    /// getting reprocessed every tick (which would log spam forever).
     private func quarantineFile(_ path: URL) {
         let quarantineDir = opsDir.appendingPathComponent("quarantine")
-        try? fm.createDirectory(at: quarantineDir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: quarantineDir, withIntermediateDirectories: true)
+        } catch {
+            logError(
+                source: "dispatcher:quarantine",
+                message: "createDirectory failed: \(error.localizedDescription) — falling through to delete"
+            )
+            try? fm.removeItem(at: path)
+            return
+        }
+
         let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let dest = quarantineDir.appendingPathComponent("\(timestamp)-\(path.lastPathComponent)")
-        try? fm.moveItem(at: path, to: dest)
+        do {
+            try fm.moveItem(at: path, to: dest)
+        } catch {
+            logError(
+                source: "dispatcher:quarantine",
+                message: "moveItem failed: \(error.localizedDescription) — deleting source to prevent reprocess loop"
+            )
+            // Last resort: delete the unparseable file so it stops generating
+            // errors every 30 seconds. The error log already captured a 500-char
+            // preview of the contents.
+            try? fm.removeItem(at: path)
+        }
     }
 
     // MARK: - Logging

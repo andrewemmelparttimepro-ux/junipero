@@ -53,7 +53,23 @@ final class StandardLoadoutStore: ObservableObject {
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(loadout) else { return }
-        try? data.write(to: Self.savePath)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(loadout)
+        } catch {
+            FlightRecorder.logError(
+                source: "loadout:save",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: Self.savePath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "loadout:save",
+                message: "Write \(Self.savePath.lastPathComponent) failed: \(error.localizedDescription)"
+            )
+        }
     }
 }

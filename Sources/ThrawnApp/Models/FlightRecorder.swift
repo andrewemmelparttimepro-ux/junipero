@@ -16,9 +16,21 @@ import Foundation
 
 enum FlightRecorder {
     private static let fm = FileManager.default
+
+    /// Serialize file writes per-log-path so concurrent appends from different
+    /// actors don't interleave bytes. NSLock is fine here because every write
+    /// is a single short syscall — no risk of priority inversion.
+    private static let writeLock = NSLock()
+
     private static let logsDir: URL = {
         let dir = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/logs")
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            // FlightRecorder can't log to itself recursively. Fall back to
+            // print() so the error at least lands in Console.app.
+            print("⚠️ FlightRecorder: could not create logs dir \(dir.path) — \(error.localizedDescription)")
+        }
         return dir
     }()
 
@@ -322,10 +334,18 @@ enum FlightRecorder {
     static func writeDailyReport(for date: String? = nil) -> URL {
         let targetDate = date ?? today
         let reportsDir = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/reports")
-        try? fm.createDirectory(at: reportsDir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: reportsDir, withIntermediateDirectories: true)
+        } catch {
+            print("⚠️ FlightRecorder: could not create reports dir — \(error.localizedDescription)")
+        }
         let reportPath = reportsDir.appendingPathComponent("daily-\(targetDate).md")
         let report = generateDailyReport(for: targetDate)
-        try? report.write(to: reportPath, atomically: true, encoding: .utf8)
+        do {
+            try report.write(to: reportPath, atomically: true, encoding: .utf8)
+        } catch {
+            print("⚠️ FlightRecorder: could not write daily report — \(error.localizedDescription)")
+        }
         return reportPath
     }
 
@@ -345,17 +365,37 @@ enum FlightRecorder {
 
     // MARK: - Internals
 
+    /// Append a JSON entry to a JSONL log file. Reliability rule: if any
+    /// step fails, fall back to print() so the entry lands in Console.app
+    /// instead of vanishing. We can't recursively call FlightRecorder.logError
+    /// here because that would re-enter append() and risk infinite recursion
+    /// if the underlying filesystem is hosed.
     private static func append(_ entry: [String: Any], to path: URL) {
         guard let data = try? JSONSerialization.data(withJSONObject: entry),
-              let line = String(data: data, encoding: .utf8) else { return }
+              let line = String(data: data, encoding: .utf8) else {
+            print("⚠️ FlightRecorder: could not serialize entry to JSON — \(entry)")
+            return
+        }
+        let payload = Data((line + "\n").utf8)
+
+        // Serialize concurrent appends so two actors writing simultaneously
+        // can't interleave bytes within a single line.
+        writeLock.lock()
+        defer { writeLock.unlock() }
+
         if fm.fileExists(atPath: path.path) {
-            if let handle = try? FileHandle(forWritingTo: path) {
+            do {
+                let handle = try FileHandle(forWritingTo: path)
+                defer { try? handle.close() }
                 handle.seekToEndOfFile()
-                handle.write(Data((line + "\n").utf8))
-                handle.closeFile()
+                handle.write(payload)
+            } catch {
+                print("⚠️ FlightRecorder: append to \(path.lastPathComponent) failed (\(error.localizedDescription)) — entry: \(line)")
             }
         } else {
-            fm.createFile(atPath: path.path, contents: Data((line + "\n").utf8))
+            if !fm.createFile(atPath: path.path, contents: payload) {
+                print("⚠️ FlightRecorder: createFile \(path.lastPathComponent) failed — entry: \(line)")
+            }
         }
     }
 

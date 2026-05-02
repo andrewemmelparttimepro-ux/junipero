@@ -12,6 +12,12 @@ struct ShellCommandResult: Sendable {
     var isRestricted: Bool {
         stderr.hasPrefix("[RESTRICTED]")
     }
+
+    /// Special exit code returned when the watchdog killed the process.
+    /// Picked to be distinguishable from normal exit codes (0-255) and
+    /// from kill signals (124 is the canonical "timeout" exit code from
+    /// GNU coreutils' `timeout` command).
+    static let timeoutExitCode: Int32 = 124
 }
 
 // MARK: - Direct Execution Backend
@@ -19,15 +25,32 @@ struct ShellCommandResult: Sendable {
 // Uses Process() to run shell commands directly.
 // Used for notarized DMG distribution (non-App-Store builds).
 // For App Store builds, XPCExecutionBackend talks to the embedded helper instead.
+//
+// Reliability rule (per ~/Desktop/memory/feedback_reliability_first.md):
+// commands MUST NOT run forever. The agent's tool-loop watchdog is 5 minutes,
+// so individual shell commands need a slightly tighter cap so the watchdog
+// doesn't bite first (which would leave the process running, leaking).
 
 final class DirectExecutionBackend: ExecutionBackend {
+    /// Default per-command timeout. Tuned to be tighter than the
+    /// AgentScheduler.toolRoundWatchdogSeconds (300s) so shell-level cleanup
+    /// happens before the round-level watchdog.
+    static let defaultTimeoutSeconds: TimeInterval = 240  // 4 minutes
+
+    private let timeoutSeconds: TimeInterval
+
+    init(timeoutSeconds: TimeInterval = DirectExecutionBackend.defaultTimeoutSeconds) {
+        self.timeoutSeconds = timeoutSeconds
+    }
+
     func isAvailable() async -> Bool {
         // Always available when running outside the sandbox
         return FileManager.default.isExecutableFile(atPath: "/bin/zsh")
     }
 
     func execute(_ command: String) async -> ShellCommandResult {
-        await withCheckedContinuation { continuation in
+        let timeout = self.timeoutSeconds
+        return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -38,8 +61,45 @@ final class DirectExecutionBackend: ExecutionBackend {
                 process.standardOutput = outPipe
                 process.standardError = errPipe
 
+                // Single-resume guard so the timeout watchdog and the normal
+                // wait-loop can't both resume the continuation.
+                let resumeLock = NSLock()
+                var resumed = false
+                let resumeOnce: (ShellCommandResult) -> Void = { result in
+                    resumeLock.lock()
+                    let alreadyResumed = resumed
+                    resumed = true
+                    resumeLock.unlock()
+                    if !alreadyResumed {
+                        continuation.resume(returning: result)
+                    }
+                }
+
                 do {
                     try process.run()
+
+                    // Watchdog: if the process is still alive after `timeout`
+                    // seconds, kill it (and the whole process group via
+                    // SIGTERM → SIGKILL escalation). This prevents runaway
+                    // commands like `tail -f`, `sleep 1d`, or hung curl from
+                    // blocking the heartbeat AND leaking processes.
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak process] in
+                        guard let process, process.isRunning else { return }
+                        // Try graceful first
+                        process.terminate()
+                        // Hard kill after 2s grace period if still alive
+                        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak process] in
+                            guard let process, process.isRunning else { return }
+                            kill(process.processIdentifier, SIGKILL)
+                        }
+                        // Resume the continuation immediately with a clear
+                        // timeout error — don't wait for the kill to complete.
+                        resumeOnce(ShellCommandResult(
+                            exitCode: ShellCommandResult.timeoutExitCode,
+                            stdout: "",
+                            stderr: "[TIMEOUT] Command exceeded \(Int(timeout))s and was killed. Command: \(String(command.prefix(200)))"
+                        ))
+                    }
 
                     // Read both pipes concurrently on GCD threads to avoid
                     // pipe-buffer deadlock (64 KB default on macOS).
@@ -63,13 +123,13 @@ final class DirectExecutionBackend: ExecutionBackend {
 
                     let stdout = String(data: outData, encoding: .utf8) ?? ""
                     let stderr = String(data: errData, encoding: .utf8) ?? ""
-                    continuation.resume(returning: ShellCommandResult(
+                    resumeOnce(ShellCommandResult(
                         exitCode: process.terminationStatus,
                         stdout: stdout,
                         stderr: stderr
                     ))
                 } catch {
-                    continuation.resume(returning: ShellCommandResult(
+                    resumeOnce(ShellCommandResult(
                         exitCode: 1,
                         stdout: "",
                         stderr: "Failed to run command: \(error.localizedDescription)"

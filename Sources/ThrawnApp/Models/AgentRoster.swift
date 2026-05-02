@@ -115,8 +115,39 @@ final class AgentRosterStore: ObservableObject {
 
     init() {
         load()
+        recoverStuckStates()
         loadCronJobMap()
         startPolling()
+    }
+
+    /// Crash recovery: reset agents stuck in `.working`, `.handoff`, or
+    /// `.review` to `.idle` on app startup. If the app crashed mid-heartbeat,
+    /// those states would persist forever and the agent would never fire
+    /// again (the scheduler's `runningAgents` check blocks duplicate runs,
+    /// but that's in-memory only — the *roster's* state is persisted).
+    /// Reliability rule: a crash must never brick an agent.
+    private func recoverStuckStates() {
+        var resetCount = 0
+        for index in agents.indices {
+            let state = agents[index].state
+            if state == .working || state == .handoff || state == .review {
+                let oldDetail = agents[index].detail
+                agents[index].state = .idle
+                agents[index].detail = "Standing by"
+                agents[index].lastTransition = Date()
+                resetCount += 1
+                FlightRecorder.logEvent(
+                    category: "roster", action: "recover-stuck-state",
+                    detail: "\(agents[index].id) was \(state.rawValue) (\(oldDetail)) — reset to idle on startup"
+                )
+            }
+        }
+        if resetCount > 0 {
+            FlightRecorder.logEvent(
+                category: "roster", action: "recover-summary",
+                detail: "Reset \(resetCount) agent(s) on startup"
+            )
+        }
     }
 
     func setState(id: String, state: AgentActivityState, detail: String) {
@@ -356,8 +387,24 @@ final class AgentRosterStore: ObservableObject {
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(agents) {
-            try? data.write(to: Self.savePath)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(agents)
+        } catch {
+            FlightRecorder.logError(
+                source: "roster:save",
+                message: "JSON encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        // .atomic prevents partial-write corruption on crash mid-save.
+        do {
+            try data.write(to: Self.savePath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "roster:save",
+                message: "Write \(Self.savePath.lastPathComponent) failed: \(error.localizedDescription)"
+            )
         }
     }
 }

@@ -478,8 +478,21 @@ final class AnthropicClient: ObservableObject {
                 var modelName: String?
                 var currentEvent = ""
 
+                // Idle watchdog: catches "headers received but no events" stalls
+                // long before the 600s URL request timeout. 90s tolerates slow
+                // first-token-latency on overloaded Anthropic capacity windows.
+                let idleWatchdog = StreamIdleWatchdog(timeoutSeconds: 90)
+                let watchdogTask = startStreamIdleWatchdog(idleWatchdog) { idle in
+                    FlightRecorder.logError(
+                        source: "anthropic:idle",
+                        message: "SSE stream idle for \(Int(idle))s — aborting"
+                    )
+                }
+                defer { watchdogTask.cancel() }
+
                 for try await line in bytes.lines {
                     guard !Task.isCancelled else { return }
+                    await idleWatchdog.touch()
 
                     if line.hasPrefix("event: ") {
                         currentEvent = String(line.dropFirst(7))
@@ -510,6 +523,7 @@ final class AnthropicClient: ObservableObject {
                         case .messageStop:
                             self.connected = true
                             self.lastError = nil
+                            await idleWatchdog.stop()
                             onComplete(fullText, modelName)
                             return
 
@@ -531,9 +545,17 @@ final class AnthropicClient: ObservableObject {
                     }
                 }
 
-                // If we got here without message_stop, the stream ended unexpectedly
+                // If we got here without message_stop, the stream ended unexpectedly.
+                // Reliability rule: never silently fail. Log the truncation
+                // so the operator knows the response is partial — but still
+                // deliver what we have rather than losing it entirely.
                 if !fullText.isEmpty {
-                    // Partial response — deliver what we have
+                    FlightRecorder.logEvent(
+                        category: "anthropic",
+                        action: "stream-truncated",
+                        detail: "Stream ended without message_stop — delivering partial \(fullText.count) chars",
+                        metadata: ["model": modelName ?? "unknown"]
+                    )
                     onComplete(fullText, modelName)
                     return
                 }

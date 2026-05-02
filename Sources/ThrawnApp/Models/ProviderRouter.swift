@@ -7,7 +7,7 @@ import Foundation
 // which model name to pass to it.
 //
 // Routing rules (v2):
-//   .local   → Ollama kimi-k2.5:cloud (free, always available)
+//   .local   → Ollama kimi-k2.6:cloud (free, always available)
 //   .cheap   → Anthropic Haiku (if keyed) → Ollama fallback
 //   .premium → OpenAI GPT-4.1 (if keyed) → Anthropic Sonnet fallback → Ollama fallback
 //
@@ -39,7 +39,7 @@ final class ProviderRouter {
     private weak var openai: OpenAIClient?
 
     // Canonical model names per tier. Edit these to re-tune the ladder.
-    static let localModel        = "kimi-k2.5:cloud"
+    static let localModel        = "kimi-k2.6:cloud"
     static let cheapAnthropicModel   = "claude-haiku-4-5-20251001"
     static let premiumAnthropicModel = "claude-sonnet-4-6"
     static let premiumOpenAIModel    = "gpt-4.1"

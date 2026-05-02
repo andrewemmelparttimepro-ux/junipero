@@ -763,9 +763,24 @@ final class ThreadStore: ObservableObject {
                 return thread
             }
         } catch {
+            // Corruption recovery — try to move the broken file aside.
+            // If move fails, fall back to delete so we don't get stuck
+            // re-reading the same broken JSON forever.
             let brokenName = "threads-corrupt-\(Int(Date().timeIntervalSince1970)).json"
             let brokenPath = storageDir.appendingPathComponent(brokenName)
-            try? FileManager.default.moveItem(at: storageURL, to: brokenPath)
+            do {
+                try FileManager.default.moveItem(at: storageURL, to: brokenPath)
+                FlightRecorder.logError(
+                    source: "threadstore:load",
+                    message: "Corrupt threads file moved to \(brokenName): \(error.localizedDescription)"
+                )
+            } catch {
+                FlightRecorder.logError(
+                    source: "threadstore:load",
+                    message: "Could not move corrupt file (\(error.localizedDescription)) — deleting to prevent reload loop"
+                )
+                try? FileManager.default.removeItem(at: storageURL)
+            }
             self.threads = []
             self.lastErrorText = "Recovered from a corrupted local thread file."
         }
@@ -780,6 +795,10 @@ final class ThreadStore: ObservableObject {
             try data.write(to: storageURL, options: .atomic)
         } catch {
             lastErrorText = "Failed to save local thread history."
+            FlightRecorder.logError(
+                source: "threadstore:save",
+                message: "Could not persist threads to \(storageURL.lastPathComponent): \(error.localizedDescription)"
+            )
         }
     }
 
@@ -832,6 +851,10 @@ final class ThreadStore: ObservableObject {
             truncateDraftEventLog()
         } catch {
             lastErrorText = "Failed to persist live drafts."
+            FlightRecorder.logError(
+                source: "threadstore:saveDrafts",
+                message: "Could not persist drafts: \(error.localizedDescription)"
+            )
         }
     }
 

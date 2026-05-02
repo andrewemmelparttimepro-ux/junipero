@@ -89,7 +89,7 @@ actor ForceDirectedLayout {
                 let idB = nodeIds[j]
                 guard let posB = positions[idB] else { continue }
 
-                var diff = posA - posB
+                let diff = posA - posB
                 var dist = vecLength(diff)
 
                 // Skip far-away pairs

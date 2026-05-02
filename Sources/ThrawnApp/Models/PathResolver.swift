@@ -163,4 +163,116 @@ enum ThrawnPaths {
         }
         try? fm.copyItem(at: src, to: dst)
     }
+
+    // MARK: - Startup Integrity Check
+    //
+    // Reliability rule: fail loudly at startup, not silently three hours later
+    // when an agent tries to write a file. Verifies every directory the
+    // scheduler / dispatcher / FlightRecorder needs to function. Each one is
+    // tested by attempting to create it AND write a tiny probe file — that
+    // catches sandbox permission issues that bare createDirectory misses.
+
+    struct OpsIntegrityReport {
+        let allGood: Bool
+        let missingDirs: [URL]
+        let unwritableDirs: [URL]
+        let totalChecked: Int
+
+        /// Plain-English summary suitable for logs / UI banner.
+        var summary: String {
+            if allGood { return "All \(totalChecked) ops directories OK." }
+            var parts: [String] = []
+            if !missingDirs.isEmpty {
+                parts.append("\(missingDirs.count) missing")
+            }
+            if !unwritableDirs.isEmpty {
+                parts.append("\(unwritableDirs.count) unwritable")
+            }
+            return "Ops integrity: \(parts.joined(separator: ", ")) of \(totalChecked) dirs."
+        }
+
+        var problematicPaths: [String] {
+            (missingDirs + unwritableDirs).map { $0.path }
+        }
+    }
+
+    /// Every directory the runtime relies on. Tested at startup.
+    private static var requiredOpsDirectories: [URL] {
+        [
+            appSupportDir,
+            appSupportDir.appendingPathComponent("workspace"),
+            appSupportDir.appendingPathComponent("workspace/ops"),
+            appSupportDir.appendingPathComponent("workspace/ops/heartbeats"),
+            appSupportDir.appendingPathComponent("workspace/ops/agent-output"),
+            appSupportDir.appendingPathComponent("workspace/ops/pending-updates"),
+            appSupportDir.appendingPathComponent("workspace/ops/board-backups"),
+            appSupportDir.appendingPathComponent("workspace/ops/quarantine"),
+            appSupportDir.appendingPathComponent("workspace/agents"),
+            appSupportDir.appendingPathComponent("workspace/handoffs"),
+            appSupportDir.appendingPathComponent("workspace/logs"),
+            appSupportDir.appendingPathComponent("workspace/reports"),
+        ]
+    }
+
+    /// Verify all ops directories exist AND are writable. Call this once at
+    /// app launch before starting the scheduler / dispatcher. Logs every
+    /// failure via FlightRecorder so the operator sees them in diagnostics.
+    @discardableResult
+    static func verifyOpsDirectories() -> OpsIntegrityReport {
+        var missing: [URL] = []
+        var unwritable: [URL] = []
+
+        for dir in requiredOpsDirectories {
+            // Step 1: ensure it exists
+            if !fm.fileExists(atPath: dir.path) {
+                do {
+                    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                } catch {
+                    FlightRecorder.logError(
+                        source: "integrity:create",
+                        message: "Could not create \(dir.path): \(error.localizedDescription)"
+                    )
+                    missing.append(dir)
+                    continue
+                }
+            }
+
+            // Step 2: writability probe — a tiny file that gets cleaned up.
+            // This catches sandbox permission denials that createDirectory
+                // can succeed past (the dir exists but writes fail).
+            let probe = dir.appendingPathComponent(".thrawn-write-probe")
+            do {
+                try Data("ok".utf8).write(to: probe, options: .atomic)
+                try fm.removeItem(at: probe)
+            } catch {
+                FlightRecorder.logError(
+                    source: "integrity:writable",
+                    message: "Probe write failed in \(dir.path): \(error.localizedDescription)"
+                )
+                unwritable.append(dir)
+            }
+        }
+
+        let allGood = missing.isEmpty && unwritable.isEmpty
+        let report = OpsIntegrityReport(
+            allGood: allGood,
+            missingDirs: missing,
+            unwritableDirs: unwritable,
+            totalChecked: requiredOpsDirectories.count
+        )
+
+        if allGood {
+            FlightRecorder.logEvent(
+                category: "integrity", action: "startup-ok",
+                detail: report.summary
+            )
+        } else {
+            FlightRecorder.logError(
+                source: "integrity:startup",
+                message: "STARTUP INTEGRITY FAILED — \(report.summary). Bad paths: \(report.problematicPaths.joined(separator: ", "))"
+            )
+        }
+
+        return report
+    }
 }

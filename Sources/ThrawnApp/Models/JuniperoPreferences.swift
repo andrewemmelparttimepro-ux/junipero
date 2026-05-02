@@ -95,10 +95,33 @@ enum ThrawnPreferencesStore {
 
     static func save(_ prefs: ThrawnPreferences) {
         let dir = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(prefs) {
-            try? data.write(to: fileURL, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "preferences:save",
+                message: "createDirectory failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(prefs)
+        } catch {
+            FlightRecorder.logError(
+                source: "preferences:save",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: fileURL, options: .atomic)
             NotificationCenter.default.post(name: changedNotification, object: nil)
+        } catch {
+            FlightRecorder.logError(
+                source: "preferences:save",
+                message: "Write \(fileURL.lastPathComponent) failed: \(error.localizedDescription)"
+            )
         }
     }
 

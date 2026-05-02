@@ -237,8 +237,20 @@ final class OpenAIClient: ObservableObject {
                 // data: [DONE]
                 var fullText = ""
 
+                // Idle watchdog — same rationale as in AnthropicClient: kill
+                // stalled streams long before the 600s request timeout.
+                let idleWatchdog = StreamIdleWatchdog(timeoutSeconds: 90)
+                let watchdogTask = startStreamIdleWatchdog(idleWatchdog) { idle in
+                    FlightRecorder.logError(
+                        source: "openai:idle",
+                        message: "SSE stream idle for \(Int(idle))s — aborting"
+                    )
+                }
+                defer { watchdogTask.cancel() }
+
                 for try await line in bytes.lines {
                     guard !Task.isCancelled else { return }
+                    await idleWatchdog.touch()
 
                     guard line.hasPrefix("data: ") else { continue }
                     let payload = String(line.dropFirst(6))
@@ -246,6 +258,7 @@ final class OpenAIClient: ObservableObject {
                     if payload == "[DONE]" {
                         self.connected = true
                         self.lastError = nil
+                        await idleWatchdog.stop()
                         onComplete(fullText, self.model)
                         return
                     }
@@ -263,7 +276,15 @@ final class OpenAIClient: ObservableObject {
                     onDelta(content)
                 }
 
+                // Stream ended without [DONE] sentinel — truncation. Log it so
+                // we don't silently deliver partial responses without notice.
                 if !fullText.isEmpty {
+                    FlightRecorder.logEvent(
+                        category: "openai",
+                        action: "stream-truncated",
+                        detail: "Stream ended without [DONE] — delivering partial \(fullText.count) chars",
+                        metadata: ["model": self.model]
+                    )
                     onComplete(fullText, self.model)
                     return
                 }

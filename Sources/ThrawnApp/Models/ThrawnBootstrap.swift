@@ -440,8 +440,14 @@ final class ThrawnBootstrap: ObservableObject {
             cogneeEnabled: cogneeHealthy,
             setupDate: Date()
         )
-        if let data = try? JSONEncoder().encode(config) {
-            try? data.write(to: configURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(config)
+            try data.write(to: configURL, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "bootstrap:writeConfig",
+                message: "Could not persist setup config: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -451,8 +457,14 @@ final class ThrawnBootstrap: ObservableObject {
     }
 
     private func writeSetupState(_ state: SetupState) {
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: setupURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: setupURL, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "bootstrap:writeSetupState",
+                message: "Could not persist setup state: \(error.localizedDescription)"
+            )
         }
     }
 

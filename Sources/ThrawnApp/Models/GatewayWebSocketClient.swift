@@ -535,7 +535,7 @@ final class GatewayWSClient: ObservableObject {
         let maxPolls = 45
         let pollIntervalNs: UInt64 = 4_000_000_000
 
-        for pollIndex in 0..<maxPolls {
+        for _ in 0..<maxPolls {
             guard !Task.isCancelled else { return }
             try? await Task.sleep(nanoseconds: pollIntervalNs)
 

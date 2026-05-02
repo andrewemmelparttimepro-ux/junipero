@@ -201,7 +201,23 @@ final class RankEvaluator: ObservableObject {
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(scores) else { return }
-        try? data.write(to: Self.savePath)
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(scores)
+        } catch {
+            FlightRecorder.logError(
+                source: "rankeval:save",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: Self.savePath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "rankeval:save",
+                message: "Write \(Self.savePath.lastPathComponent) failed: \(error.localizedDescription)"
+            )
+        }
     }
 }

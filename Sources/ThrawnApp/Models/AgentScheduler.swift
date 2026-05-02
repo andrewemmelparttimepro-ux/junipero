@@ -30,6 +30,10 @@ final class AgentScheduler: ObservableObject {
 
     private var timerTask: Task<Void, Never>?
     private var activeRuns: [String: Task<Void, Never>] = [:]
+    /// Tool-loop tasks spawned AFTER the main heartbeat call returns. Tracked
+    /// separately so they can be cancelled cleanly on stop() — otherwise they
+    /// could outlive the main heartbeat task and leak commands during shutdown.
+    private var toolLoopTasks: [String: Task<Void, Never>] = [:]
     private weak var ollamaClient: OllamaClient?
     private weak var anthropicClient: AnthropicClient?
     private weak var openaiClient: OpenAIClient?
@@ -51,6 +55,13 @@ final class AgentScheduler: ObservableObject {
     private static let configPath = ThrawnPaths.appSupportDir
         .appendingPathComponent("agent-scheduler.json")
 
+    /// Where last-run timestamps persist. Survives app restarts so the
+    /// minGap check still applies after a relaunch — without this, an agent
+    /// that just ran could fire again seconds later if the app crashed and
+    /// the user reopened it during the same minute window.
+    private static let lastRunPath = ThrawnPaths.appSupportDir
+        .appendingPathComponent("agent-last-runs.json")
+
     static let defaultAgents: [AgentHeartbeatConfig] = [
         AgentHeartbeatConfig(id: "thrawn",       name: "Thrawn",   minuteOffset: 0,  heartbeatFile: "thrawn.HEARTBEAT.md",           agentFile: "thrawn.md",  outputFile: "thrawn.json",       enabled: true),
         AgentHeartbeatConfig(id: "thrawn-dream",  name: "Thrawn",   minuteOffset: 5,  heartbeatFile: "thrawn-dream.HEARTBEAT.md",    agentFile: "thrawn.md",  outputFile: "thrawn-dream.json", enabled: true),
@@ -68,6 +79,7 @@ final class AgentScheduler: ObservableObject {
 
     init() {
         self.agents = Self.loadConfig() ?? Self.defaultAgents
+        self.lastRunTimes = Self.loadLastRuns()
     }
 
     // MARK: - Binding
@@ -109,6 +121,20 @@ final class AgentScheduler: ObservableObject {
 
     func start() {
         guard timerTask == nil else { return }
+
+        // Reliability rule: fail loudly at startup, not silently later.
+        // Verify every directory the scheduler/dispatcher will touch is
+        // present AND writable. Continues even on partial failure since
+        // some agents may still be functional, but the failures are logged
+        // loud and clear via FlightRecorder.
+        let report = ThrawnPaths.verifyOpsDirectories()
+        if !report.allGood {
+            FlightRecorder.logError(
+                source: "scheduler:start",
+                message: "Starting scheduler with integrity issues: \(report.summary)"
+            )
+        }
+
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.tick()
@@ -123,6 +149,11 @@ final class AgentScheduler: ObservableObject {
         timerTask = nil
         for task in activeRuns.values { task.cancel() }
         activeRuns.removeAll()
+        // Cancel any in-flight tool loops that might be running after the
+        // main heartbeat returned. Without this, shell commands could keep
+        // executing after the user stopped the scheduler.
+        for task in toolLoopTasks.values { task.cancel() }
+        toolLoopTasks.removeAll()
         runningAgents.removeAll()
     }
 
@@ -270,8 +301,30 @@ final class AgentScheduler: ObservableObject {
             let systemPrompt = "You are \(agent.name). You have \(Self.maxToolRounds) tool-use rounds. DO THE WORK on your assigned tasks — produce deliverables, write code, run commands. Then write your task board updates to your update file. Do not waste rounds on exploration or status reports."
             let sessionKey = "agent:heartbeat:\(agent.id)"
 
-            // Use a semaphore-like pattern with continuation
+            // Continuation with watchdog timeout. Reliability rule: a heartbeat
+            // must NEVER hang forever — if the provider stops responding without
+            // calling onComplete or onError (network stall, broken stream, etc.),
+            // the watchdog forces an error after the cap. Both the success/error
+            // callbacks and the watchdog go through a single-resume guard so the
+            // continuation can only resume exactly once.
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                var resumed = false
+                let resumeOnce: () -> Void = {
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume()
+                }
+
+                // Watchdog task — fires after the heartbeat cap.
+                let watchdog = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: Self.heartbeatWatchdogNs)
+                    guard !Task.isCancelled, !resumed else { return }
+                    let msg = "Heartbeat exceeded \(Self.heartbeatWatchdogSeconds)s watchdog"
+                    FlightRecorder.logError(source: "scheduler:\(agent.id)", message: msg)
+                    errorMsg = msg
+                    resumeOnce()
+                }
+
                 self.sendToActiveProvider(
                     agentId: agent.id,
                     text: prompt,
@@ -283,11 +336,13 @@ final class AgentScheduler: ObservableObject {
                     onComplete: { finalText, _ in
                         responseText = finalText
                         completed = true
-                        continuation.resume()
+                        watchdog.cancel()
+                        resumeOnce()
                     },
                     onError: { error in
                         errorMsg = error
-                        continuation.resume()
+                        watchdog.cancel()
+                        resumeOnce()
                     }
                 )
             }
@@ -297,6 +352,7 @@ final class AgentScheduler: ObservableObject {
             await MainActor.run {
                 self.runningAgents.remove(agent.id)
                 self.lastRunTimes[agent.id] = startTime
+                self.saveLastRuns()
 
                 if completed {
                     // Peel the first + last lines as spoken open/close
@@ -326,11 +382,21 @@ final class AgentScheduler: ObservableObject {
                     // Write output to agent's output file
                     self.writeAgentOutput(agent: agent, response: responseText, durationMs: durationMs)
 
-                    // Execute any shell commands from the response (unleashed mode only)
+                    // Execute any shell commands from the response (unleashed mode only).
+                    // Tracked in toolLoopTasks so stop() can cancel cleanly and so a
+                    // second heartbeat for the same agent can replace any stale loop.
                     if let exec = self.executionService, exec.accessMode.isUnleashed {
-                        Task {
+                        let agentId = agent.id
+                        let prior = self.toolLoopTasks[agentId]
+                        prior?.cancel()
+                        let toolTask = Task { [weak self] in
+                            guard let self else { return }
                             await self.executeToolCalls(from: responseText, agent: agent)
+                            await MainActor.run { [weak self] in
+                                _ = self?.toolLoopTasks.removeValue(forKey: agentId)
+                            }
                         }
+                        self.toolLoopTasks[agentId] = toolTask
                     }
 
                     // Transition: working → review → idle
@@ -555,6 +621,7 @@ final class AgentScheduler: ObservableObject {
 
     /// Fire a single prompt at an agent and return the full response text.
     /// Returns nil on failure so the caller can skip without blowing up.
+    /// Watchdog-protected: never hangs longer than the heartbeat cap.
     func sendOneShot(
         agentId: String,
         prompt: String,
@@ -569,18 +636,34 @@ final class AgentScheduler: ObservableObject {
                 resumed = true
                 cont.resume(returning: value)
             }
+
+            // Watchdog — if the provider stalls, return nil so callers move on.
+            let watchdog = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: Self.heartbeatWatchdogNs)
+                guard !Task.isCancelled, !resumed else { return }
+                FlightRecorder.logError(
+                    source: "oneshot:\(agentId)",
+                    message: "sendOneShot exceeded \(Self.heartbeatWatchdogSeconds)s watchdog"
+                )
+                resume(nil)
+            }
+
             sendToActiveProvider(
                 agentId: agentId,
                 text: prompt,
                 systemPrompt: systemPrompt,
                 sessionKey: key,
                 onDelta: { _ in },
-                onComplete: { full, _ in resume(full) },
+                onComplete: { full, _ in
+                    watchdog.cancel()
+                    resume(full)
+                },
                 onError: { err in
                     FlightRecorder.logEvent(
                         category: "briefing", action: "oneshot-error",
                         detail: "\(agentId): \(err)"
                     )
+                    watchdog.cancel()
                     resume(nil)
                 }
             )
@@ -592,7 +675,7 @@ final class AgentScheduler: ObservableObject {
     /// Route a send request to the active provider from ProviderStateStore.
     /// Falls back through available providers if the active one isn't connected.
     /// Standard model for all agent heartbeats
-    static let agentModel = "kimi-k2.5:cloud"
+    static let agentModel = "kimi-k2.6:cloud"
 
     private func sendToActiveProvider(
         agentId: String,
@@ -702,6 +785,16 @@ final class AgentScheduler: ObservableObject {
         }
     }
 
+    /// How long the heartbeat waits for Ollama to come back before bailing.
+    /// Tuned to handle DarkWake / model-pull / Ollama restart windows
+    /// without immediately failing the heartbeat. Total worst-case: ~17s.
+    private static let ollamaReconnectAttempts: Int = 3
+    private static let ollamaReconnectBackoffNs: [UInt64] = [
+        1_000_000_000,   // 1s
+        4_000_000_000,   // 4s
+        12_000_000_000,  // 12s
+    ]
+
     private func dispatchOllama(
         text: String,
         systemPrompt: String?,
@@ -710,20 +803,66 @@ final class AgentScheduler: ObservableObject {
         onComplete: @escaping (String, String?) -> Void,
         onError: @escaping (String) -> Void
     ) {
-        guard let client = ollamaClient, client.connected else {
-            if let client = ollamaClient {
-                Task { await client.refreshConnectionStatus() }
+        // Reliability rule: a transient Ollama hiccup (DarkWake, brief
+        // restart, slow model load) must NOT instantly fail the heartbeat.
+        // Probe the connection a few times with backoff, refreshing
+        // connection status on each attempt, before giving up.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            for attempt in 0..<Self.ollamaReconnectAttempts {
+                guard let client = self.ollamaClient else {
+                    onError("Ollama client not bound to scheduler.")
+                    return
+                }
+
+                if client.connected {
+                    client.send(
+                        text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                        model: Self.agentModel,
+                        onDelta: onDelta,
+                        onComplete: onComplete,
+                        onError: onError
+                    )
+                    return
+                }
+
+                // Not connected — try to refresh and re-check.
+                FlightRecorder.logEvent(
+                    category: "ollama", action: "reconnect-attempt",
+                    detail: "session=\(sessionKey) attempt=\(attempt + 1)/\(Self.ollamaReconnectAttempts)"
+                )
+                await client.refreshConnectionStatus()
+
+                if client.connected {
+                    FlightRecorder.logEvent(
+                        category: "ollama", action: "reconnect-success",
+                        detail: "session=\(sessionKey) recovered on attempt \(attempt + 1)"
+                    )
+                    client.send(
+                        text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
+                        model: Self.agentModel,
+                        onDelta: onDelta,
+                        onComplete: onComplete,
+                        onError: onError
+                    )
+                    return
+                }
+
+                // Backoff before next attempt (skip on last iteration).
+                if attempt < Self.ollamaReconnectAttempts - 1 {
+                    let backoff = Self.ollamaReconnectBackoffNs[attempt]
+                    try? await Task.sleep(nanoseconds: backoff)
+                }
             }
-            onError("Ollama not connected. Make sure Ollama is running on localhost:11434.")
-            return
+
+            // Exhausted all retries.
+            FlightRecorder.logError(
+                source: "scheduler:dispatchOllama",
+                message: "Ollama unreachable after \(Self.ollamaReconnectAttempts) attempts (session=\(sessionKey))"
+            )
+            onError("Ollama unreachable after \(Self.ollamaReconnectAttempts) reconnect attempts. Make sure Ollama is running on localhost:11434.")
         }
-        client.send(
-            text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-            model: Self.agentModel,
-            onDelta: onDelta,
-            onComplete: onComplete,
-            onError: onError
-        )
     }
 
     // MARK: - Tool Call Extraction & Execution (Iterative Loop)
@@ -740,6 +879,23 @@ final class AgentScheduler: ObservableObject {
     /// Maximum number of tool-use rounds per heartbeat. Agents that need
     /// more work than this should break the task into subtasks.
     private static let maxToolRounds = 8
+
+    // MARK: - Watchdog timeouts (reliability rule: never hang forever)
+    //
+    // Every continuation that awaits a provider callback is wrapped with a
+    // hard timeout. If the provider stops responding without firing
+    // onComplete or onError, the watchdog forces a clean exit so the agent
+    // never sits forever in `working` state.
+
+    /// Hard cap on a single heartbeat call (initial prompt + streaming).
+    /// 15 minutes lets a slow Ollama generation finish but cuts off true hangs.
+    static let heartbeatWatchdogSeconds: Int = 900
+    static let heartbeatWatchdogNs: UInt64 = UInt64(heartbeatWatchdogSeconds) * 1_000_000_000
+
+    /// Hard cap on a single tool-loop round (commands + follow-up LLM call).
+    /// 5 minutes — most rounds finish in seconds; this catches stuck rounds.
+    static let toolRoundWatchdogSeconds: Int = 300
+    static let toolRoundWatchdogNs: UInt64 = UInt64(toolRoundWatchdogSeconds) * 1_000_000_000
 
     // MARK: - SOD/EOD briefing trigger config
 
@@ -857,7 +1013,27 @@ final class AgentScheduler: ObservableObject {
             var nextResponse = ""
             var gotResponse = false
 
+            // Watchdog-protected continuation — one round of the tool loop
+            // must NEVER hang forever. If the provider stalls, the watchdog
+            // forces a clean exit so the agent moves on or terminates.
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                var resumed = false
+                let resumeOnce: () -> Void = {
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume()
+                }
+
+                let watchdog = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: Self.toolRoundWatchdogNs)
+                    guard !Task.isCancelled, !resumed else { return }
+                    FlightRecorder.logError(
+                        source: "toolloop:\(agent.id)",
+                        message: "Round \(round) exceeded \(Self.toolRoundWatchdogSeconds)s watchdog"
+                    )
+                    resumeOnce()
+                }
+
                 self.sendToActiveProvider(
                     agentId: agent.id,
                     text: feedback,
@@ -867,14 +1043,16 @@ final class AgentScheduler: ObservableObject {
                     onComplete: { response, _ in
                         nextResponse = response
                         gotResponse = true
-                        continuation.resume()
+                        watchdog.cancel()
+                        resumeOnce()
                     },
                     onError: { error in
                         FlightRecorder.logError(
                             source: "toolloop:\(agent.id)",
                             message: "Round \(round) feedback error: \(error)"
                         )
-                        continuation.resume()
+                        watchdog.cancel()
+                        resumeOnce()
                     }
                 )
             }
@@ -930,8 +1108,20 @@ final class AgentScheduler: ObservableObject {
 
     private func writeAgentOutput(agent: AgentHeartbeatConfig, response: String, durationMs: Int) {
         let outputDir = ThrawnPaths.opsDir.appendingPathComponent("agent-output")
-        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let outputPath = outputDir.appendingPathComponent(agent.outputFile)
+
+        // Reliability rule: never silently fail. Every filesystem error is
+        // logged through FlightRecorder so disk-full / permission / sandbox
+        // problems show up in the operator's diagnostics instead of vanishing.
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:writeAgentOutput",
+                message: "createDirectory \(outputDir.path) failed: \(error.localizedDescription)"
+            )
+            return
+        }
 
         let output: [String: Any] = [
             "agent": agent.id,
@@ -941,8 +1131,24 @@ final class AgentScheduler: ObservableObject {
             "summary": String(response.prefix(500))
         ]
 
-        if let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted]) {
-            try? data.write(to: outputPath, options: .atomic)
+        let data: Data
+        do {
+            data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted])
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:writeAgentOutput",
+                message: "JSON encode failed for \(agent.id): \(error.localizedDescription)"
+            )
+            return
+        }
+
+        do {
+            try data.write(to: outputPath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:writeAgentOutput",
+                message: "write \(outputPath.path) failed: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -953,11 +1159,74 @@ final class AgentScheduler: ObservableObject {
         return try? JSONDecoder().decode([AgentHeartbeatConfig].self, from: data)
     }
 
+    /// Load persisted last-run timestamps. Missing or unreadable file is fine —
+    /// returns empty dict so a fresh install just acts as if nothing has run yet.
+    private static func loadLastRuns() -> [String: Date] {
+        guard let data = try? Data(contentsOf: lastRunPath) else { return [:] }
+        // Stored as { agentId: epoch_seconds_double }
+        guard let dict = try? JSONDecoder().decode([String: Double].self, from: data) else {
+            FlightRecorder.logError(
+                source: "scheduler:loadLastRuns",
+                message: "Could not decode \(lastRunPath.lastPathComponent) — starting with empty last-run history"
+            )
+            return [:]
+        }
+        return dict.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    private func saveLastRuns() {
+        let serializable = lastRunTimes.mapValues { $0.timeIntervalSince1970 }
+        let dir = Self.lastRunPath.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:saveLastRuns",
+                message: "createDirectory failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            let data = try JSONEncoder().encode(serializable)
+            try data.write(to: Self.lastRunPath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:saveLastRuns",
+                message: "write failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
     func saveConfig() {
         let dir = Self.configPath.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(agents) {
-            try? data.write(to: Self.configPath, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:saveConfig",
+                message: "createDirectory \(dir.path) failed: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(agents)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:saveConfig",
+                message: "JSON encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        do {
+            try data.write(to: Self.configPath, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:saveConfig",
+                message: "write \(Self.configPath.path) failed: \(error.localizedDescription)"
+            )
         }
     }
 }

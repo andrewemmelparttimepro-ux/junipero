@@ -12,6 +12,7 @@ struct AgentRailView: View {
     @EnvironmentObject var roster: AgentRosterStore
     @EnvironmentObject var nav: ConsoleNavigationStore
     @EnvironmentObject var execution: ExecutionService
+    @EnvironmentObject var voice: VoiceService
     @State private var isDropTargeted = false
 
     private var coreAgents: [AgentStatus] {
@@ -34,12 +35,21 @@ struct AgentRailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             // Header
-            HStack {
+            HStack(spacing: 8) {
                 Text("AGENTS")
                     .font(.system(size: 11, weight: .bold, design: .default))
                     .tracking(2.5)
                     .foregroundColor(Color.chissPrimary.opacity(0.90))
                 Spacer()
+
+                // Big mute toggle — primary "I'm on a Zoom call" button.
+                // When unmuted: subtle speaker icon, low-emphasis.
+                // When muted: solid red chip, IMMEDIATELY readable at a glance.
+                MuteToggleButton(muted: voice.muted) {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        voice.muted.toggle()
+                    }
+                }
 
                 // Unleashed mode — hidden in a dropdown
                 if ThrawnPreferencesStore.load().canToggleAccess {
@@ -364,5 +374,79 @@ extension AgentActivityState {
         case .review:  return Color(red: 0.78, green: 0.88, blue: 0.98)
         case .blocked: return Color(red: 0.90, green: 0.40, blue: 0.38)
         }
+    }
+}
+
+// MARK: - Mute Toggle Button
+//
+// "I'm on a Zoom call" button. Lives at the top of the agents panel so it's
+// always one click away. When unmuted, it's a low-key speaker icon that
+// doesn't draw attention. When muted, it switches to a solid red chip with
+// a slashed speaker icon — IMMEDIATELY readable so you can tell at a glance
+// that voice is silenced (and remember to flip it back on later).
+
+private struct MuteToggleButton: View {
+    let muted: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(iconColor)
+                if muted {
+                    Text("MUTED")
+                        .font(.system(size: 9, weight: .heavy))
+                        .tracking(1.0)
+                        .foregroundColor(Color.white.opacity(0.95))
+                }
+            }
+            .padding(.horizontal, muted ? 8 : 6)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(backgroundFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(borderColor, lineWidth: muted ? 0 : 1)
+            )
+            .shadow(
+                color: muted ? Color(red: 0.95, green: 0.20, blue: 0.18).opacity(0.45)
+                             : .clear,
+                radius: muted ? 4 : 0
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(muted ? "Voice is muted — click to unmute"
+                    : "Mute agent voices (for calls / focus time)")
+        .accessibilityLabel(muted ? "Unmute agent voices" : "Mute agent voices")
+    }
+
+    private var iconColor: Color {
+        if muted { return Color.white }
+        return isHovering
+            ? Color.chissPrimary.opacity(0.95)
+            : Color.chissPrimary.opacity(0.65)
+    }
+
+    private var backgroundFill: Color {
+        if muted {
+            // Sith-red, fully filled. Loud on purpose.
+            return Color(red: 0.85, green: 0.18, blue: 0.16)
+        }
+        return isHovering
+            ? Color.chissPrimary.opacity(0.12)
+            : Color.chissPrimary.opacity(0.05)
+    }
+
+    private var borderColor: Color {
+        isHovering
+            ? Color.chissPrimary.opacity(0.40)
+            : Color.chissPrimary.opacity(0.18)
     }
 }

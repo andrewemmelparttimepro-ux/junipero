@@ -625,9 +625,32 @@ final class ObjectiveStore: ObservableObject {
 
     private func save() {
         let dir = objectivesFile.deletingLastPathComponent()
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(objectives) {
-            try? data.write(to: objectivesFile, options: .atomic)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FlightRecorder.logError(
+                source: "playbook:save",
+                message: "createDirectory failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(objectives)
+        } catch {
+            FlightRecorder.logError(
+                source: "playbook:save",
+                message: "Encode failed: \(error.localizedDescription)"
+            )
+            return
+        }
+        do {
+            try data.write(to: objectivesFile, options: .atomic)
+        } catch {
+            FlightRecorder.logError(
+                source: "playbook:save",
+                message: "Write \(objectivesFile.lastPathComponent) failed: \(error.localizedDescription)"
+            )
         }
     }
 
