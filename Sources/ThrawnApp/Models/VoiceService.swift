@@ -152,13 +152,6 @@ final class VoiceService: NSObject, ObservableObject {
             ],
             rate: 0.44, pitch: 0.90, muted: false
         ),
-        "bart": VoicePreference(
-            identifiers: [
-                "com.apple.voice.enhanced.en-US.Nathan",  // Nathan (Enhanced)
-                "com.apple.voice.enhanced.en-US.Evan",
-            ],
-            rate: 0.54, pitch: 1.08, muted: false
-        ),
         "c3po": VoicePreference(
             identifiers: [
                 "com.apple.voice.compact.en-GB.Daniel",   // Daniel (compact — no enhanced exists)
@@ -170,22 +163,7 @@ final class VoiceService: NSObject, ObservableObject {
             identifiers: [],                              // SFX bank planned — no TTS voice
             rate: 0.50, pitch: 1.00, muted: true
         ),
-        "hunter": VoicePreference(
-            identifiers: [
-                "com.apple.voice.premium.en-US.Ava",      // Ava (Premium) — sharp, direct
-                "com.apple.voice.enhanced.en-US.Ava",
-                "com.apple.voice.enhanced.en-US.Allison",
-            ],
-            rate: 0.50, pitch: 1.00, muted: false
-        ),
-        "alborland": VoicePreference(
-            identifiers: [
-                "com.apple.voice.enhanced.en-US.Fred",     // Fred (Enhanced) — flat, monotone
-                "com.apple.voice.enhanced.en-US.Tom",
-                "com.apple.voice.compact.en-US.Fred",
-            ],
-            rate: 0.46, pitch: 0.92, muted: false
-        ),
+        // KORBIS-SPAWN: V2 voice prefs (Bart, Hunter, Al Borland) absent.
     ]
 
     /// Walk the preference list for each agent, pick the first installed

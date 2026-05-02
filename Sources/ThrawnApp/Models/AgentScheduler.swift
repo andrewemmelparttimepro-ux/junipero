@@ -62,6 +62,10 @@ final class AgentScheduler: ObservableObject {
     private static let lastRunPath = ThrawnPaths.appSupportDir
         .appendingPathComponent("agent-last-runs.json")
 
+    // KORBIS-SPAWN: dev-ops squad only.
+    // Phase 1 of the Korbis deployment runs Thrawn idle — none of these are
+    // actively dispatching analysis work yet — but the schedule is wired so
+    // Phase 2 just flips the switch. V2 agents remain on the master branch.
     static let defaultAgents: [AgentHeartbeatConfig] = [
         AgentHeartbeatConfig(id: "thrawn",       name: "Thrawn",   minuteOffset: 0,  heartbeatFile: "thrawn.HEARTBEAT.md",           agentFile: "thrawn.md",  outputFile: "thrawn.json",       enabled: true),
         AgentHeartbeatConfig(id: "thrawn-dream",  name: "Thrawn",   minuteOffset: 5,  heartbeatFile: "thrawn-dream.HEARTBEAT.md",    agentFile: "thrawn.md",  outputFile: "thrawn-dream.json", enabled: true),
@@ -71,10 +75,6 @@ final class AgentScheduler: ObservableObject {
         AgentHeartbeatConfig(id: "quigon",       name: "Qui-Gon",  minuteOffset: 30, heartbeatFile: "quigon.HEARTBEAT.md",           agentFile: "quigon.md",  outputFile: "quigon.json",       enabled: true),
         AgentHeartbeatConfig(id: "lando",        name: "Lando",    minuteOffset: 40, heartbeatFile: "lando.HEARTBEAT.md",            agentFile: "lando.md",   outputFile: "lando.json",        enabled: true),
         AgentHeartbeatConfig(id: "boba",         name: "Boba",     minuteOffset: 50, heartbeatFile: "boba.HEARTBEAT.md",             agentFile: "boba.md",    outputFile: "boba.json",         enabled: true),
-        // V2 agents — personality-first, purpose-specific
-        AgentHeartbeatConfig(id: "bart",         name: "Bart",     minuteOffset: 15, heartbeatFile: "bart.HEARTBEAT.md",             agentFile: "bart.md",    outputFile: "bart.json",         enabled: true),
-        AgentHeartbeatConfig(id: "hunter",       name: "Hunter",   minuteOffset: 25, heartbeatFile: "hunter.HEARTBEAT.md",           agentFile: "hunter.md",  outputFile: "hunter.json",       enabled: true),
-        AgentHeartbeatConfig(id: "alborland",   name: "Al Borland", minuteOffset: 35, heartbeatFile: "alborland.HEARTBEAT.md",     agentFile: "alborland.md", outputFile: "alborland.json", enabled: true),
     ]
 
     init() {

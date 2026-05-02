@@ -317,10 +317,8 @@ final class AgentSpecStore: ObservableObject {
         let V_QUIGON = "com.apple.voice.premium.en-AU.Lee"       // Lee (Premium)
         let V_LANDO  = "com.apple.voice.enhanced.en-US.Evan"     // Evan (Enhanced)
         let V_BOBA   = "com.apple.voice.enhanced.en-US.Tom"      // Tom (Enhanced)
-        let V_BART   = "com.apple.voice.enhanced.en-US.Nathan"   // Nathan (Enhanced)
         let V_C3PO   = "com.apple.voice.compact.en-GB.Daniel"    // Daniel (compact)
-        let V_HUNTER = "com.apple.voice.premium.en-US.Ava"       // Ava (Premium)
-        let V_ALBORLAND = "com.apple.voice.enhanced.en-US.Fred"   // Fred (Enhanced) — flat, dull, all business
+        // KORBIS-SPAWN: V2 voice IDs (Bart/Hunter/Al Borland) intentionally absent.
 
         return [
             squadSpec(
@@ -370,34 +368,9 @@ final class AgentSpecStore: ObservableObject {
                 persona: "Quiet, relentless, finds what's broken. Doesn't miss.",
                 purpose: "Validate work, hunt regressions, scout risks before they ship.",
                 voiceId: V_BOBA, rate: 0.44, pitch: 0.90
-            ),
-            squadSpec(
-                id: "bart",
-                name: "Bart",
-                role: "Deep Researcher",
-                persona: "Smart ass, sharp-witted. Cross-references every claim, surfaces contradictions.",
-                purpose: "Multi-source research synthesis. Three sources minimum. No filler.",
-                tier: .explicit(.premium),
-                voiceId: V_BART, rate: 0.54, pitch: 1.08
-            ),
-            squadSpec(
-                id: "hunter",
-                name: "Hunter",
-                role: "Lead Gen & OSINT",
-                persona: "Relentless tracker. Works every angle, every platform, every breadcrumb. Never accepts a dead end. Cross-references like the internet sleuths who catch killers.",
-                purpose: "Find qualified leads for NDAI using OSINT methodology. Sweep LinkedIn, Reddit, websites, Facebook, X, GitHub, job boards, conference lists. Build dossiers with every scrap of public contact info.",
-                tier: .explicit(.cheap),
-                voiceId: V_HUNTER, rate: 0.50, pitch: 1.0
-            ),
-            squadSpec(
-                id: "alborland",
-                name: "Al Borland",
-                role: "Life Ops",
-                persona: "Earnest, methodical, flannel-wearing know-it-all. Measures twice, cuts once, then measures again just to be safe. Delivers findings with deadpan sincerity and the occasional 'I don't think so, Tim.' Takes quiet pride in doing things the right way.",
-                purpose: "Check the 'Interpretation Please' Freeform board 3x daily. Analyze what changed and why. Generate 3 actionable tasks to improve Andrew's life. Report to Thrawn for approval. Fix on command. Repeat until validated. Reports land on the Desktop.",
-                tier: .explicit(.cheap),
-                voiceId: V_ALBORLAND, rate: 0.46, pitch: 0.92
             )
+            // KORBIS-SPAWN: V2 specs (Bart, Hunter, Al Borland) live on the
+            // master branch only. The spawn ships with the dev-ops six.
         ]
     }()
 }

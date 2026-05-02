@@ -182,88 +182,8 @@ private enum CharacterSpriteLibrary {
         background: Color(red: 0.04, green: 0.07, blue: 0.05)
     )
 
-    // ── BART SIMPSON ─────────────────────────────────────────────────────────
-    // V2 agent. Brilliant punk kid. Three iconic hair spikes, vivid yellow
-    // skin, trademark smirk, red polo shirt, blue shorts. Don't have a cow.
-    static let bart = CharacterSprite(
-        rows: [
-            ".K..K..K....",   // three spiky hair tips
-            "KKKKKKKK....",   // hair base
-            ".KYYYYYYY...",   // hair edge + yellow face
-            ".KYwYYYwYK..",   // face — beady eyes
-            ".KYYYYYYYK..",   // face
-            ".KYYmYYYYK..",   // smirk — Bart's trademark
-            "..KYYYYYK...",   // chin
-            "...RRRRRR...",   // red polo shirt
-            "..RRRRRRRR..",   // shirt
-            "..RRRRRRRR..",   // shirt
-            "..BBBBBBBB..",   // blue shorts
-            "..BB....BB..",   // legs
-        ],
-        palette: [
-            "K": Color(red: 0.07, green: 0.07, blue: 0.09),   // black hair
-            "Y": Color(red: 0.99, green: 0.87, blue: 0.15),   // Bart yellow
-            "w": Color(red: 0.07, green: 0.07, blue: 0.09),   // eyes
-            "m": Color(red: 0.88, green: 0.18, blue: 0.18),   // red mouth/smirk
-            "R": Color(red: 0.80, green: 0.10, blue: 0.10),   // red shirt
-            "B": Color(red: 0.18, green: 0.42, blue: 0.88),   // blue shorts
-        ],
-        background: Color(red: 0.08, green: 0.10, blue: 0.18)
-    )
-
-    // ── HUNTER ─────────────────────────────────────────────────────────────
-    // OSINT tracker. Sharp-featured, dark ponytail, olive/black tactical
-    // vest, utility collar. Eyes locked on target.
-    static let hunter = CharacterSprite(
-        rows: [
-            "....KKKK....",   // dark hair pulled back
-            "...KTTTTK...",   // hair framing face
-            "..KTTTTTTK..",   // tanned face
-            "..KTwTTwTK..",   // face — sharp dark eyes
-            "..KTTTTTTK..",   // lower face
-            "...KTTTTK...",   // jaw
-            "...GGGGGG...",   // tactical collar
-            "..OGOOOOGO..",   // olive vest + dark gear straps
-            "..OOOOOOOO..",   // vest
-            ".OOOOOOOOOO.",   // vest wide
-            "OOOOOOOOOOOO",   // vest base
-            "OOOOOOOOOOOO",   // base
-        ],
-        palette: [
-            "K": Color(red: 0.07, green: 0.07, blue: 0.09),   // black hair
-            "T": Color(red: 0.72, green: 0.56, blue: 0.42),   // tanned skin
-            "w": Color(red: 0.07, green: 0.07, blue: 0.09),   // dark eyes
-            "G": Color(red: 0.22, green: 0.22, blue: 0.24),   // dark gear collar
-            "O": Color(red: 0.28, green: 0.32, blue: 0.18),   // olive drab tactical
-        ],
-        background: Color(red: 0.05, green: 0.06, blue: 0.04)
-    )
-
-    // ── AL BORLAND ───────────────────────────────────────────────────────
-    // Life Ops. Pure red and black buffalo plaid — the flannel shirt as avatar.
-    // No face, no features. Just the shirt. That's the whole personality.
-    static let alborland = CharacterSprite(
-        rows: [
-            "RRKKRRKKRRKK",   // buffalo plaid row 1
-            "RRKKRRKKRRKK",   // buffalo plaid row 2
-            "KKDDKKDDKKDD",   // plaid cross-hatch (dark red overlap)
-            "KKDDKKDDKKDD",   // cross-hatch row 2
-            "RRKKRRKKRRKK",   // plaid row 3
-            "RRKKRRKKRRKK",   // plaid row 4
-            "KKDDKKDDKKDD",   // cross-hatch row 3
-            "KKDDKKDDKKDD",   // cross-hatch row 4
-            "RRKKRRKKRRKK",   // plaid row 5
-            "RRKKRRKKRRKK",   // plaid row 6
-            "KKDDKKDDKKDD",   // cross-hatch row 5
-            "KKDDKKDDKKDD",   // cross-hatch row 6
-        ],
-        palette: [
-            "R": Color(red: 0.78, green: 0.10, blue: 0.10),   // flannel red
-            "K": Color(red: 0.08, green: 0.08, blue: 0.08),   // black
-            "D": Color(red: 0.38, green: 0.06, blue: 0.06),   // dark red overlap
-        ],
-        background: Color(red: 0.06, green: 0.04, blue: 0.04)
-    )
+    // KORBIS-SPAWN: V2 sprites (Bart, Hunter, Al Borland) live on the master
+    // branch only. The spawn ships only the dev-ops six.
 
     static func sprite(for agentId: String) -> CharacterSprite? {
         switch agentId.lowercased() {
@@ -273,9 +193,6 @@ private enum CharacterSpriteLibrary {
         case "quigon", "qui-gon":              return quigon
         case "lando":                           return lando
         case "boba", "bobafett":               return boba
-        case "bart":                            return bart
-        case "hunter":                          return hunter
-        case "alborland", "al borland", "al":  return alborland
         default:                                return nil
         }
     }

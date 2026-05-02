@@ -80,6 +80,9 @@ final class AgentRosterStore: ObservableObject {
     private static let savePath = ThrawnPaths.appSupportDir
         .appendingPathComponent("thrawn-agent-roster.json")
 
+    // KORBIS-SPAWN: dev-ops squad only. V2 agents (Bart, Hunter, Al Borland)
+    // remain on the master branch and are intentionally excluded here so the
+    // spawn boots clean with just the standard six.
     private static let defaults: [AgentStatus] = [
         AgentStatus(id: "thrawn",  name: "Thrawn",            role: "Lead",            state: .idle, detail: "Command ready",             sessionKey: "agent:main:main"),
         AgentStatus(id: "r2d2",   name: "R2-D2",             role: "Dev",             state: .idle, detail: "Awaiting build brief",       sessionKey: "agent:specialist:r2d2"),
@@ -87,9 +90,6 @@ final class AgentRosterStore: ObservableObject {
         AgentStatus(id: "quigon", name: "Qui-Gon",           role: "Research",        state: .idle, detail: "Research standby",            sessionKey: "agent:specialist:quigon"),
         AgentStatus(id: "lando",  name: "Lando Calrissian",  role: "Marketing & Copy",state: .idle, detail: "Copy standby",               sessionKey: "agent:specialist:lando"),
         AgentStatus(id: "boba",   name: "Boba Fett",         role: "QA & Recon",      state: .idle, detail: "Validation queue clear",     sessionKey: "agent:specialist:boba"),
-        AgentStatus(id: "bart",   name: "Bart",              role: "Research V2",     state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:bart"),
-        AgentStatus(id: "hunter", name: "Hunter",            role: "Lead Gen & OSINT",state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:hunter"),
-        AgentStatus(id: "alborland", name: "Al Borland",     role: "Life Ops",        state: .idle, detail: "Standing by",                 sessionKey: "agent:specialist:alborland"),
     ]
 
     // Track which agents have active in-flight requests
