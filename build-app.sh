@@ -70,6 +70,21 @@ if [ -d "$RESOURCE_BUNDLE" ]; then
     echo "  ✓ Resources bundle copied"
 fi
 
+# ── Step 6b: Bundle OpsBundle into the .app's Resources ──
+# Without this, the runtime opsBundleDir lookup falls back to walking the
+# source tree — which fails on installed builds when ~/Documents/ is in a
+# TCC-protected location and the app hasn't been granted Full Disk Access.
+# Bundling the source-of-truth files into the .app makes deployment
+# self-contained: opsBundleDir resolves to Bundle.main.resourceURL/OpsBundle
+# every time, sandbox or no sandbox.
+OPSBUNDLE_SRC="$SCRIPT_DIR/OpsBundle"
+if [ -d "$OPSBUNDLE_SRC" ]; then
+    cp -R "$OPSBUNDLE_SRC" "$APP_BUNDLE/Contents/Resources/OpsBundle"
+    echo "  ✓ OpsBundle bundled ($(find "$OPSBUNDLE_SRC" -type f | wc -l | tr -d ' ') files)"
+else
+    echo "  ⚠ No OpsBundle source found at $OPSBUNDLE_SRC — runtime will fall back to dev-tree lookup"
+fi
+
 # ── Step 7: Ad-hoc code sign ──
 echo "▸ Code signing..."
 codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
