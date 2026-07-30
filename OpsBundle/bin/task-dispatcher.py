@@ -12,7 +12,7 @@ Responsibilities:
 
 Agent output format (ops/agent-output/{agent}.json):
 {
-  "agent": "r2d2",
+  "agent": "thrawn",
   "timestamp": "2026-03-17T20:10:00",
   "updates": [
     {"task_id": "TASK-031", "status": "Review", "notes": "Commit 9bd5627, build clean"},
@@ -28,19 +28,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-WORKSPACE = Path.home() / ".openclaw" / "workspace"
+WORKSPACE = Path.home() / "Library" / "Application Support" / "Thrawn" / "workspace"
 BOARD_PATH = WORKSPACE / "ops" / "TASK_BOARD.md"
 OUTPUT_DIR = WORKSPACE / "ops" / "agent-output"
 LOG_PATH = WORKSPACE / "ops" / "dispatcher.log"
 
-# Agent cron schedule — minute of the hour each agent fires
+# Agent schedule — minute of the hour each durable role fires
 AGENT_SCHEDULE = {
     "Thrawn": 0,
-    "R2-D2": 10,
-    "C-3PO": 20,
-    "Qui-Gon": 30,
-    "Lando": 40,
-    "Boba": 50,
 }
 
 # How many minutes after an agent's cron to auto-move Ready → In Progress
@@ -194,7 +189,6 @@ def ingest_agent_outputs(content: str) -> str:
 
             agent = data.get("agent", output_file.stem)
             updates = data.get("updates", [])
-
             for update in updates:
                 task_id = update.get("task_id", "")
                 new_status = update.get("status", "")

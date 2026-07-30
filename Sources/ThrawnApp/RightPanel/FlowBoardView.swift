@@ -8,7 +8,6 @@ enum FlowLane: String, CaseIterable, Identifiable, Codable {
     case ready      = "Ready"
     case inProgress = "In Progress"
     case review     = "Review"
-    case blocked    = "Blocked"
     case done       = "Done"
 
     var id: String { rawValue }
@@ -19,14 +18,12 @@ enum FlowLane: String, CaseIterable, Identifiable, Codable {
         case .ready:      return Color(red: 0.40, green: 0.72, blue: 0.55)
         case .inProgress: return Color.chissPrimary
         case .review:     return Color(red: 0.70, green: 0.55, blue: 0.90)
-        case .blocked:    return Color.sithGlow
         case .done:       return Color(red: 0.35, green: 0.75, blue: 0.50)
         }
     }
 
     var glowColor: Color {
         switch self {
-        case .blocked: return Color.sithGlow
         case .review:  return Color(red: 0.70, green: 0.55, blue: 0.90)
         default:       return Color.chissPrimary
         }
@@ -38,7 +35,6 @@ enum FlowLane: String, CaseIterable, Identifiable, Codable {
         case .ready:      return "checkmark.circle"
         case .inProgress: return "arrow.triangle.2.circlepath"
         case .review:     return "eye.fill"
-        case .blocked:    return "exclamationmark.octagon.fill"
         case .done:       return "checkmark.seal.fill"
         }
     }
@@ -47,8 +43,63 @@ enum FlowLane: String, CaseIterable, Identifiable, Codable {
         switch status.lowercased().trimmingCharacters(in: .whitespaces) {
         case "in progress": return .inProgress
         case "review":      return .review
-        case "blocked":     return .blocked
+        case "blocked":     return .review
         case "ready":       return .ready
+        case "done":        return .done
+        default:            return .inbox
+        }
+    }
+}
+
+// MARK: - Task Status (all persisted states, including those sharing a lane)
+
+enum FlowTaskStatus: String, CaseIterable, Identifiable, Codable {
+    case inbox      = "Inbox"
+    case ready      = "Ready"
+    case inProgress = "In Progress"
+    case review     = "Review"
+    case blocked    = "Blocked"
+    case done       = "Done"
+
+    var id: String { rawValue }
+
+    var flowLane: FlowLane {
+        switch self {
+        case .inbox:              return .inbox
+        case .ready:              return .ready
+        case .inProgress:         return .inProgress
+        case .review, .blocked:   return .review
+        case .done:               return .done
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .blocked: return Color(red: 0.96, green: 0.16, blue: 0.20)
+        default:       return flowLane.accentColor
+        }
+    }
+
+    var glowColor: Color {
+        switch self {
+        case .blocked: return Color(red: 1.00, green: 0.12, blue: 0.16)
+        default:       return flowLane.glowColor
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .blocked: return "exclamationmark.octagon.fill"
+        default:       return flowLane.icon
+        }
+    }
+
+    static func fromTaskStatus(_ status: String) -> FlowTaskStatus {
+        switch status.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "ready":       return .ready
+        case "in progress": return .inProgress
+        case "review":      return .review
+        case "blocked":     return .blocked
         case "done":        return .done
         default:            return .inbox
         }
@@ -58,7 +109,8 @@ enum FlowLane: String, CaseIterable, Identifiable, Codable {
 // MARK: - ParsedTask extensions
 
 extension ParsedTask {
-    var flowLane: FlowLane { FlowLane.fromTaskStatus(status) }
+    var flowStatus: FlowTaskStatus { FlowTaskStatus.fromTaskStatus(status) }
+    var flowLane: FlowLane { flowStatus.flowLane }
 }
 
 // MARK: - Drag item for task cards
@@ -114,6 +166,34 @@ struct FlowBoardView: View {
             } else {
                 VStack(spacing: 0) {
                     flowToolbar
+
+                    if let notice = store.noticeText {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            Text(notice)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer()
+                            Button {
+                                store.noticeText = nil
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .foregroundColor(Color(red: 0.95, green: 0.78, blue: 0.35))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color(red: 0.95, green: 0.60, blue: 0.15).opacity(0.10))
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(Color(red: 0.95, green: 0.60, blue: 0.15).opacity(0.20))
+                                .frame(height: 1)
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
 
                     if store.isLoading && store.tasks.isEmpty {
                         Spacer()
@@ -327,7 +407,7 @@ struct FlowLaneColumn: View {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 10) {
                     ForEach(tasks) { task in
-                        FlowTaskCardView(task: task, lane: lane, onTap: { onSelect(task) })
+                        FlowTaskCardView(task: task, onTap: { onSelect(task) })
                             .draggable(TaskDragItem(taskId: task.id))
                     }
 
@@ -576,9 +656,12 @@ struct DoneNotificationCard: View {
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.3))
                             if !task.owner.isEmpty {
-                                Text(task.owner)
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundColor(Color(red: 0.35, green: 0.75, blue: 0.50).opacity(0.5))
+                                HStack(spacing: 4) {
+                                    Text(task.owner)
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundColor(Color(red: 0.35, green: 0.75, blue: 0.50).opacity(0.5))
+                                    HeartbeatCountdownBadge(owner: task.owner, compact: true)
+                                }
                             }
                         }
                     }
@@ -613,25 +696,21 @@ struct DoneNotificationCard: View {
 /// Maps agent names/IDs to their heartbeat schedule.
 /// Thrawn fires every 15 min, others fire at their minuteOffset once per hour.
 struct HeartbeatCountdown {
-    private static let scheduleByName: [String: (offset: Int, interval: Int)] = [
-        "Thrawn":  (0,  15),
-        "R2-D2":   (10, 60),
-        "C-3PO":   (20, 60),
-        "Qui-Gon": (30, 60),
-        "Lando":   (40, 60),
-        "Boba":    (50, 60),
-    ]
-    private static let scheduleById: [String: (offset: Int, interval: Int)] = [
-        "thrawn":  (0,  15),
-        "r2d2":    (10, 60),
-        "c3po":    (20, 60),
-        "quigon":  (30, 60),
-        "lando":   (40, 60),
-        "boba":    (50, 60),
+    private static let scheduleByKey: [String: (offset: Int, interval: Int)] = [
+        "thrawn": (0, 15),
+        "samwell": (55, 60),
+        "samwell tarly": (55, 60),
+        "archivist": (55, 60),
+        "sir davos": (10, 60),
+        "davos": (10, 60),
+        "sentinel": (10, 60),
+        "dwight": (30, 60),
+        "steven": (40, 60),
     ]
 
     static func secondsUntilNext(for key: String) -> Int? {
-        guard let schedule = scheduleByName[key] ?? scheduleById[key] else { return nil }
+        let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let schedule = scheduleByKey[normalizedKey] else { return nil }
         let now = Date()
         let calendar = Calendar.current
         let currentMinute = calendar.component(.minute, from: now)
@@ -667,8 +746,12 @@ struct HeartbeatCountdownBadge: View {
     @State private var secondsLeft: Int = 0
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    private var isImminent: Bool { secondsLeft <= 60 }
-    private var isClose: Bool { secondsLeft <= 180 }
+    private var effectiveSecondsLeft: Int {
+        secondsLeft > 0 ? secondsLeft : (HeartbeatCountdown.secondsUntilNext(for: owner) ?? 0)
+    }
+
+    private var isImminent: Bool { effectiveSecondsLeft <= 60 }
+    private var isClose: Bool { effectiveSecondsLeft <= 180 }
 
     private var glowColor: Color {
         if isImminent { return Color(red: 1.0, green: 0.25, blue: 0.20) }   // bright red
@@ -684,7 +767,7 @@ struct HeartbeatCountdownBadge: View {
                         .font(.system(size: compact ? 5 : 6))
                         .foregroundColor(glowColor)
                         .shadow(color: isImminent ? glowColor.opacity(0.90) : .clear, radius: isImminent ? 6 : 0)
-                    Text(HeartbeatCountdown.format(secondsLeft))
+                    Text(HeartbeatCountdown.format(effectiveSecondsLeft))
                         .font(.system(size: compact ? 8 : 8.5, weight: .medium, design: .monospaced))
                         .foregroundColor(glowColor)
                         .shadow(color: isImminent ? glowColor.opacity(0.70) : .clear, radius: isImminent ? 4 : 0)
@@ -704,35 +787,61 @@ struct HeartbeatCountdownBadge: View {
 
 struct FlowTaskCardView: View {
     let task: ParsedTask
-    let lane: FlowLane
     let onTap: () -> Void
 
-    private var isBlocked: Bool { lane == .blocked }
+    private var displayStatus: FlowTaskStatus { task.flowStatus }
+    private var accentColor: Color { displayStatus.accentColor }
+    private var glowColor: Color { displayStatus.glowColor }
+    private var isBlocked: Bool { displayStatus == .blocked }
 
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(task.id)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(lane.accentColor.opacity(0.65))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(lane.accentColor.opacity(0.10)))
+                HStack(spacing: 6) {
+                    Text(task.id)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundColor(accentColor.opacity(0.80))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(accentColor.opacity(0.10)))
+
+                    Spacer()
+
+                    if isBlocked {
+                        HStack(spacing: 4) {
+                            Image(systemName: displayStatus.icon)
+                                .font(.system(size: 8, weight: .bold))
+                            Text(displayStatus.rawValue.uppercased())
+                                .font(.system(size: 8, weight: .heavy))
+                                .tracking(0.8)
+                        }
+                        .foregroundColor(accentColor)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(accentColor.opacity(0.12))
+                            .overlay(Capsule().stroke(accentColor.opacity(0.38), lineWidth: 1)))
+                    }
+                }
 
                 Text(task.title)
                     .font(.system(size: 12, weight: .semibold)).foregroundColor(Color.white.opacity(0.90))
                     .lineLimit(3).fixedSize(horizontal: false, vertical: true)
 
-                if !task.nextStep.isEmpty {
+                if isBlocked && !task.blockers.isEmpty {
                     HStack(alignment: .top, spacing: 5) {
-                        Image(systemName: "arrow.right.circle").font(.system(size: 8.5)).foregroundColor(Color.chissPrimary.opacity(0.60)).padding(.top, 1)
-                        Text(task.nextStep).font(.system(size: 10.5)).foregroundColor(Color.chissPrimary.opacity(0.75)).lineLimit(2)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8.5))
+                            .foregroundColor(accentColor.opacity(0.90))
+                            .padding(.top, 1)
+                        Text(task.blockers)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(accentColor.opacity(0.88))
+                            .lineLimit(2)
                     }
                 }
 
-                if isBlocked && !task.blockers.isEmpty {
+                if !task.nextStep.isEmpty {
                     HStack(alignment: .top, spacing: 5) {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8.5)).foregroundColor(Color.sithGlow).padding(.top, 1)
-                        Text(task.blockers).font(.system(size: 10.5)).foregroundColor(Color.sithGlow.opacity(0.90)).lineLimit(2)
+                        Image(systemName: "arrow.right.circle").font(.system(size: 8.5)).foregroundColor(accentColor.opacity(0.60)).padding(.top, 1)
+                        Text(task.nextStep).font(.system(size: 10.5)).foregroundColor(accentColor.opacity(0.75)).lineLimit(2)
                     }
                 }
 
@@ -741,12 +850,12 @@ struct FlowTaskCardView: View {
                         HStack(spacing: 5) {
                             Text(task.owner)
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(isBlocked ? Color.sithGlow : Color.chissPrimary)
+                                .foregroundColor(Color.chissPrimary)
                             HeartbeatCountdownBadge(owner: task.owner)
                         }
                         .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Capsule().fill(isBlocked ? Color.sithRed.opacity(0.18) : Color.chissDeep.opacity(0.50))
-                            .overlay(Capsule().stroke(isBlocked ? Color.sithGlow.opacity(0.40) : Color.chissPrimary.opacity(0.28), lineWidth: 1)))
+                        .background(Capsule().fill(Color.chissDeep.opacity(0.50))
+                            .overlay(Capsule().stroke(Color.chissPrimary.opacity(0.28), lineWidth: 1)))
                     }
                     Spacer()
                     if !task.priority.isEmpty {
@@ -757,8 +866,18 @@ struct FlowTaskCardView: View {
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.obsidianMid)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(lane.accentColor.opacity(isBlocked ? 0.55 : 0.22), lineWidth: 1)))
-            .shadow(color: lane.glowColor.opacity(isBlocked ? 0.35 : 0.10), radius: isBlocked ? 12 : 5)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(accentColor.opacity(isBlocked ? 0.58 : 0.22), lineWidth: isBlocked ? 1.5 : 1)))
+            .overlay(alignment: .leading) {
+                if isBlocked {
+                    Capsule()
+                        .fill(accentColor)
+                        .frame(width: 3)
+                        .padding(.vertical, 10)
+                        .shadow(color: glowColor.opacity(0.70), radius: 5)
+                }
+            }
+            .shadow(color: glowColor.opacity(isBlocked ? 0.24 : 0.10), radius: isBlocked ? 9 : 5)
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
@@ -795,7 +914,7 @@ struct TaskDetailPage: View {
         store.tasks.first { $0.id == taskId }
     }
 
-    private var lane: FlowLane { task?.flowLane ?? .inbox }
+    private var status: FlowTaskStatus { task?.flowStatus ?? .inbox }
 
     var body: some View {
         ZStack {
@@ -862,23 +981,24 @@ struct TaskDetailPage: View {
 
             // Status picker (inline move)
             Menu {
-                ForEach(FlowLane.allCases) { targetLane in
+                ForEach(FlowTaskStatus.allCases) { targetStatus in
+                    let canMoveToDone = targetStatus != .done || task.flatMap { TaskCompletionPolicy.resolvedDeliverable(for: $0) } != nil
                     Button {
-                        withAnimation { store.moveTask(taskId, to: targetLane.rawValue) }
+                        withAnimation { store.moveTask(taskId, to: targetStatus.rawValue) }
                     } label: {
-                        Label(targetLane.rawValue, systemImage: targetLane.icon)
+                        Label(targetStatus.rawValue, systemImage: targetStatus.icon)
                     }
-                    .disabled(targetLane == lane)
+                    .disabled(targetStatus == status || !canMoveToDone)
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: lane.icon).font(.system(size: 10, weight: .bold))
-                    Text(lane.rawValue).font(.system(size: 11, weight: .semibold))
+                    Image(systemName: status.icon).font(.system(size: 10, weight: .bold))
+                    Text(status.rawValue).font(.system(size: 11, weight: .semibold))
                     Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
                 }
-                .foregroundColor(lane.accentColor)
+                .foregroundColor(status.accentColor)
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Capsule().fill(lane.accentColor.opacity(0.12)).overlay(Capsule().stroke(lane.accentColor.opacity(0.40), lineWidth: 1)))
+                .background(Capsule().fill(status.accentColor.opacity(0.12)).overlay(Capsule().stroke(status.accentColor.opacity(0.40), lineWidth: 1)))
             }
             .buttonStyle(.plain)
 
@@ -897,7 +1017,7 @@ struct TaskDetailPage: View {
         }
         .padding(.horizontal, 24).padding(.vertical, 12)
         .background(Color.obsidianMid.opacity(0.92))
-        .overlay(alignment: .bottom) { Rectangle().fill(lane.accentColor.opacity(0.15)).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(status.accentColor.opacity(0.15)).frame(height: 1) }
     }
 
     // MARK: - Tabs
@@ -1159,7 +1279,9 @@ struct TaskDetailPage: View {
                         // Timeline dot + line
                         VStack(spacing: 0) {
                             Circle()
-                                .fill(entry.fieldChanged == "status" ? lane.accentColor : Color.chissPrimary.opacity(0.40))
+                                .fill(entry.fieldChanged == "status"
+                                    ? FlowTaskStatus.fromTaskStatus(entry.newValue ?? task?.status ?? "").accentColor
+                                    : Color.chissPrimary.opacity(0.40))
                                 .frame(width: 8, height: 8)
                             Rectangle()
                                 .fill(Color.chissPrimary.opacity(0.12))
@@ -1212,7 +1334,7 @@ struct TaskDetailPage: View {
         }
     }
 
-    private static let detailOwners = ["Andrew", "Thrawn", "R2-D2", "C-3PO", "Qui-Gon", "Lando", "Boba"]
+    private static let detailOwners = ["Thrawn", "Andrew", "Samwell Tarly", "Sir Davos", "Dwight", "Steven"]
 
     private func ownerPickerField() -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1280,11 +1402,11 @@ struct AddTaskSheet: View {
     @ObservedObject var store: TaskBoardStore
     @Binding var isPresented: Bool
     @State private var title = ""
-    @State private var owner = "Andrew"
-    @State private var lane: FlowLane = .inbox
+    @State private var owner = "Thrawn"
+    @State private var status: FlowTaskStatus = .inbox
     @State private var priority = "Medium"
 
-    private let owners = ["Andrew", "Thrawn", "R2-D2", "C-3PO", "Qui-Gon", "Lando", "Boba"]
+    private let owners = ["Thrawn", "Andrew", "Samwell Tarly", "Sir Davos", "Dwight", "Steven"]
     private let priorities = ["Critical", "High", "Medium", "Low"]
 
     var body: some View {
@@ -1320,9 +1442,9 @@ struct AddTaskSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("LANE").font(.system(size: 9, weight: .heavy)).tracking(1).foregroundColor(Color.chissPrimary.opacity(0.60))
-                    Picker("", selection: $lane) {
-                        ForEach(FlowLane.allCases) { Text($0.rawValue).tag($0) }
+                    Text("STATUS").font(.system(size: 9, weight: .heavy)).tracking(1).foregroundColor(Color.chissPrimary.opacity(0.60))
+                    Picker("", selection: $status) {
+                        ForEach(FlowTaskStatus.allCases) { Text($0.rawValue).tag($0) }
                     }.frame(width: 160)
                 }
 
@@ -1332,7 +1454,7 @@ struct AddTaskSheet: View {
                         .buttonStyle(.plain).foregroundColor(Color.chissPrimary.opacity(0.70))
                     Button("Create Task") {
                         guard !title.isEmpty else { return }
-                        store.addTask(title: title, owner: owner, status: lane.rawValue, priority: priority)
+                        store.addTask(title: title, owner: owner, status: status.rawValue, priority: priority)
                         isPresented = false
                     }
                     .buttonStyle(.plain).foregroundColor(.white)

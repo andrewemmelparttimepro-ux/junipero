@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - Ollama Client
 //
 // Local LLM client that talks to Ollama at localhost:11434.
-// Replaces all cloud providers (Anthropic, Gemini, OpenAI).
+// Local/offline fallback path for agents whose route explicitly allows it.
 // No API keys, no OAuth, no cloud — everything runs locally.
 //
 // Ollama API:

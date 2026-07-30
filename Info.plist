@@ -21,13 +21,23 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>2.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>210</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Thrawn reads project files in Documents so agents can inspect, build, and verify assigned local work.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Thrawn reads project files on Desktop so agents can inspect, build, and verify assigned local work.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Thrawn reads downloaded files only when they are part of an assigned local task.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Thrawn uses the microphone for Caps Lock voice chat with Thrawn Command.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Thrawn uses speech recognition to transcribe voice commands and send them to Thrawn Command.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<true/>
 	<key>NSSupportsSuddenTermination</key>

@@ -166,8 +166,10 @@ func serializeTaskBoard(_ tasks: [ParsedTask], preservingHeaderFrom original: St
                 output += "- \(pair.key): \(val)\n"
                 written.insert(pair.key)
             }
-            // Append any console-only fields not in allFields
-            for key in ["Title", "Owner", "Status", "Priority"] {
+            // Append any console-managed fields that were missing from the
+            // original card. This lets sparse Inbox cards gain a first-class
+            // Deliverable field later without losing agent-added fields.
+            for key in ["Title", "Owner", "Status", "Priority", "Due", "Next step", "Blockers", "Deliverable", "Notes"] {
                 if !written.contains(key), let v = consoleOverrides[key], !v.isEmpty {
                     output += "- \(key): \(v)\n"
                 }
@@ -199,6 +201,7 @@ final class TaskBoardStore: ObservableObject {
     @Published var activities: [TaskActivity] = []
     @Published var comments: [TaskComment] = []
     @Published var checklists: [TaskChecklist] = []
+    @Published var noticeText: String?
 
     /// Resolve symlinks so the file watcher tracks the real inode, not the link.
     private static let filePath: String = {
@@ -386,8 +389,26 @@ final class TaskBoardStore: ObservableObject {
         guard let index = tasks.firstIndex(where: { $0.id == taskId }) else { return }
         let old = tasks[index].status
         guard old != newStatus else { return }
+
+        var linkedDeliverable: (old: String, new: String)?
+        if TaskCompletionPolicy.isDoneStatus(newStatus) {
+            guard let deliverable = TaskCompletionPolicy.resolvedDeliverable(for: tasks[index]) else {
+                noticeText = "\(taskId) needs a Deliverable before it can move to Done."
+                logActivity(taskId: taskId, action: "Blocked Done move: missing deliverable", fieldChanged: "status", oldValue: old, newValue: newStatus)
+                return
+            }
+            if TaskCompletionPolicy.cleanEvidence(tasks[index].deliverable) == nil {
+                linkedDeliverable = (tasks[index].deliverable, deliverable)
+                tasks[index].deliverable = deliverable
+            }
+        }
+
         tasks[index].status = newStatus
+        noticeText = nil
         save()
+        if let linkedDeliverable {
+            logActivity(taskId: taskId, action: "Linked deliverable", fieldChanged: "deliverable", oldValue: linkedDeliverable.old, newValue: linkedDeliverable.new)
+        }
         logActivity(taskId: taskId, action: "Moved from \(old) to \(newStatus)", fieldChanged: "status", oldValue: old, newValue: newStatus)
     }
 

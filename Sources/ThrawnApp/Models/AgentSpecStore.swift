@@ -3,13 +3,12 @@ import Combine
 
 // MARK: - Agent Spec Store
 //
-// Loads, persists, and resolves AgentSpecs. The resolver applies
-// inheritance from the StandardLoadout at read-time so changes to the
-// loadout propagate live.
+// Loads, persists, and resolves AgentSpecs. The resolver applies metadata
+// inheritance from the StandardLoadout at read-time so changes to the loadout
+// propagate live.
 //
-// Default seed: one spec per existing dev-ops agent, all inheriting from
-// the loadout. Pre-Step-2 behavior is preserved exactly because every
-// resolved tool list comes out equal to `devopsDefault.toolIds`.
+// Default seed: Thrawn plus the active stable. The generic spec machinery
+// remains available for future agents through explicit versioned specs.
 
 @MainActor
 final class AgentSpecStore: ObservableObject {
@@ -20,6 +19,10 @@ final class AgentSpecStore: ObservableObject {
 
     private static let savePath = ThrawnPaths.appSupportDir
         .appendingPathComponent("agent-specs.json")
+    private static let gatewayPolicyVersionKey = "thrawn.stableGatewayPolicy.version"
+    private static let retiredAgentIds: Set<String> = [
+        "r2d2", "c3po", "quigon", "lando", "boba", "buckshot",
+    ]
 
     // MARK: Init
 
@@ -49,8 +52,8 @@ final class AgentSpecStore: ObservableObject {
         specs.first(where: { $0.id == id })
     }
 
-    /// Resolved tool IDs for an agent, applying inheritance.
-    /// Falls back to the Standard Loadout's tools if the agent has no spec.
+    /// Resolved tool IDs shown for an agent, applying inheritance.
+    /// Falls back to the Standard Loadout's metadata if the agent has no spec.
     func resolvedTools(forAgentId id: String) -> [String] {
         let loadout = loadoutStore?.loadout ?? .devopsDefault
         guard let spec = spec(id: id) else { return loadout.toolIds }
@@ -88,6 +91,17 @@ final class AgentSpecStore: ObservableObject {
     func remove(id: String) {
         specs.removeAll(where: { $0.id == id })
         save()
+    }
+
+    func resetToV2Defaults() {
+        specs = Self.defaultSpecs
+        UserDefaults.standard.set(
+            StableGatewayPolicy.currentVersion,
+            forKey: Self.gatewayPolicyVersionKey
+        )
+        save()
+        Self.ensureKnowledgeDirs(for: specs)
+        objectWillChange.send()
     }
 
     func incrementTasksCompleted(id: String) {
@@ -166,13 +180,28 @@ final class AgentSpecStore: ObservableObject {
            let decoded = try? JSONDecoder().decode([AgentSpec].self, from: data),
            !decoded.isEmpty {
             let merged = Self.mergeWithDefaults(decoded)
-            self.specs = merged
+            var normalized = Self.normalizeStableSpecs(merged)
+            let savedGatewayPolicyVersion = UserDefaults.standard.integer(
+                forKey: Self.gatewayPolicyVersionKey
+            )
+            if savedGatewayPolicyVersion < StableGatewayPolicy.currentVersion {
+                normalized = StableGatewayPolicy.applyDefaults(to: normalized)
+                UserDefaults.standard.set(
+                    StableGatewayPolicy.currentVersion,
+                    forKey: Self.gatewayPolicyVersionKey
+                )
+            }
+            self.specs = normalized
             // Persist if merge added new defaults so they survive the next launch
-            if merged.count != decoded.count {
+            if merged.count != decoded.count || normalized != decoded {
                 save()
             }
         } else {
             self.specs = Self.defaultSpecs
+            UserDefaults.standard.set(
+                StableGatewayPolicy.currentVersion,
+                forKey: Self.gatewayPolicyVersionKey
+            )
             save()
         }
     }
@@ -198,14 +227,64 @@ final class AgentSpecStore: ObservableObject {
         }
     }
 
-    /// Preserve any persisted spec, but add defaults for any dev-ops
-    /// agent that's missing so the squad always has a spec to resolve.
+    /// Preserve non-retired persisted specs, but add the Thrawn default if missing.
     private static func mergeWithDefaults(_ loaded: [AgentSpec]) -> [AgentSpec] {
-        var merged = loaded
+        var merged = loaded.filter { !retiredAgentIds.contains($0.id) }
         for def in defaultSpecs where !merged.contains(where: { $0.id == def.id }) {
             merged.append(def)
         }
         return merged
+    }
+
+    private static func normalizeStableSpecs(_ loaded: [AgentSpec]) -> [AgentSpec] {
+        loaded.map { spec in
+            var normalized = spec
+            switch spec.id {
+            case "thrawn":
+                normalized.name = "Thrawn"
+                normalized.role = "Lead"
+                normalized.persona = "Calm strategist. Keeps the system stable, answers directly, and moves local work to completion."
+                normalized.purpose = "Lead the active stable, execute cross-business work, review specialist output, and surface only decisions that truly require Andrew."
+            case "archivist":
+                normalized.name = "Samwell Tarly"
+                normalized.role = "SandPro OMP Lead"
+                normalized.persona = "Clear, quiet, and factual. Makes the SandPro account legible and keeps it moving with proof."
+                normalized.purpose = "Own the SandPro OMP revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements."
+            case "sentinel":
+                normalized.name = "Sir Davos"
+                normalized.role = "Hit Zero Lead"
+                normalized.persona = "Plain, practical, and field-tested. Says what happened, what proof exists, and what needs attention."
+                normalized.purpose = "Own the Hit Zero revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements."
+            case "dwight":
+                normalized.name = "Dwight"
+                normalized.role = "Router"
+                normalized.persona = "Precise, practical, and dry. Sorts every inbound signal without executing or editorializing."
+                normalized.purpose = "Ingest inbound signals and route each one to exactly one business owner as a traceable board card."
+            case "steven":
+                normalized.name = "Steven"
+                normalized.role = "Spas 360 Lead"
+                normalized.persona = "Direct, curious, practical, and calm."
+                normalized.purpose = "Own the Spas 360 revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements."
+            default:
+                return spec
+            }
+            switch normalized.tools {
+            case .inherit:
+                break
+            case .explicit(var list):
+                if !list.contains("task_write") {
+                    list.append("task_write")
+                }
+                if !list.contains("deliverable_write") {
+                    list.append("deliverable_write")
+                }
+                if !list.contains("browser_user") {
+                    list.append("browser_user")
+                }
+                normalized.tools = .explicit(list)
+            }
+            return normalized
+        }
     }
 
     // MARK: Knowledge directories (Step 7)
@@ -254,25 +333,23 @@ final class AgentSpecStore: ObservableObject {
 
     // MARK: Defaults
     //
-    // One spec per dev-ops agent. All inherit tools and tier from the
-    // Standard Loadout so pre-Step-2 behavior is exactly preserved:
-    //   tools  -> ["bash", "file_read", "task_write"]
-    //   tier   -> .local (Ollama + kimi-k2.6)
-    //   rank   -> .b (pinned, not subject to auto-promo/demo)
-    //
-    // Personas and purposes are kept terse here — the real personality
-    // lives in the heartbeat + agent files on disk. These fields are used
-    // for the Agents console (Step 6) and prompt augmentation (Step 3).
+    // Seed the active stable. Additional agents should be added through
+    // explicit versioned specs.
 
     static let defaultSpecs: [AgentSpec] = {
         let now = Date()
-        func squadSpec(
+        func spec(
             id: String,
             name: String,
             role: String,
             persona: String,
             purpose: String,
+            tools: ToolsBinding,
             tier: ModelTierBinding = .inherit,
+            modelOverride: AgentModelOverride? = nil,
+            avatar: String? = nil,
+            avatarThumbnail: String? = nil,
+            avatarImage: String? = nil,
             voiceId: String? = nil,
             rate: Float = 0.50,
             pitch: Float = 1.0,
@@ -284,12 +361,16 @@ final class AgentSpecStore: ObservableObject {
                 role: role,
                 persona: persona,
                 purpose: purpose,
-                tools: .inherit,
+                tools: tools,
                 tier: tier,
+                modelOverride: modelOverride,
                 rank: .b,
                 pinned: true,
                 lifecycle: .persistent,
                 knowledgeDir: "workspace/agents/\(id)/knowledge",
+                avatar: avatar,
+                avatarThumbnail: avatarThumbnail,
+                avatarImage: avatarImage,
                 tasksCompleted: 0,
                 createdAt: now,
                 voiceIdentifier: voiceId,
@@ -299,78 +380,66 @@ final class AgentSpecStore: ObservableObject {
             )
         }
 
-        // MARK: Voice map
-        //
-        // Picked from the user's actually-installed AVSpeechSynthesisVoice
-        // library. Premium > Enhanced > compact. Identifiers verified via
-        // `AVSpeechSynthesisVoice.speechVoices()` probe.
-        //
-        //   Thrawn   — Jamie (Premium) en-GB M — calm cool authority
-        //   Qui-Gon  — Lee   (Premium) en-AU M — warm, measured
-        //   Lando    — Evan  (Enhanced) en-US M — smooth American charm
-        //   Boba     — Tom   (Enhanced) en-US M — low/slow/terse
-        //   Bart     — Nathan (Enhanced) en-US M — faster, sharper snark
-        //   C-3PO    — Daniel (compact) en-GB M — British, slightly fussy
-        //   R2-D2    — muted (SFX bank planned, not a TTS voice)
-        //   Hunter   — Ava   (Premium) en-US F — sharp, direct, relentless
         let V_THRAWN = "com.apple.voice.premium.en-GB.Malcolm"   // Jamie (Premium)
-        let V_QUIGON = "com.apple.voice.premium.en-AU.Lee"       // Lee (Premium)
-        let V_LANDO  = "com.apple.voice.enhanced.en-US.Evan"     // Evan (Enhanced)
-        let V_BOBA   = "com.apple.voice.enhanced.en-US.Tom"      // Tom (Enhanced)
-        let V_C3PO   = "com.apple.voice.compact.en-GB.Daniel"    // Daniel (compact)
-        // KORBIS-SPAWN: V2 voice IDs (Bart/Hunter/Al Borland) intentionally absent.
+        let V_STEVEN = "com.apple.voice.enhanced.en-US.Evan"
 
         return [
-            squadSpec(
+            spec(
                 id: "thrawn",
                 name: "Thrawn",
                 role: "Lead",
-                persona: "Calm strategist. Routes work, keeps the board coherent, never panics.",
-                purpose: "Command hub. Every task flows through Thrawn; Ready is the only pickup lane.",
+                persona: "Calm strategist. Keeps the system stable, answers directly, and moves local work to completion.",
+                purpose: "Lead the active stable, execute cross-business work, review specialist output, and surface only decisions that truly require Andrew.",
+                tools: .explicit(["bash", "file_read", "log_read", "memory_read", "memory_write", "task_write", "deliverable_write", "browser_user", "web_search", "web_scrape"]),
+                tier: .explicit(.premium),
+                modelOverride: AgentModelOverride(provider: .codex, model: ProviderRouter.dynamicCodexModel, reasoningEffort: ProviderRouter.dynamicCodexReasoningEffort, allowFallback: false),
                 voiceId: V_THRAWN, rate: 0.46, pitch: 0.96
             ),
-            squadSpec(
-                id: "r2d2",
-                name: "R2-D2",
-                role: "Dev",
-                persona: "Pragmatic builder. Ships small, ships often, writes tight code.",
-                purpose: "Implement code, tests, and fixes across the dev-ops harness.",
-                voiceId: nil, rate: 0.50, pitch: 1.0, muted: true  // SFX bank planned
+            spec(
+                id: "archivist",
+                name: "Samwell Tarly",
+                role: "SandPro OMP Lead",
+                persona: "Clear, quiet, and factual. Makes the SandPro account legible and keeps it moving with proof.",
+                purpose: "Own the SandPro OMP revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements.",
+                tools: .explicit(["file_read", "log_read", "proof_read", "proof_write", "wiki_read", "wiki_write", "summary_write", "task_write", "deliverable_write", "browser_user"]),
+                tier: .explicit(.premium),
+                modelOverride: AgentModelOverride(provider: .codex, model: ProviderRouter.dynamicCodexModel, reasoningEffort: ProviderRouter.dynamicCodexReasoningEffort, allowFallback: false),
+                voiceId: "com.apple.voice.enhanced.en-GB.Oliver", rate: 0.46, pitch: 1.0
             ),
-            squadSpec(
-                id: "c3po",
-                name: "C-3PO",
-                role: "Data & API",
-                persona: "Precise, protocol-minded. Worries about schemas and edge cases.",
-                purpose: "Own data models, API contracts, migrations, and integration shape.",
-                voiceId: V_C3PO, rate: 0.52, pitch: 1.05
+            spec(
+                id: "sentinel",
+                name: "Sir Davos",
+                role: "Hit Zero Lead",
+                persona: "Plain, practical, and field-tested. Says what happened, what proof exists, and what needs attention.",
+                purpose: "Own the Hit Zero revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements.",
+                tools: .explicit(["file_read", "log_read", "proof_read", "proof_write", "product_sentinel_run", "task_write", "summary_write", "deliverable_write", "browser_user"]),
+                tier: .explicit(.premium),
+                modelOverride: AgentModelOverride(provider: .codex, model: ProviderRouter.dynamicCodexModel, reasoningEffort: ProviderRouter.dynamicCodexReasoningEffort, allowFallback: false),
+                voiceId: "com.apple.voice.compact.en-GB.Daniel", rate: 0.45, pitch: 0.94
             ),
-            squadSpec(
-                id: "quigon",
-                name: "Qui-Gon",
-                role: "Research",
-                persona: "Patient, curious, long-horizon. Finds the path others miss.",
-                purpose: "Investigate, reference, and surface context the rest of the squad needs.",
-                voiceId: V_QUIGON, rate: 0.47, pitch: 1.0
+            spec(
+                id: "dwight",
+                name: "Dwight",
+                role: "Router",
+                persona: "Precise, practical, and dry. Sorts every inbound signal without executing or editorializing.",
+                purpose: "Ingest inbound signals and route each one to exactly one business owner as a traceable board card.",
+                tools: .explicit(["bash", "file_read", "log_read", "memory_read", "memory_write", "proof_read", "proof_write", "summary_write", "task_write", "deliverable_write", "browser_user"]),
+                tier: .explicit(.premium),
+                modelOverride: AgentModelOverride(provider: .codex, model: ProviderRouter.dynamicCodexModel, reasoningEffort: ProviderRouter.dynamicCodexReasoningEffort, allowFallback: false),
+                avatarImage: "workspace/avatars/dwight-512.png",
+                voiceId: "com.apple.voice.enhanced.en-US.Tom", rate: 0.48, pitch: 1.0
             ),
-            squadSpec(
-                id: "lando",
-                name: "Lando Calrissian",
-                role: "Marketing & Copy",
-                persona: "Charming, persuasive, sharp. Writes copy that lands.",
-                purpose: "Draft marketing, product copy, and outbound voice.",
-                voiceId: V_LANDO, rate: 0.50, pitch: 1.0
-            ),
-            squadSpec(
-                id: "boba",
-                name: "Boba Fett",
-                role: "QA & Recon",
-                persona: "Quiet, relentless, finds what's broken. Doesn't miss.",
-                purpose: "Validate work, hunt regressions, scout risks before they ship.",
-                voiceId: V_BOBA, rate: 0.44, pitch: 0.90
+            spec(
+                id: "steven",
+                name: "Steven",
+                role: "Spas 360 Lead",
+                persona: "Direct, curious, practical, and calm.",
+                purpose: "Own the Spas 360 revenue stream end to end: routed work, proof patrols, operating context, and evidence-backed improvements.",
+                tools: .explicit(["bash", "file_read", "log_read", "memory_read", "memory_write", "proof_read", "proof_write", "summary_write", "task_write", "deliverable_write", "browser_user", "web_search", "web_scrape"]),
+                tier: .explicit(.premium),
+                modelOverride: StableGatewayPolicy.defaultOverride(for: "steven"),
+                voiceId: V_STEVEN, rate: 0.48, pitch: 0.98
             )
-            // KORBIS-SPAWN: V2 specs (Bart, Hunter, Al Borland) live on the
-            // master branch only. The spawn ships with the dev-ops six.
         ]
     }()
 }

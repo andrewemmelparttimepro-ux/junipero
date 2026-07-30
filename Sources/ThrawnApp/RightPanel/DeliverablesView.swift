@@ -5,11 +5,19 @@ import AppKit
 // MARK: - Model
 
 struct DeliverableItem: Identifiable {
-    let id = UUID()
+    var id: String
+    var ticketId: String
+    var title: String
     var fileName: String
     var filePath: String
+    var folderPath: String
     var project: String
-    var lastModified: Date?
+    var kind: String
+    var status: String
+    var createdAt: Date?
+    var updatedAt: Date?
+    var thumbnailPath: String?
+    var summary: String
     var fileSize: Int64
 }
 
@@ -26,72 +34,163 @@ final class DeliverablesStore: ObservableObject {
         errorText = nil
         Task {
             let snapshot = await Task.detached(priority: .utility) {
-                Self.scanDeliverables()
+                Self.loadManifest()
             }.value
 
             items = snapshot.items
             if items.isEmpty {
-                errorText = "No deliverables found in \(snapshot.root)"
+                errorText = "No HTML deliverables yet. Publish index.html entries in \(snapshot.root)"
             }
             isLoading = false
         }
     }
 
-    nonisolated private static func scanDeliverables() -> (items: [DeliverableItem], root: String) {
+    nonisolated private static func loadManifest() -> (items: [DeliverableItem], root: String) {
         let fm = FileManager.default
-        let root = ThrawnPaths.dataRoot.path
-        var found: [DeliverableItem] = []
+        let root = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/deliverables", isDirectory: true)
+        let manifest = root.appendingPathComponent("manifest.json")
 
-        let rootURL = URL(fileURLWithPath: root)
-        if let enumerator = fm.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            var depth: [URL: Int] = [rootURL: 0]
-            for case let fileURL as URL in enumerator {
-                let parent = fileURL.deletingLastPathComponent()
-                let parentDepth = depth[parent] ?? 0
-                let currentDepth = parentDepth + 1
-                depth[fileURL] = currentDepth
-
-                if currentDepth > 3 {
-                    enumerator.skipDescendants()
-                    continue
-                }
-
-                let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                if isDir { continue }
-
-                let ext = fileURL.pathExtension.lowercased()
-                let allowedExts: Set<String> = ["md", "pdf", "txt", "json", "csv", "png", "jpg", "mp4", "zip", "swift", "html", "docx", "xlsx"]
-                guard allowedExts.contains(ext) else { continue }
-
-                let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let modified = attrs?.contentModificationDate
-                let size = Int64(attrs?.fileSize ?? 0)
-
-                let components = fileURL.pathComponents
-                let rootComponents = rootURL.pathComponents
-                let projectName: String
-                if components.count > rootComponents.count {
-                    projectName = components[rootComponents.count]
-                } else {
-                    projectName = "Root"
-                }
-
-                found.append(DeliverableItem(
-                    fileName: fileURL.lastPathComponent,
-                    filePath: fileURL.path,
-                    project: projectName,
-                    lastModified: modified,
-                    fileSize: size
-                ))
+        do {
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            if !fm.fileExists(atPath: manifest.path) {
+                try "{\n  \"deliverables\": []\n}\n".write(to: manifest, atomically: true, encoding: .utf8)
             }
+        } catch {
+            return ([], manifest.path)
         }
 
-        found.sort { ($0.lastModified ?? .distantPast) > ($1.lastModified ?? .distantPast) }
-        return (Array(found.prefix(200)), root)
+        guard let data = try? Data(contentsOf: manifest),
+              let rawItems = manifestItems(from: data)
+        else { return ([], manifest.path) }
+
+        let items = rawItems.compactMap { item -> DeliverableItem? in
+            guard let rawPath = firstString(item, keys: ["filePath", "file_path", "path", "evidence_path", "evidencePath"]) else {
+                return nil
+            }
+
+            let sourceURL = resolvePath(rawPath)
+            let fileURL = primaryDeliverableURL(from: sourceURL)
+            let folderURL = folderURL(for: fileURL, sourceURL: sourceURL, item: item)
+            let thumbnail = firstString(item, keys: ["thumbnailPath", "thumbnail_path"]).map { resolvePath($0).path }
+            let attrs = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let updatedAt = dateValue(item, keys: ["updatedAt", "updated_at"]) ?? attrs?.contentModificationDate
+            let createdAt = dateValue(item, keys: ["createdAt", "created_at", "timestamp"])
+            let ticketId = firstString(item, keys: ["ticketId", "ticket_id", "taskId", "task_id"]) ?? "UNTICKETED"
+            let title = firstString(item, keys: ["title"])
+                ?? firstString(item, keys: ["description"])
+                ?? readableTitle(ticketId: ticketId, url: fileURL)
+            let kind = firstString(item, keys: ["kind", "type"]) ?? (fileURL.pathExtension.isEmpty ? "html" : fileURL.pathExtension.lowercased())
+            let id = firstString(item, keys: ["id"]) ?? stableId(ticketId: ticketId, path: fileURL.path, title: title)
+
+            return DeliverableItem(
+                id: id,
+                ticketId: ticketId,
+                title: title,
+                fileName: fileURL.lastPathComponent,
+                filePath: fileURL.path,
+                folderPath: folderURL.path,
+                project: firstString(item, keys: ["project"]) ?? firstString(item, keys: ["agent"]) ?? "General",
+                kind: kind,
+                status: firstString(item, keys: ["status"]) ?? "Ready",
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                thumbnailPath: thumbnail,
+                summary: firstString(item, keys: ["summary", "description"]) ?? "",
+                fileSize: Int64(attrs?.fileSize ?? 0)
+            )
+        }
+        .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+
+        return (items, manifest.path)
+    }
+
+    nonisolated private static func manifestItems(from data: Data) -> [[String: Any]]? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        if let dict = json as? [String: Any],
+           let deliverables = dict["deliverables"] as? [[String: Any]] {
+            return deliverables
+        }
+        return json as? [[String: Any]]
+    }
+
+    nonisolated private static func firstString(_ item: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = item[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func dateValue(_ item: [String: Any], keys: [String]) -> Date? {
+        for key in keys {
+            guard let value = firstString(item, keys: [key]) else { continue }
+            if let date = ISO8601DateFormatter().date(from: value) { return date }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            if let date = formatter.date(from: value) { return date }
+        }
+        return nil
+    }
+
+    nonisolated private static func resolvePath(_ path: String) -> URL {
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path) ?? URL(fileURLWithPath: path)
+        }
+        if path.hasPrefix("~/") {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            return URL(fileURLWithPath: home).appendingPathComponent(String(path.dropFirst(2)))
+        }
+        if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        if path.hasPrefix("workspace/") {
+            return ThrawnPaths.appSupportDir.appendingPathComponent(path)
+        }
+        return ThrawnPaths.appSupportDir.appendingPathComponent("workspace").appendingPathComponent(path)
+    }
+
+    nonisolated private static func primaryDeliverableURL(from sourceURL: URL) -> URL {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return sourceURL }
+
+        for name in ["index.html", "visual-board.html", "report.html", "board.html", "report.md", "board.md"] {
+            let candidate = sourceURL.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return sourceURL
+    }
+
+    nonisolated private static func folderURL(for fileURL: URL, sourceURL: URL, item: [String: Any]) -> URL {
+        if let rawFolder = firstString(item, keys: ["folderPath", "folder_path"]) {
+            return resolvePath(rawFolder)
+        }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return sourceURL
+        }
+        return fileURL.deletingLastPathComponent()
+    }
+
+    nonisolated private static func readableTitle(ticketId: String, url: URL) -> String {
+        let base = url.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        let cleaned = base.split(separator: " ").map { word in
+            word.prefix(1).uppercased() + word.dropFirst()
+        }.joined(separator: " ")
+        return "\(ticketId) \(cleaned)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func stableId(ticketId: String, path: String, title: String) -> String {
+        let raw = "\(ticketId)-\(title)-\(path)"
+        let slug = raw.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return String(slug.prefix(120))
     }
 }
 
@@ -104,8 +203,11 @@ struct DeliverablesView: View {
     var filtered: [DeliverableItem] {
         if searchText.isEmpty { return store.items }
         return store.items.filter {
+            $0.title.localizedCaseInsensitiveContains(searchText) ||
+            $0.ticketId.localizedCaseInsensitiveContains(searchText) ||
             $0.fileName.localizedCaseInsensitiveContains(searchText) ||
-            $0.project.localizedCaseInsensitiveContains(searchText)
+            $0.project.localizedCaseInsensitiveContains(searchText) ||
+            $0.summary.localizedCaseInsensitiveContains(searchText)
         }
     }
 
@@ -124,7 +226,7 @@ struct DeliverablesView: View {
                             .tracking(3)
                             .foregroundColor(Color.chissPrimary)
                             .shadow(color: Color.chissPrimary.opacity(0.40), radius: 8)
-                        Text("\(filtered.count) files")
+                        Text("\(filtered.count) HTML deliverables")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(Color.white.opacity(0.40))
                     }
@@ -165,14 +267,19 @@ struct DeliverablesView: View {
                     Spacer()
                     VStack(spacing: 8) {
                         Image(systemName: "shippingbox").font(.system(size: 36)).foregroundColor(Color.chissPrimary.opacity(0.40))
-                        Text(err).font(.system(size: 13)).foregroundColor(Color.white.opacity(0.45))
+                        Text("No HTML Deliverables")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(Color.white.opacity(0.82))
+                        Text(err).font(.system(size: 12)).foregroundColor(Color.white.opacity(0.45))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 520)
                     }
                     Spacer()
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 360), spacing: 12)], spacing: 12) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 190, maximum: 230), spacing: 14)], spacing: 14) {
                             ForEach(filtered) { item in
-                                DeliverableCard(item: item)
+                                DeliverableTile(item: item)
                             }
                         }
                         .padding(.horizontal, 24).padding(.vertical, 18)
@@ -187,7 +294,7 @@ struct DeliverablesView: View {
 
 // MARK: - Deliverable Card
 
-private struct DeliverableCard: View {
+private struct DeliverableTile: View {
     let item: DeliverableItem
 
     private static let dateFormatter: DateFormatter = {
@@ -200,6 +307,7 @@ private struct DeliverableCard: View {
     private var fileIcon: String {
         let ext = (item.fileName as NSString).pathExtension.lowercased()
         switch ext {
+        case "html", "htm": return "globe"
         case "md": return "doc.text.fill"
         case "pdf": return "doc.richtext.fill"
         case "png", "jpg", "jpeg": return "photo.fill"
@@ -212,77 +320,93 @@ private struct DeliverableCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: fileIcon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(Color.chissPrimary)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.chissDeep.opacity(0.55)))
+        Button {
+            NSWorkspace.shared.open(URL(fileURLWithPath: item.filePath))
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                preview
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.fileName)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.90))
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(item.ticketId)
+                            .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                            .foregroundColor(Color.green.opacity(0.88))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(item.status.uppercased())
+                            .font(.system(size: 8, weight: .black))
+                            .tracking(0.8)
+                            .foregroundColor(Color.chissPrimary.opacity(0.72))
+                    }
+
+                    Text(item.title)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.92))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     Text(item.project)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color.chissPrimary.opacity(0.70))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color.chissPrimary.opacity(0.72))
+                        .lineLimit(1)
                 }
-                Spacer()
-            }
 
-            if let modified = item.lastModified {
-                Text(Self.dateFormatter.string(from: modified))
-                    .font(.system(size: 9.5))
-                    .foregroundColor(Color.white.opacity(0.35))
-            }
+                Spacer(minLength: 0)
 
-            Divider().background(Color.chissPrimary.opacity(0.12))
-
-            HStack(spacing: 8) {
-                Button {
-                    let url = URL(fileURLWithPath: item.filePath)
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder").font(.system(size: 9, weight: .bold))
-                        Text("Reveal").font(.system(size: 10, weight: .semibold))
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 9, weight: .bold))
+                    Text(item.fileName.lowercased() == "index.html" ? "Open HTML" : "Open")
+                        .font(.system(size: 10, weight: .semibold))
+                    Spacer()
+                    if item.fileSize > 0 {
+                        Text(formatSize(item.fileSize))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Color.white.opacity(0.34))
                     }
-                    .foregroundColor(Color.chissPrimary.opacity(0.80))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.chissDeep.opacity(0.40)).overlay(Capsule().stroke(Color.chissPrimary.opacity(0.25), lineWidth: 1)))
                 }
-                .buttonStyle(.plain)
-
-                Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: item.filePath))
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.up.right.square").font(.system(size: 9, weight: .bold))
-                        Text("Open").font(.system(size: 10, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.chissDeep).overlay(Capsule().stroke(Color.chissPrimary.opacity(0.40), lineWidth: 1)))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                if item.fileSize > 0 {
-                    Text(formatSize(item.fileSize))
-                        .font(.system(size: 9))
-                        .foregroundColor(Color.white.opacity(0.28))
-                }
+                .foregroundColor(Color.chissPrimary.opacity(0.84))
             }
+            .padding(12)
+            .aspectRatio(1, contentMode: .fit)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.obsidianMid)
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1))
+            )
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.obsidianMid)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1))
-        )
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Open HTML") { NSWorkspace.shared.open(URL(fileURLWithPath: item.filePath)) }
+            Button("Reveal Folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.folderPath)]) }
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        let thumbnail = item.thumbnailPath ?? (isImage(item.filePath) ? item.filePath : nil)
+        if let thumbnail, let image = NSImage(contentsOfFile: thumbnail) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1.35, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.chissDeep.opacity(0.34))
+                Image(systemName: fileIcon)
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundColor(Color.chissPrimary.opacity(0.78))
+            }
+            .aspectRatio(1.35, contentMode: .fit)
+        }
+    }
+
+    private func isImage(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "heic", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
     }
 
     private func formatSize(_ bytes: Int64) -> String {

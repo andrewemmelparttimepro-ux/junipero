@@ -4,11 +4,11 @@ import SwiftUI
 import AppKit
 #endif
 
-// MARK: - App Store Compliant Bootstrap
+// MARK: - Local Agent Runtime Bootstrap
 //
-// No ShellCommand, no Process(), no external dependencies.
-// Setup = enter API key. Health = check API reachability.
-// Cognee = optional HTTP connection (not required).
+// The signed native app acts as the persistent runtime host. Provider adapters
+// may launch their official CLIs; API and local-model clients remain optional
+// fallback routes. Cognee remains an optional HTTP connection.
 
 @MainActor
 final class ThrawnBootstrap: ObservableObject {
@@ -26,7 +26,7 @@ final class ThrawnBootstrap: ObservableObject {
 
     enum SetupStep: String, CaseIterable, Identifiable {
         case migrate = "Migrate Config"
-        case runtime = "Connect API"
+        case runtime = "Provider Runtime"
         case fallback = "Agent System"
         case save = "Save Settings"
         case verify = "Verify Runtime"
@@ -64,7 +64,7 @@ final class ThrawnBootstrap: ObservableObject {
 
     @Published var setupMode: SetupMode = .bringYourOwn
     @Published var providerToken: String = ""
-    @Published var providerModel: String = AnthropicConfig.defaultModel
+    @Published var providerModel: String = ProviderRouter.premiumOpenAIModel
     @Published var preferLocalFirst: Bool = false
     @Published var alwaysRouteNative: Bool = false
     @Published var unlockLocalOllamaOptions: Bool = false {
@@ -102,10 +102,8 @@ final class ThrawnBootstrap: ObservableObject {
     @Published var missingOllamaModel: Bool = false
     @Published var lastSupportBundlePath: String?
     @Published private(set) var stepStates: [SetupStep: StepState] = [:]
-    @Published var liabilityMode: LiabilityMode = .idiot
-    @Published var accessMode: AccessMode = .restricted
-    @Published var probationInteractionCount: Int = 0
-    @Published var probationStatusText: String = "Probation active"
+    @Published var liabilityMode: LiabilityMode = .myFault
+    @Published var accessMode: AccessMode = .fullOperation
 
     private let thrawnDir: URL
     private let configURL: URL
@@ -116,6 +114,8 @@ final class ThrawnBootstrap: ObservableObject {
 
     // Reference to the Ollama client for health checks
     private weak var ollamaClient: OllamaClient?
+    private weak var openClawClient: GatewayWSClient?
+    private weak var agentRuntime: AgentRuntimeCoordinator?
 
     var cogneeBadgeText: String {
         if cogneeHealthy {
@@ -129,10 +129,6 @@ final class ThrawnBootstrap: ObservableObject {
 
     var ollamaFallbackActive: Bool {
         unlockLocalOllamaOptions && enableOllamaFallback
-    }
-
-    var canDisableGuardrails: Bool {
-        ThrawnPreferencesStore.load().probationComplete
     }
 
     init() {
@@ -163,6 +159,15 @@ final class ThrawnBootstrap: ObservableObject {
         self.ollamaClient = client
     }
 
+    /// Bind the shared OpenClaw client for subscription-backed GPT route checks.
+    func bindOpenClawClient(_ client: GatewayWSClient) {
+        self.openClawClient = client
+    }
+
+    func bindAgentRuntime(_ runtime: AgentRuntimeCoordinator) {
+        self.agentRuntime = runtime
+    }
+
     // MARK: - Startup
 
     func startIfNeeded() async {
@@ -171,18 +176,20 @@ final class ThrawnBootstrap: ObservableObject {
         try? FileManager.default.createDirectory(at: thrawnDir, withIntermediateDirectories: true)
         resetStepStates()
 
-        // Migrate: no-op for Ollama (no API keys to migrate)
+        // Migrate: legacy local/API files no longer drive normal routing.
         setStep(.migrate, .done)
-
-        // Auto-complete setup — Ollama doesn't need API keys
-        writeSetupState(SetupState(completed: true, setupDate: Date()))
 
         setStep(.runtime, .running)
         await refreshRuntimeStatus()
         setStep(.runtime, apiHealthy ? .done : .failed)
         setStep(.fallback, .done)
         setStep(.verify, apiHealthy ? .done : .failed)
-        showSetup = false
+        if apiHealthy {
+            writeSetupState(SetupState(completed: true, setupDate: Date()))
+            showSetup = false
+        } else {
+            showSetup = true
+        }
 
         startRuntimeMonitor()
     }
@@ -193,16 +200,15 @@ final class ThrawnBootstrap: ObservableObject {
         guard !isWorking else { return }
         isWorking = true
         errorText = nil
-        statusText = "Connecting to Ollama…"
+        statusText = "Starting Codex agent runtime…"
         resetStepStates()
 
-        // Step 1: Migrate (no-op for Ollama)
+        // Step 1: Migrate legacy config
         setStep(.migrate, .done)
 
-        // Step 2: Verify Ollama connectivity
+        // Step 2: Verify the provider-owned Codex runtime and account.
         setStep(.runtime, .running)
-        await ollamaClient?.refreshConnectionStatus()
-        apiHealthy = ollamaClient?.connected ?? false
+        apiHealthy = await checkAgentRuntimeHealth()
         setStep(.runtime, apiHealthy ? .done : .failed)
         setStep(.fallback, .done)
 
@@ -221,24 +227,22 @@ final class ThrawnBootstrap: ObservableObject {
         isWorking = false
 
         if !apiHealthy {
-            errorText = "Could not connect to Ollama. Make sure Ollama is running on localhost:11434."
+            errorText = "Could not start the Codex agent runtime. Confirm Codex is installed and run codex login."
+            showSetup = true
         } else {
-            statusText = "Thrawn online · Ollama"
+            statusText = "Thrawn online · \(agentRuntime?.runtimeLabel ?? "Codex")"
         }
     }
 
     func deferSetup() {
         showSetup = false
-        statusText = "No API key — limited functionality"
+        statusText = "Codex agent runtime setup deferred"
     }
 
     func setLiabilityMode(_ mode: LiabilityMode) {
         var prefs = ThrawnPreferencesStore.load()
-        if !prefs.probationComplete {
-            prefs.liabilityMode = .idiot
-        } else {
-            prefs.liabilityMode = mode
-        }
+        prefs.liabilityMode = .myFault
+        prefs.accessMode = .fullOperation
         ThrawnPreferencesStore.save(prefs)
     }
 
@@ -254,28 +258,11 @@ final class ThrawnBootstrap: ObservableObject {
     }
 
     func refreshRuntimeStatus() async {
-        // Check Ollama connectivity
-        let ollamaConnected = ollamaClient?.connected ?? false
-
-        if ollamaConnected {
-            apiHealthy = true
-            let model = ollamaClient?.selectedModel ?? "unknown"
-            statusText = "Thrawn online · Ollama (\(model))"
-            ollamaHealthy = true
-        } else {
-            apiHealthy = false
-            ollamaHealthy = false
-            // Try refreshing Ollama connection
-            await ollamaClient?.refreshConnectionStatus()
-            if ollamaClient?.connected == true {
-                apiHealthy = true
-                ollamaHealthy = true
-                let model = ollamaClient?.selectedModel ?? "unknown"
-                statusText = "Thrawn online · Ollama (\(model))"
-            } else {
-                statusText = "Ollama not running — start Ollama on localhost:11434"
-            }
-        }
+        apiHealthy = await checkAgentRuntimeHealth()
+        ollamaHealthy = ollamaClient?.connected ?? false
+        statusText = apiHealthy
+            ? "Thrawn online · \(agentRuntime?.runtimeLabel ?? "Codex")"
+            : "Codex agent runtime unavailable"
 
         // Check Cognee (optional — HTTP health check only)
         await refreshCogneeHealth()
@@ -341,28 +328,29 @@ final class ThrawnBootstrap: ObservableObject {
         }
     }
 
+    private func checkAgentRuntimeHealth() async -> Bool {
+        guard let agentRuntime else { return false }
+        await agentRuntime.refresh()
+        return agentRuntime.isReady
+    }
+
     // MARK: - Diagnostics (App Store safe — no shell commands)
 
     func runGuidedDiagnostics() async {
         diagnosticsSummary = "Running diagnostics…"
         var lines: [String] = []
 
-        // API key
-        let config = AnthropicConfig.load()
-        lines.append("API Key: \(config.isConfigured ? "Configured ✓" : "MISSING ✗")")
-        lines.append("Model: \(config.model)")
+        lines.append("Codex Agent Runtime: \(apiHealthy ? "Online ✓" : "Unavailable ✗")")
+        lines.append("Authentication: \(agentRuntime?.account?.displayName ?? "Not authenticated")")
+        lines.append("Command Model: \(agentRuntime?.selectedModel?.displayName ?? "Live catalog unavailable")")
 
-        // Ollama connectivity
+        // Legacy local connectivity
         let apiOk = ollamaClient?.connected ?? false
-        lines.append("Ollama Connection: \(apiOk ? "Online ✓" : "Offline ✗")")
+        lines.append("Legacy Ollama Connection: \(apiOk ? "Online ✓" : "Offline ✗")")
 
-        // Access mode
-        let prefs = ThrawnPreferencesStore.load()
-        lines.append("Access Mode: \(prefs.effectiveAccessMode.label)")
-        if prefs.effectiveAccessMode == .unleashed {
-            let shellOk = FileManager.default.isExecutableFile(atPath: "/bin/zsh")
-            lines.append("Shell Available: \(shellOk ? "Yes ✓" : "No ✗")")
-        }
+        lines.append("Operation Mode: Full")
+        let shellOk = FileManager.default.isExecutableFile(atPath: "/bin/zsh")
+        lines.append("Shell Available: \(shellOk ? "Yes ✓" : "No ✗")")
 
         // Cognee
         lines.append("Cognee API: \(cogneeHealthy ? "Connected ✓" : "Not connected")")
@@ -425,7 +413,7 @@ final class ThrawnBootstrap: ObservableObject {
     // MARK: - Config Persistence
 
     private func migrateConfigIfNeeded() {
-        // No-op for Ollama mode — no API keys to migrate
+        // No-op for OpenClaw mode.
     }
 
     private struct ThrawnConfig: Codable {
@@ -485,17 +473,7 @@ final class ThrawnBootstrap: ObservableObject {
     // MARK: - Preferences Sync
 
     private func syncPreferences() {
-        let prefs = ThrawnPreferencesStore.load()
-        liabilityMode = prefs.effectiveLiabilityMode
-        accessMode = prefs.effectiveAccessMode
-        probationInteractionCount = prefs.interactionCount
-        if prefs.probationComplete {
-            probationStatusText = "Probation complete. Advanced mode unlocked."
-        } else {
-            let remainingInteractions = max(0, 8 - prefs.interactionCount)
-            let remainingSeconds = max(0, Int(21_600 - Date().timeIntervalSince(prefs.probationStartedAt)))
-            let remainingHours = max(0, (remainingSeconds + 3599) / 3600)
-            probationStatusText = "Probation: \(remainingInteractions) more chats or ~\(remainingHours)h of use."
-        }
+        liabilityMode = .myFault
+        accessMode = .fullOperation
     }
 }

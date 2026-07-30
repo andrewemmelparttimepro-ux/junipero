@@ -4,46 +4,72 @@ import UniformTypeIdentifiers
 
 struct RightPanelView: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ThrawnHeaderBar()
+
+            ZStack(alignment: .trailing) {
+                VStack(spacing: 0) {
+                    ProductBoardSwitcher()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.obsidianMid.opacity(0.85))
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Color.chissPrimary.opacity(0.10)).frame(height: 1)
+                        }
+
+                    ConsoleSectionBody()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                }
+                .padding(.trailing, 48)
+
+                ConsoleUtilityRail()
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: nav.selectedProjectBoard)
+        // Floating Command button + popup chat live at ContentView level
+        // (see GlobalCommandOverlay) so they can float above the full-screen
+        // product board overlay, not just above the right panel. This makes
+        // Thrawn reachable at any time from any view.
+    }
+}
+
+// MARK: - Global Command Overlay
+//
+// The persistent bottom-right chat button that gives Andrew a direct line to
+// Thrawn from any view — the utility sections, a full-screen product board,
+// the Flow board, doesn't matter. Lives at the ContentView layer so it
+// floats above every other surface.
+
+struct GlobalCommandOverlay: View {
+    @EnvironmentObject var nav: ConsoleNavigationStore
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var flowTab: FlowTabStore
     @State private var showPopupChat = false
 
-    /// Hide the floating composer when the user is already inside an active
-    /// thread or specialist chat — it would just collide with the reply bar.
+    /// The button should be reachable almost everywhere. Only hide it in the
+    /// narrow set of contexts where it would collide with an in-view reply
+    /// bar or duplicate an existing chat surface.
     private var showFloatingComposer: Bool {
         if showPopupChat { return false }
+        if nav.showCitadel { return false }
         if nav.showMemoryGraph { return false }
         if nav.selectedAgentId != nil { return false }
+        // On product boards (including full-screen) — show the button so
+        // Andrew can ping Thrawn without exiting his canvas.
         if nav.selectedSection == .command && threadStore.selectedThreadId != nil { return false }
         return true
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 0) {
-                ThrawnHeaderBar()
-
-                // Console section switcher
-                ConsoleSectionSwitcher()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color.obsidianMid.opacity(0.85))
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(Color.chissPrimary.opacity(0.10)).frame(height: 1)
-                    }
-
-                ConsoleSectionBody()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-            }
-            .animation(.easeInOut(duration: 0.18), value: nav.selectedSection)
-
-            // Popup chat overlay
+            // Popup chat scrim + composer
             if showPopupChat {
-                Color.black.opacity(0.25)
+                Color.black.opacity(0.35)
                     .ignoresSafeArea()
-                    .onTapGesture {
-                        closePopupChat()
-                    }
+                    .onTapGesture { closePopupChat() }
                     .transition(.opacity)
 
                 PopupComposerCard(
@@ -74,6 +100,7 @@ struct RightPanelView: View {
                 .transition(.scale.combined(with: .opacity))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: showPopupChat)
         .animation(.easeInOut(duration: 0.18), value: showFloatingComposer)
     }
@@ -92,8 +119,13 @@ struct RightPanelView: View {
         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
             showPopupChat = false
         }
-        // Switch to Command tab to show the new thread
-        nav.selectedSection = .command
+        // Route to the Command view so the reply thread is visible.
+        // This also closes any full-screen product board (selectSection
+        // clears selectedProjectBoard + showBoardFullScreen).
+        if flowTab.showFlow {
+            flowTab.showFlow = false
+        }
+        nav.selectSection(.command)
     }
 }
 
@@ -151,12 +183,19 @@ struct FloatingCommandButton: View {
 
 struct ThrawnHeaderBar: View {
     @EnvironmentObject var ollama: OllamaClient
+    @EnvironmentObject var openai: OpenAIClient
+    @EnvironmentObject var openclaw: GatewayWSClient
+    @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
+    @EnvironmentObject var devOpsBrain: DevOpsBrainStore
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var updateManager: UpdateManager
     @EnvironmentObject var sparkleUpdater: SparkleUpdaterService
     @EnvironmentObject var flowTab: FlowTabStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
     @EnvironmentObject var nav: ConsoleNavigationStore
+    @EnvironmentObject var voiceService: VoiceService
+    @EnvironmentObject var voiceConversation: VoiceConversationService
+    @State private var showVoicePanel = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -188,9 +227,11 @@ struct ThrawnHeaderBar: View {
                 }
             }
 
-            // Runtime badge — adjacent to identity, not pushed right
+            // Runtime badge — Thrawn's intended core brain is stable identity.
+            // Fallback/degraded state is shown in the status line under the name,
+            // not as the brain label itself.
             HStack(spacing: 6) {
-                Text(bootstrap.statusText)
+                Text(runtimeText)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(Color.chissPrimary.opacity(0.70))
                     .lineLimit(1)
@@ -203,19 +244,17 @@ struct ThrawnHeaderBar: View {
 
             Spacer()
 
-            // Memory brain — tap to open 3D memory graph
+            // Citadel — tap to open operating memory
             Button {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                    nav.showMemoryGraph.toggle()
+                    nav.showMemoryGraph = false
+                    nav.showCitadel.toggle()
                 }
             } label: {
-                CogneeMemoryBrain(
-                    healthy: bootstrap.cogneeHealthy,
-                    syncing: bootstrap.cogneePendingFiles > 0 || bootstrap.cogneeStatusText.localizedCaseInsensitiveContains("sync")
-                )
+                CitadelHeaderButton(active: nav.showCitadel)
             }
             .buttonStyle(.plain)
-            .help("Memory Graph — visualize agent activity and knowledge")
+            .help("The Citadel — open rolling memory and product pages")
 
             // Action buttons — icon-only, tooltips on hover
             HStack(spacing: 4) {
@@ -258,6 +297,22 @@ struct ThrawnHeaderBar: View {
                 iconBtn("square.grid.2x2.fill", help: "Flow board") {
                     withAnimation(.easeInOut(duration: 0.22)) { flowTab.showFlow.toggle() }
                 }
+                Button { showVoicePanel = true } label: {
+                    Image(systemName: voiceConversation.isSessionActive
+                          ? "waveform.circle.fill"
+                          : (voiceService.muted ? "mic.slash" : "waveform"))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(voiceConversation.isSessionActive
+                                         ? Color.ndaiGreen
+                                         : Color.chissPrimary.opacity(0.75))
+                        .frame(width: 30, height: 28)
+                        .background(Circle().fill(voiceConversation.isSessionActive
+                                                  ? Color.ndaiGreen.opacity(0.14)
+                                                  : Color.white.opacity(0.06)))
+                }
+                .buttonStyle(.plain)
+                .help("Voice — Caps Lock talks to Thrawn")
+
                 iconBtn("gearshape", help: "Setup") { bootstrap.showSetup = true }
                 iconBtn("waveform.path.ecg", help: "Heal — refresh runtime status") {
                     Task { await bootstrap.refreshRuntimeStatus() }
@@ -268,10 +323,6 @@ struct ThrawnHeaderBar: View {
                     Button("Reindex Memory") { Task { await bootstrap.reindexCogneeMemory() } }
                     Button("Export Support Bundle") { Task { await bootstrap.exportSupportBundle() } }
                     Button("Check Updates") { Task { await updateManager.checkForUpdates() } }
-                    Divider()
-                    Button("Guardrails: Standard") { bootstrap.setLiabilityMode(.idiot) }
-                    Button("Guardrails: Disabled") { bootstrap.setLiabilityMode(.myFault) }
-                        .disabled(!bootstrap.canDisableGuardrails)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 13, weight: .semibold))
@@ -297,24 +348,37 @@ struct ThrawnHeaderBar: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.chissPrimary.opacity(0.18)).frame(height: 1)
         }
+        .sheet(isPresented: $showVoicePanel) {
+            VoiceControlSheet(isPresented: $showVoicePanel)
+        }
     }
 
     private var statusLabel: String {
-        if ollama.connected { return "Online · Ollama" }
-        if ollama.authenticating { return "Connecting" }
-        if let err = ollama.lastError { return err.count > 30 ? "Connection error" : err }
-        return "Ollama offline"
+        if thrawnCoreAvailable {
+            return "Online · \(agentRuntime.selectedModel?.displayName ?? "Codex")"
+        }
+        if agentRuntime.codexStatus.state == .starting { return "Starting Codex" }
+        return "Codex runtime unavailable"
     }
 
     private var statusColor: Color {
-        if ollama.authenticating { return Color(red: 0.95, green: 0.70, blue: 0.20) }
-        if ollama.connected { return Color(red: 0.30, green: 0.85, blue: 0.40) }
+        if thrawnCoreAvailable { return Color(red: 0.30, green: 0.85, blue: 0.40) }
+        if agentRuntime.codexStatus.state == .starting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
         return Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
+    private var runtimeText: String {
+        "\(agentRuntime.account?.displayName ?? "Codex") · \(agentRuntime.runtimeLabel)"
+    }
+
     private var runtimeDotColor: Color {
-        let isConnected = ollama.connected || bootstrap.apiHealthy
-        return isConnected ? Color(red: 0.30, green: 0.85, blue: 0.40) : Color(red: 0.85, green: 0.25, blue: 0.20)
+        if thrawnCoreAvailable { return Color(red: 0.30, green: 0.85, blue: 0.40) }
+        if agentRuntime.codexStatus.state == .starting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
+        return Color(red: 0.85, green: 0.25, blue: 0.20)
+    }
+
+    private var thrawnCoreAvailable: Bool {
+        agentRuntime.isReady
     }
 
     private func iconBtn(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
@@ -330,46 +394,18 @@ struct ThrawnHeaderBar: View {
     }
 }
 
-// MARK: - Cognee Memory Brain Indicator
-// Replaces the old "Memory 2/2" text badge with a brain icon.
-// Lit chiss-blue when healthy, blinks while syncing, dims when dead.
+// MARK: - Citadel Header Button
 
-struct CogneeMemoryBrain: View {
-    let healthy: Bool
-    let syncing: Bool
-
-    @State private var blinkOpacity: Double = 1.0
-
-    /// Only blink when NOT healthy and still connecting/syncing.
-    /// Healthy = solid lit blue. Dead = dim outline.
-    private var shouldBlink: Bool { !healthy && syncing }
-
-    private var brainColor: Color {
-        if healthy { return Color.chissPrimary }
-        if syncing { return Color.chissPrimary }
-        return Color.chissPrimary.opacity(0.20)
-    }
+struct CitadelHeaderButton: View {
+    let active: Bool
 
     var body: some View {
-        Image(systemName: healthy ? "brain.fill" : "brain")
+        Image(systemName: active ? "building.columns.fill" : "building.columns")
             .font(.system(size: 14, weight: .semibold))
-            .foregroundColor(brainColor)
-            .opacity(shouldBlink ? blinkOpacity : 1.0)
-            .shadow(color: healthy ? Color.chissPrimary.opacity(0.50) : .clear, radius: 6)
-            .onAppear { startBlinkIfNeeded() }
-            .onChange(of: shouldBlink) { _ in startBlinkIfNeeded() }
-    }
-
-    private func startBlinkIfNeeded() {
-        if shouldBlink {
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                blinkOpacity = 0.25
-            }
-        } else {
-            withAnimation(.easeOut(duration: 0.3)) {
-                blinkOpacity = 1.0
-            }
-        }
+            .foregroundColor(active ? Color.ndaiGreen : Color.chissPrimary.opacity(0.80))
+            .frame(width: 30, height: 28)
+            .background(Circle().fill(active ? Color.ndaiGreen.opacity(0.12) : Color.white.opacity(0.06)))
+            .shadow(color: active ? Color.ndaiGreen.opacity(0.35) : .clear, radius: 8)
     }
 }
 

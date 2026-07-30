@@ -4,15 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="${APP_NAME:-Junipero}"
-APP_EXECUTABLE="${APP_EXECUTABLE:-Junipero}"
-SWIFT_PRODUCT="${SWIFT_PRODUCT:-JuniperoApp}"
-BUNDLE_ID="${BUNDLE_ID:-com.junipero.app}"
+APP_NAME="${APP_NAME:-Thrawn}"
+APP_EXECUTABLE="${APP_EXECUTABLE:-ThrawnApp}"
+SWIFT_PRODUCT="${SWIFT_PRODUCT:-ThrawnApp}"
+BUNDLE_ID="${BUNDLE_ID:-com.thrawn.console}"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || date +%Y.%m.%d)}"
-APPCAST_URL="${APPCAST_URL:-https://raw.githubusercontent.com/andrewemmelparttimepro-ux/junipero/main/appcast.xml}"
+APPCAST_URL="${APPCAST_URL:-https://example.com/thrawn/appcast.xml}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
-DISTRO_DIR="${DISTRO_DIR:-$HOME/Desktop/junipero-distro}"
-LEGACY_DISTRO_DIR="$HOME/Desktop/junipero_distro"
+DISTRO_DIR="${DISTRO_DIR:-$HOME/Desktop/thrawn-distro}"
 
 BUILD_ROOT="$ROOT_DIR/.build/local-distro"
 ARM_DIR="$BUILD_ROOT/arm64"
@@ -23,7 +22,7 @@ DMG_STAGE="$BUILD_ROOT/dmg-stage"
 DMG_PATH="$DISTRO_DIR/$APP_NAME.dmg"
 ARCHIVE_APP_PATH="$DISTRO_DIR/$APP_NAME.app"
 
-rm -rf "$BUILD_ROOT" "$DISTRO_DIR" "$LEGACY_DISTRO_DIR"
+rm -rf "$BUILD_ROOT" "$DISTRO_DIR"
 mkdir -p "$ARM_DIR" "$X64_DIR" "$UNIVERSAL_DIR" "$DISTRO_DIR"
 
 echo "==> Building arm64 release"
@@ -43,7 +42,7 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$UNIVERSAL_DIR/$APP_EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
 # Bundle default clock art for fresh installs.
-DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/JuniperoApp/Resources/clock-reference-default.png"
+DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/ThrawnApp/Resources/clock-reference-default.png"
 if [[ -f "$DEFAULT_CLOCK_ASSET" ]]; then
   cp "$DEFAULT_CLOCK_ASSET" "$APP_BUNDLE/Contents/Resources/clock-reference-default.png"
 fi
@@ -84,8 +83,14 @@ fi
 # Strip AppleDouble and Finder metadata files that break codesign on external volumes.
 find "$APP_BUNDLE" \( -name '._*' -o -name '.DS_Store' \) -delete
 
-echo "==> Ad-hoc signing app"
-codesign --force --deep --sign - "$APP_BUNDLE"
+LOCAL_SIGNING_IDENTITY="${LOCAL_SIGNING_IDENTITY:-NDAI Local App Signing}"
+if ! security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" | grep -Fq "\"$LOCAL_SIGNING_IDENTITY\""; then
+  echo "Missing local code-signing identity: $LOCAL_SIGNING_IDENTITY" >&2
+  echo "Install the persistent local identity before building so Keychain permissions survive app updates." >&2
+  exit 1
+fi
+echo "==> Signing app with persistent local identity"
+codesign --force --deep --sign "$LOCAL_SIGNING_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 echo "==> Preparing Apple-style drag-to-Applications DMG"
@@ -104,13 +109,6 @@ cp -R "$APP_BUNDLE" "$ARCHIVE_APP_PATH"
 )
 
 file "$ARCHIVE_APP_PATH/Contents/MacOS/$APP_EXECUTABLE" > "$DISTRO_DIR/ARCH.txt"
-
-# Keep legacy underscore folder in sync for existing workflows.
-mkdir -p "$LEGACY_DISTRO_DIR"
-ditto "$DISTRO_DIR/$APP_NAME.app" "$LEGACY_DISTRO_DIR/$APP_NAME.app"
-cp -f "$DISTRO_DIR/$APP_NAME.dmg" "$LEGACY_DISTRO_DIR/$APP_NAME.dmg"
-cp -f "$DISTRO_DIR/SHA256SUMS.txt" "$LEGACY_DISTRO_DIR/SHA256SUMS.txt"
-cp -f "$DISTRO_DIR/ARCH.txt" "$LEGACY_DISTRO_DIR/ARCH.txt"
 
 echo
 echo "Local distro ready:"

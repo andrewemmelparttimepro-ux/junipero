@@ -1,10 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Core Squad Definition
-// These six are fixed and permanent — the original devops crew.
-// Any agent not in this set is a V2 agent and gets the amber treatment.
-let coreAgentIds: Set<String> = ["thrawn", "r2d2", "c3po", "quigon", "lando", "boba"]
+// MARK: - Core Definition
+// V2 starts clean: Thrawn is core command, every other durable role is added
+// deliberately and treated as a v2 operational agent.
+let coreAgentIds: Set<String> = ["thrawn"]
 
 // MARK: - Agent Rail View
 
@@ -13,6 +13,7 @@ struct AgentRailView: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
     @EnvironmentObject var execution: ExecutionService
     @EnvironmentObject var voice: VoiceService
+    @EnvironmentObject var specStore: AgentSpecStore
     @State private var isDropTargeted = false
 
     private var coreAgents: [AgentStatus] {
@@ -51,47 +52,14 @@ struct AgentRailView: View {
                     }
                 }
 
-                // Unleashed mode — hidden in a dropdown
-                if ThrawnPreferencesStore.load().canToggleAccess {
-                    Menu {
-                        Button {
-                            withAnimation(.spring(response: 0.28)) {
-                                execution.toggleAccess()
-                            }
-                        } label: {
-                            HStack {
-                                Text(execution.accessMode.isUnleashed
-                                     ? "Restrict Access"
-                                     : "Unleash Access")
-                                if execution.accessMode.isUnleashed {
-                                    Image(systemName: "bolt.fill")
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            if execution.accessMode.isUnleashed {
-                                Text("\u{26A1}")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(Color.sithGlow.opacity(0.85))
-                            }
-                            Image(systemName: "ellipsis.circle")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(Color.chissPrimary.opacity(0.50))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    HStack(spacing: 4) {
-                        Text("Fleet")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color.chissPrimary.opacity(0.55))
-                        if execution.accessMode.isUnleashed {
-                            Text("\u{26A1}")
-                                .font(.system(size: 9))
-                                .foregroundColor(Color.sithGlow.opacity(0.85))
-                        }
-                    }
+                HStack(spacing: 4) {
+                    Text("Solo")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color.chissPrimary.opacity(0.55))
+                    Text("V2")
+                        .font(.system(size: 8, weight: .black))
+                        .tracking(1)
+                        .foregroundColor(Color.ndaiGreen.opacity(0.85))
                 }
             }
 
@@ -101,6 +69,7 @@ struct AgentRailView: View {
                     ForEach(coreAgents) { agent in
                         AgentRailCard(
                             agent: agent,
+                            spec: specStore.specs.first(where: { $0.id == agent.id }),
                             isSelected: nav.selectedAgentId == agent.id,
                             isCore: true,
                             onTap: { selectAgent(agent) }
@@ -127,6 +96,7 @@ struct AgentRailView: View {
                         ForEach(v2Agents) { agent in
                             AgentRailCard(
                                 agent: agent,
+                                spec: specStore.specs.first(where: { $0.id == agent.id }),
                                 isSelected: nav.selectedAgentId == agent.id,
                                 isCore: false,
                                 onTap: { selectAgent(agent) }
@@ -151,6 +121,7 @@ struct AgentRailView: View {
                         ForEach(extraPinnedAgents) { agent in
                             AgentRailCard(
                                 agent: agent,
+                                spec: specStore.specs.first(where: { $0.id == agent.id }),
                                 isSelected: nav.selectedAgentId == agent.id,
                                 isCore: false,
                                 onTap: { selectAgent(agent) },
@@ -222,10 +193,13 @@ struct AgentRailView: View {
 
 private struct AgentRailCard: View {
     let agent: AgentStatus
+    let spec: AgentSpec?
     let isSelected: Bool
     let isCore: Bool
     let onTap: () -> Void
     var onRemove: (() -> Void)? = nil
+
+    @State private var isHovering = false
 
     // OG squad: Chiss blue stripe. V2: amber stripe.
     private var accentColor: Color {
@@ -234,32 +208,45 @@ private struct AgentRailCard: View {
             : Color(red: 0.98, green: 0.72, blue: 0.18)
     }
 
+    private var isCommandCard: Bool {
+        isCore || agent.id.lowercased() == "thrawn"
+    }
+
+    private var cardCornerRadius: CGFloat {
+        isCommandCard ? 16 : 14
+    }
+
+    private var avatarSize: CGFloat {
+        isCommandCard ? 46 : 40
+    }
+
+    private var verticalPadding: CGFloat {
+        isCommandCard ? 12 : 10
+    }
+
+    private var glowOpacity: Double {
+        guard isCommandCard else { return isSelected ? 0.30 : 0.0 }
+        if isSelected { return 0.60 }
+        return isHovering ? 0.48 : 0.38
+    }
+
     var body: some View {
         Button(action: onTap) {
             ZStack(alignment: .leading) {
                 // Card background
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(isSelected
-                          ? agent.state.chissColor.opacity(0.10)
-                          : Color.white.opacity(0.038))
+                cardBackground
 
                 // Left accent stripe — clipped to the rounded rect shape
                 HStack(spacing: 0) {
                     Rectangle()
-                        .fill(accentColor.opacity(isSelected ? 0.85 : 0.50))
-                        .frame(width: 3)
+                        .fill(accentColor.opacity(isCommandCard ? (isSelected ? 0.96 : 0.82) : (isSelected ? 0.85 : 0.50)))
+                        .frame(width: isCommandCard ? 4.5 : 3)
                     Spacer()
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
 
                 // Border overlay
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(
-                        isSelected
-                            ? agent.state.chissColor.opacity(0.55)
-                            : agent.state.chissColor.opacity(0.20),
-                        lineWidth: isSelected ? 1.5 : 1
-                    )
+                borderLayer
 
                 // Content — left-padded to clear the accent stripe
                 HStack(alignment: .top, spacing: 10) {
@@ -267,41 +254,54 @@ private struct AgentRailCard: View {
                         agentId: agent.id,
                         agentName: agent.name,
                         state: agent.state,
-                        size: 40
+                        size: avatarSize
                     )
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline) {
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(agent.name)
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundColor(Color.white.opacity(0.92))
+                                .font(.system(size: isCommandCard ? 13.8 : 12.5, weight: isCommandCard ? .bold : .semibold))
+                                .foregroundColor(Color.white.opacity(isCommandCard ? 0.98 : 0.92))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.80)
-                            Spacer(minLength: 6)
+                            HStack(spacing: 8) {
+                                Text(agent.state.label.uppercased())
+                                    .font(.system(size: isCommandCard ? 9 : 8.5, weight: .heavy))
+                                    .tracking(1.6)
+                                    .foregroundColor(agent.state.chissColor.opacity(isCommandCard ? 0.92 : 0.75))
+                                HeartbeatCountdownBadge(owner: agent.id, compact: true)
+                            }
+                            Text(agent.detail)
+                                .font(.system(size: isCommandCard ? 10.4 : 10, weight: .medium))
+                                .foregroundColor(Color.white.opacity(isCommandCard ? 0.62 : 0.50))
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 4)
+                        VStack(alignment: .trailing, spacing: 4) {
+                            AgentModelBadge(route: AgentModelBadge.route(for: spec), isProminent: isCommandCard)
                             Text(agent.role)
-                                .font(.system(size: 9.5, weight: .bold))
-                                .foregroundColor(agent.state.chissColor.opacity(0.85))
+                                .font(.system(size: isCommandCard ? 9.8 : 9.5, weight: .bold))
+                                .foregroundColor(agent.state.chissColor.opacity(isCommandCard ? 0.96 : 0.85))
+                                .frame(width: isCommandCard ? 100 : 96, alignment: .trailing)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.72)
                         }
-                        HStack(spacing: 8) {
-                            Text(agent.state.label.uppercased())
-                                .font(.system(size: 8.5, weight: .heavy))
-                                .tracking(1.6)
-                                .foregroundColor(agent.state.chissColor.opacity(0.75))
-                            HeartbeatCountdownBadge(owner: agent.id, compact: true)
-                        }
-                        Text(agent.detail)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(Color.white.opacity(0.50))
-                            .lineLimit(2)
                     }
                 }
-                .padding(.leading, 13)   // clears the accent stripe
-                .padding(.trailing, 10)
-                .padding(.vertical, 10)
+                .padding(.leading, isCommandCard ? 14 : 13)   // clears the accent stripe
+                .padding(.trailing, isCommandCard ? 11 : 10)
+                .padding(.vertical, verticalPadding)
             }
             .shadow(
-                color: isSelected ? agent.state.chissColor.opacity(0.30) : .clear,
-                radius: isSelected ? 8 : 0
+                color: isCommandCard ? Color.chissPrimary.opacity(glowOpacity) : (isSelected ? agent.state.chissColor.opacity(0.30) : .clear),
+                radius: isCommandCard ? 18 : (isSelected ? 8 : 0),
+                x: 0,
+                y: 0
+            )
+            .shadow(
+                color: isCommandCard ? Color(red: 0.35, green: 0.62, blue: 1.0).opacity(glowOpacity * 0.42) : .clear,
+                radius: isCommandCard ? 9 : 0,
+                x: 0,
+                y: 5
             )
             .overlay(alignment: .topTrailing) {
                 if let onRemove {
@@ -317,6 +317,201 @@ private struct AgentRailCard: View {
             }
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, isCommandCard ? -2 : 0)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.16)) {
+                isHovering = hovering
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        if isCommandCard {
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.chissDeep.opacity(isSelected ? 0.48 : 0.36),
+                            Color.obsidianMid.opacity(0.92),
+                            Color.white.opacity(0.050)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.chissPrimary.opacity(isSelected ? 0.30 : 0.22),
+                                    Color(red: 0.25, green: 0.48, blue: 1.0).opacity(0.09),
+                                    Color.clear
+                                ],
+                                center: .topLeading,
+                                startRadius: 0,
+                                endRadius: 155
+                            )
+                        )
+                        .blendMode(.screen)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .fill(isSelected
+                      ? agent.state.chissColor.opacity(0.10)
+                      : Color.white.opacity(0.038))
+        }
+    }
+
+    @ViewBuilder
+    private var borderLayer: some View {
+        if isCommandCard {
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.44),
+                            agent.state.chissColor.opacity(isSelected ? 0.88 : 0.62),
+                            Color.chissPrimary.opacity(0.20)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: isSelected ? 1.8 : 1.35
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cardCornerRadius - 2, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                        .padding(2.5)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(
+                    isSelected
+                        ? agent.state.chissColor.opacity(0.55)
+                        : agent.state.chissColor.opacity(0.20),
+                    lineWidth: isSelected ? 1.5 : 1
+                )
+        }
+    }
+}
+
+// MARK: - Agent Model Badge
+
+private struct AgentModelBadge: View {
+    struct Route {
+        let model: String
+        let provider: String
+        let reasoning: String?
+    }
+
+    let route: Route
+    let isProminent: Bool
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(route.model)
+                .font(.system(size: isProminent ? 11.0 : 10.5, weight: .black, design: .rounded))
+                .tracking(isProminent ? 1.15 : 1.0)
+                .foregroundColor(Color.white.opacity(0.96))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, isProminent ? 11 : 10)
+                .frame(height: isProminent ? 21 : 20)
+                .background {
+                    ZStack {
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.020, green: 0.045, blue: 0.070),
+                                        Color(red: 0.060, green: 0.150, blue: 0.205)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                        Capsule()
+                            .stroke(Color.chissPrimary.opacity(isProminent ? 0.92 : 0.78), lineWidth: isProminent ? 1.1 : 1)
+                        Capsule()
+                            .stroke(Color.white.opacity(isProminent ? 0.30 : 0.22), lineWidth: 0.5)
+                            .padding(2)
+                    }
+                }
+                .shadow(color: Color.chissPrimary.opacity(isProminent ? 0.62 : 0.42), radius: isProminent ? 6 : 4, x: 0, y: 0)
+
+            Text(subtitle)
+                .font(.system(size: isProminent ? 6.8 : 6.6, weight: .heavy))
+                .tracking(0.9)
+                .foregroundColor(Color.chissPrimary.opacity(isProminent ? 0.86 : 0.72))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(width: isProminent ? 100 : 96, alignment: .trailing)
+        .help("\(route.provider) \(route.model)\(route.reasoning.map { " \($0)" } ?? "")")
+    }
+
+    private var subtitle: String {
+        if let reasoning = route.reasoning, !reasoning.isEmpty {
+            return "\(route.provider) \(reasoning.uppercased())"
+        }
+        return route.provider
+    }
+
+    static func route(for spec: AgentSpec?) -> Route {
+        guard let spec else {
+            return Route(model: "ROUTE", provider: "UNKNOWN", reasoning: nil)
+        }
+
+        if let override = spec.modelOverride {
+            return Route(
+                model: displayModel(override.model),
+                provider: displayProvider(override.provider),
+                reasoning: override.reasoningEffort
+            )
+        }
+
+        switch spec.tier {
+        case .explicit(let tier):
+            return route(for: tier)
+        case .inherit:
+            return Route(model: "LOADOUT", provider: "INHERIT", reasoning: nil)
+        }
+    }
+
+    private static func route(for tier: ModelTier) -> Route {
+        switch tier {
+        case .local, .cheap, .premium:
+            return Route(
+                model: "LIVE MODEL",
+                provider: "CODEX",
+                reasoning: nil
+            )
+        }
+    }
+
+    private static func displayProvider(_ backend: ProviderBackend) -> String {
+        switch backend {
+        case .codex: return "CODEX"
+        case .grok: return "GROK"
+        case .claude: return "CLAUDE"
+        case .xai: return "XAI"
+        case .openclaw: return "OPENCLAW"
+        case .openai: return "GLM"
+        case .ollama: return "OLLAMA"
+        }
+    }
+
+    private static func displayModel(_ model: String) -> String {
+        let lower = model.lowercased()
+        if lower.contains("grok-4.5") { return "GROK-4.5" }
+        if lower.contains("gpt-5.4") { return "GPT-5.4" }
+        if lower.contains("glm-5.2") { return "GLM-5.2" }
+        if lower.contains("kimi") { return "KIMI" }
+        if lower.contains("haiku") { return "HAIKU" }
+        if lower.count > 8 { return String(model.prefix(8)).uppercased() }
+        return model.uppercased()
     }
 }
 

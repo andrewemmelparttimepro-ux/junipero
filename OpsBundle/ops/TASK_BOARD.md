@@ -1,9 +1,8 @@
 # TASK_BOARD.md
 
-> **Korbis-Spawn — V1 starter board.** Clean slate for the Korbis × Cyclops × Thrawn Phase 1 deployment.
-> Master Thrawn keeps its own board; this one is exclusive to the spawn.
+> Thrawn command board. Active stable: Thrawn, Samwell Tarly, Sir Davos, Dwight, Steven.
 
-## Status lanes
+## Status values
 
 - Inbox
 - Ready
@@ -14,19 +13,12 @@
 
 ## Rules
 
-1. Every task has an owner. Thrawn is the only hub — every specialist task flows `Owner=Thrawn → Owner=<Specialist> → Owner=Thrawn`.
-2. Every task has a deliverable.
-3. Every task has a current status.
-4. Nothing moves to `Done` until Thrawn reviews and confirms the deliverable.
-5. If work exists without a deliverable link or output path, it is not done.
-6. If a task is waiting on Andrew, mark it `Blocked` and state exactly what decision or approval is needed.
-7. Thrawn owns review discipline and status integrity.
-
-## Phase 1 reminders for the spawn
-
-- **Thrawn agents are dormant in V1.** Heartbeats fire to prove the spawn is alive; no analysis is being performed yet. Phase 2 activates Foreman / Inspector / Pulse and begins frame analysis on the Korbis camera feeds.
-- **The supervisor flow runs through Cyclops, not the board.** Operator instructions to the jobsite display are pushed via the Cyclops composer and written to Firestore `instructions/`. The board here is for Korbis-spawn engineering tasks, not real-time operations.
-- **Footage is being recorded** to `/korbis-footage/` continuously and indexed by camera + timestamp. Do not delete; Phase 2 needs this corpus.
+1. Active owners are Andrew, Thrawn, Samwell Tarly, Sir Davos, Dwight, and Steven.
+2. Thrawn-owned cards are live pressure: execute, unblock, clarify, review, or close them.
+3. Mark a task Blocked for Andrew only when his taste, credential, preference, business judgment, or outside-world authority is the missing input.
+4. Review and Blocked share the Review column in Flow. Review cards are purple; when review exposes a real blocker, change Status to Blocked and record the exact blocker plus smallest next action so the card turns red.
+5. Nothing moves to Done until review is present and any produced artifact has a human-readable deliverable path.
+6. Do not edit this board directly from prompts. Write JSON updates to `workspace/ops/pending-updates/updates-thrawn-chat.json` or the heartbeat update file.
 
 ## Task template
 
@@ -52,8 +44,4 @@
 
 ## Active tasks
 
-<!--
-  Empty by design. Phase 1 work is tracked via the four-week build plan
-  document on Andrew's Desktop, not on this board. Tasks land here as the
-  spawn graduates from infrastructure-only to active operations.
--->
+<!-- New work appears below. Thrawn routes specialist work to the active stable. -->

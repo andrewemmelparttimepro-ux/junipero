@@ -80,24 +80,24 @@ final class AgentRosterStore: ObservableObject {
     private static let savePath = ThrawnPaths.appSupportDir
         .appendingPathComponent("thrawn-agent-roster.json")
 
-    // KORBIS-SPAWN: dev-ops squad only. V2 agents (Bart, Hunter, Al Borland)
-    // remain on the master branch and are intentionally excluded here so the
-    // spawn boots clean with just the standard six.
     private static let defaults: [AgentStatus] = [
         AgentStatus(id: "thrawn",  name: "Thrawn",            role: "Lead",            state: .idle, detail: "Command ready",             sessionKey: "agent:main:main"),
-        AgentStatus(id: "r2d2",   name: "R2-D2",             role: "Dev",             state: .idle, detail: "Awaiting build brief",       sessionKey: "agent:specialist:r2d2"),
-        AgentStatus(id: "c3po",   name: "C-3PO",             role: "Data",            state: .idle, detail: "Schema and API standby",     sessionKey: "agent:specialist:c3po"),
-        AgentStatus(id: "quigon", name: "Qui-Gon",           role: "Research",        state: .idle, detail: "Research standby",            sessionKey: "agent:specialist:quigon"),
-        AgentStatus(id: "lando",  name: "Lando Calrissian",  role: "Marketing & Copy",state: .idle, detail: "Copy standby",               sessionKey: "agent:specialist:lando"),
-        AgentStatus(id: "boba",   name: "Boba Fett",         role: "QA & Recon",      state: .idle, detail: "Validation queue clear",     sessionKey: "agent:specialist:boba"),
+        AgentStatus(id: "archivist", name: "Samwell Tarly",   role: "SandPro OMP Lead", state: .idle, detail: "Standing by", sessionKey: "agent:specialist:archivist"),
+        AgentStatus(id: "sentinel",  name: "Sir Davos",       role: "Hit Zero Lead",    state: .idle, detail: "Standing by", sessionKey: "agent:specialist:sentinel"),
+        AgentStatus(id: "dwight",    name: "Dwight",          role: "Router",           state: .idle, detail: "Standing by", sessionKey: "agent:specialist:dwight"),
+        AgentStatus(id: "steven",    name: "Steven",          role: "Spas 360 Lead",   state: .idle, detail: "Standing by", sessionKey: "agent:specialist:steven"),
+    ]
+
+    private static let retiredAgentIds: Set<String> = [
+        "r2d2", "c3po", "quigon", "lando", "boba", "buckshot",
     ]
 
     // Track which agents have active in-flight requests
     private var activeAgentSessions: Set<String> = []
     private var threadStoreObserver: Any?
-    // Gateway client removed — Ollama only
+    // Gateway client is handled by OpenClaw routing; Ollama is explicit fallback.
 
-    /// Maps cron job UUID → agent ID (e.g. "bd261208-..." → "r2d2")
+    /// Maps cron job UUID to agent ID.
     /// Built from ~/.openclaw/cron/jobs.json so we can match cron session keys.
     private var cronJobAgentMap: [String: String] = [:]
 
@@ -155,6 +155,18 @@ final class AgentRosterStore: ObservableObject {
         agents[index].state = state
         agents[index].detail = detail
         agents[index].lastTransition = Date()
+    }
+
+    func resetToV2Defaults() {
+        agents = Self.defaults
+    }
+
+    func upsert(_ agent: AgentStatus) {
+        if let index = agents.firstIndex(where: { $0.id == agent.id }) {
+            agents[index] = agent
+        } else {
+            agents.append(agent)
+        }
     }
 
     func agentForSessionKey(_ key: String) -> AgentStatus? {
@@ -240,9 +252,8 @@ final class AgentRosterStore: ObservableObject {
 
     // MARK: - Cron job → agent mapping
 
-    /// Reads ~/.openclaw/cron/jobs.json and builds jobId → agentId map.
-    /// Job names follow the pattern "R2-D2 Heartbeat (:10)" — we extract the
-    /// agent name before " Heartbeat" or " Initiative", normalize to match roster IDs.
+    /// Reads legacy cron job state, when present, and builds a jobId -> agentId map.
+    /// V2.0 only honors jobs that match currently active roster IDs.
     private func loadCronJobMap() {
         guard let data = try? Data(contentsOf: Self.cronJobsPath),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -261,7 +272,7 @@ final class AgentRosterStore: ObservableObject {
             } else {
                 continue
             }
-            // Normalize: lowercase, strip hyphens (e.g. "R2-D2" → "r2d2", "Qui-Gon" → "quigon")
+            // Normalize: lowercase and strip hyphens.
             let agentId = agentDisplayName.lowercased().replacingOccurrences(of: "-", with: "")
             if agents.contains(where: { $0.id == agentId }) {
                 map[jobId] = agentId
@@ -372,18 +383,39 @@ final class AgentRosterStore: ObservableObject {
            let decoded = try? JSONDecoder().decode([AgentStatus].self, from: data),
            !decoded.isEmpty {
             // Merge: preserve agents that exist in defaults but not in file
-            var merged = decoded
+            var merged = decoded.filter { !Self.retiredAgentIds.contains($0.id) }
             for def in Self.defaults {
                 if !merged.contains(where: { $0.id == def.id }) {
                     merged.append(def)
                 }
             }
-            agents = merged
+            agents = Self.normalizeV2DisplayNames(merged)
         } else {
             agents = Self.defaults
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: Self.savePath.path)
         lastLoadedModTime = attrs?[.modificationDate] as? Date
+    }
+
+    private static func normalizeV2DisplayNames(_ loaded: [AgentStatus]) -> [AgentStatus] {
+        loaded.filter { !Self.retiredAgentIds.contains($0.id) }.map { agent in
+            var normalized = agent
+            switch agent.id {
+            case "thrawn":
+                normalized = AgentStatus(id: agent.id, name: "Thrawn", role: "Lead", state: agent.state, detail: agent.detail, lastTransition: agent.lastTransition, sessionKey: agent.sessionKey)
+            case "archivist":
+                normalized = AgentStatus(id: agent.id, name: "Samwell Tarly", role: "SandPro OMP Lead", state: agent.state, detail: agent.detail, lastTransition: agent.lastTransition, sessionKey: agent.sessionKey)
+            case "sentinel":
+                normalized = AgentStatus(id: agent.id, name: "Sir Davos", role: "Hit Zero Lead", state: agent.state, detail: agent.detail, lastTransition: agent.lastTransition, sessionKey: agent.sessionKey)
+            case "dwight":
+                normalized = AgentStatus(id: agent.id, name: "Dwight", role: "Router", state: agent.state, detail: agent.detail, lastTransition: agent.lastTransition, sessionKey: agent.sessionKey)
+            case "steven":
+                normalized = AgentStatus(id: agent.id, name: "Steven", role: "Spas 360 Lead", state: agent.state, detail: agent.detail, lastTransition: agent.lastTransition, sessionKey: agent.sessionKey)
+            default:
+                break
+            }
+            return normalized
+        }
     }
 
     private func save() {

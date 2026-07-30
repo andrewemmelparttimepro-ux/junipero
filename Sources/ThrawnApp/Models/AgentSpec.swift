@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Agent Spec
 //
 // An AgentSpec is the full definition of an agent: who they are, what
-// they're for, what tools they can use, which model tier they run on,
+// they're for, which tools are shown as metadata, which model tier they run on,
 // how long they live, and where their memory is kept.
 //
 // Specs are loaded from ~/Library/Application Support/Thrawn/agent-specs.json
@@ -11,7 +11,7 @@ import Foundation
 // match the current dev-ops squad so behavior is identical to pre-spec days.
 //
 // INHERITANCE: tools and tier can be set to `.inherit`, which means the
-// resolver pulls the value from the StandardLoadout at read time. If the
+// resolver pulls metadata from the StandardLoadout at read time. If the
 // Standard Loadout changes, every spec that inherits follows automatically.
 
 // MARK: Rank
@@ -37,20 +37,45 @@ enum AgentRank: String, Codable, CaseIterable {
 
 // MARK: Model Tier
 //
-// Which pool of models an agent is allowed to use. The ProviderRouter
-// (Step 4) maps tier → concrete model. Dev-ops squad sits on `.local`
-// (Ollama + kimi-k2.6).
+// Which pool of models an agent should use. The ProviderRouter maps tiers to
+// authenticated provider agents. Durable production agents use the live Codex
+// subscription catalog unless a spec pins an exact provider/model override.
 
 enum ModelTier: String, Codable, CaseIterable {
-    case local    // Ollama / on-box models — free, fast enough, good default
-    case cheap    // Hosted cheap tier — Haiku, Flash, small OSS via API
-    case premium  // Hosted premium — Sonnet, Opus, GPT-5 class
+    case local    // Legacy/developer local route.
+    case cheap    // Budget tier; currently mapped to OpenClaw GPT.
+    case premium  // Premium OpenClaw GPT subscription route.
+}
+
+// MARK: Model Override
+//
+// Most agents resolve through tier -> provider routing. Specialized durable
+// agents can pin an exact provider/model/reasoning pair when the operator
+// needs a contractual route, not a best-effort tier.
+
+struct AgentModelOverride: Codable, Equatable {
+    var provider: ProviderBackend
+    var model: String
+    var reasoningEffort: String?
+    var allowFallback: Bool
+
+    init(
+        provider: ProviderBackend,
+        model: String,
+        reasoningEffort: String? = nil,
+        allowFallback: Bool = true
+    ) {
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.allowFallback = allowFallback
+    }
 }
 
 // MARK: Tools Binding
 //
-// An agent's tool list is either inherited from the Standard Loadout or
-// explicitly overridden. Inheritance is a reference, not a copy.
+// An agent's displayed tool list is either inherited from the Standard Loadout
+// or explicitly overridden. Inheritance is a reference, not a copy.
 
 enum ToolsBinding: Codable, Equatable {
     case inherit
@@ -187,7 +212,7 @@ struct GradeEntry: Codable, Equatable, Identifiable {
 
 struct AgentSpec: Codable, Identifiable, Equatable {
     // Identity
-    let id: String          // Stable ID used everywhere: "r2d2", "lando", "jane-doe"
+    let id: String          // Stable ID used everywhere: "thrawn", "researcher", "jane-doe"
     var name: String        // Display name: "R2-D2", "Jane Doe"
     var role: String        // One-line role: "Dev", "Marketing Muse", ...
 
@@ -202,6 +227,9 @@ struct AgentSpec: Codable, Identifiable, Equatable {
     // Which model pool this agent runs on. `.inherit` follows Standard Loadout.
     var tier: ModelTierBinding
 
+    // Optional exact provider/model route. When present, this wins over tier.
+    var modelOverride: AgentModelOverride?
+
     // Current rank. Dev-ops squad is pinned at `.b`; future agents move via
     // scoring (Step 5). The `pinned` flag blocks auto-promotion/demotion.
     var rank: AgentRank
@@ -213,6 +241,12 @@ struct AgentSpec: Codable, Identifiable, Equatable {
     // Optional knowledge directory (relative to ops root). Nil = no memory.
     // Conventionally `workspace/agents/{id}/knowledge/`.
     var knowledgeDir: String?
+
+    // Optional display art paths. Resource-backed avatars use the Swift
+    // bundle, but these keep the workspace/spec source of truth explicit.
+    var avatar: String?
+    var avatarThumbnail: String?
+    var avatarImage: String?
 
     // Tasks completed by this agent so far (drives ephemeral retirement).
     var tasksCompleted: Int
@@ -257,10 +291,14 @@ struct AgentSpec: Codable, Identifiable, Equatable {
         purpose: String,
         tools: ToolsBinding,
         tier: ModelTierBinding,
+        modelOverride: AgentModelOverride? = nil,
         rank: AgentRank,
         pinned: Bool,
         lifecycle: AgentLifecycle,
         knowledgeDir: String? = nil,
+        avatar: String? = nil,
+        avatarThumbnail: String? = nil,
+        avatarImage: String? = nil,
         tasksCompleted: Int = 0,
         createdAt: Date = Date(),
         voiceIdentifier: String? = nil,
@@ -276,10 +314,14 @@ struct AgentSpec: Codable, Identifiable, Equatable {
         self.purpose = purpose
         self.tools = tools
         self.tier = tier
+        self.modelOverride = modelOverride
         self.rank = rank
         self.pinned = pinned
         self.lifecycle = lifecycle
         self.knowledgeDir = knowledgeDir
+        self.avatar = avatar
+        self.avatarThumbnail = avatarThumbnail
+        self.avatarImage = avatarImage
         self.tasksCompleted = tasksCompleted
         self.createdAt = createdAt
         self.voiceIdentifier = voiceIdentifier
@@ -296,8 +338,9 @@ struct AgentSpec: Codable, Identifiable, Equatable {
     // encode(to:) stays synthesized.
     private enum CodingKeys: String, CodingKey {
         case id, name, role, persona, purpose
-        case tools, tier, rank, pinned, lifecycle
-        case knowledgeDir, tasksCompleted, createdAt
+        case tools, tier, modelOverride, rank, pinned, lifecycle
+        case knowledgeDir, avatar, avatarThumbnail, avatarImage
+        case tasksCompleted, createdAt
         case voiceIdentifier, speechRate, speechPitch, voiceMuted
         case gradeHistory
     }
@@ -311,10 +354,14 @@ struct AgentSpec: Codable, Identifiable, Equatable {
         purpose = try c.decode(String.self, forKey: .purpose)
         tools = try c.decode(ToolsBinding.self, forKey: .tools)
         tier = try c.decode(ModelTierBinding.self, forKey: .tier)
+        modelOverride = try c.decodeIfPresent(AgentModelOverride.self, forKey: .modelOverride)
         rank = try c.decode(AgentRank.self, forKey: .rank)
         pinned = try c.decode(Bool.self, forKey: .pinned)
         lifecycle = try c.decode(AgentLifecycle.self, forKey: .lifecycle)
         knowledgeDir = try c.decodeIfPresent(String.self, forKey: .knowledgeDir)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        avatarThumbnail = try c.decodeIfPresent(String.self, forKey: .avatarThumbnail)
+        avatarImage = try c.decodeIfPresent(String.self, forKey: .avatarImage)
         tasksCompleted = try c.decodeIfPresent(Int.self, forKey: .tasksCompleted) ?? 0
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         voiceIdentifier = try c.decodeIfPresent(String.self, forKey: .voiceIdentifier)

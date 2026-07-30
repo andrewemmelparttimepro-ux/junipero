@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Briefings View (SOD / EOD Audio Dex)
 //
 // The giant play button lives here. Each half of the day gets its own
-// panel with a single huge play control that fires every active agent's
+// panel with a single huge play control that fires every agent's
 // self-briefing audio back-to-back — Thrawn first, then by rank.
 //
 // Below the play controls, a card list shows each briefing with the
@@ -76,7 +76,7 @@ struct BriefingsView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("Every active agent produces a self-review twice a day. SOD fires at 07:00 with today's plan. EOD fires at 19:00 with yesterday's review. Audio files land in ~/Desktop/Thrawn Briefings.")
+            Text("Every agent produces a self-review twice a day. SOD fires at 07:00 with today's plan. EOD fires at 19:00 with yesterday's review. Audio files land in ~/Desktop/Thrawn Briefings.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.55))
         }

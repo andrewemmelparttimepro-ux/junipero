@@ -3,55 +3,40 @@ import SwiftUI
 
 // MARK: - AI Provider
 //
-// Multi-provider support. Gemini is primary (OAuth, free tier).
-// Claude and ChatGPT available as alternatives (API key).
-// Under the hood they're all the same: HTTP + SSE + JSON.
+// The case name is preserved for persisted-state compatibility. It now
+// represents Codex CLI/app-server rather than a copied API credential.
 
 enum AIProvider: String, Codable, CaseIterable, Identifiable {
-    case gemini   // Google — OAuth, free tier, subscription
-    case claude   // Anthropic — API key
-    case chatgpt  // OpenAI — API key
+    case chatgpt  // Codex CLI — provider-owned ChatGPT/API authentication
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .gemini:  return "Google Gemini"
-        case .claude:  return "Claude"
-        case .chatgpt: return "GPT (OpenAI Standard)"
+        case .chatgpt: return "Codex Agent Runtime"
         }
     }
 
     var shortName: String {
         switch self {
-        case .gemini:  return "Gemini"
-        case .claude:  return "Claude"
-        case .chatgpt: return "GPT Standard"
+        case .chatgpt: return "Codex"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .gemini:  return "Sign in with Google • Free tier included"
-        case .claude:  return "Best for code & reasoning • API key"
-        case .chatgpt: return "OpenAI & compatible models (Ollama, OpenRouter)"
+        case .chatgpt: return "Uses the models available to your signed-in Codex CLI"
         }
     }
 
     var brandColor: Color {
         switch self {
-        case .gemini:  return Color(red: 0.26, green: 0.52, blue: 0.96)  // Google blue
-        case .claude:  return Color(red: 0.82, green: 0.55, blue: 0.20)  // Anthropic tan/orange
-        case .chatgpt: return Color(red: 0.40, green: 0.85, blue: 0.60)  // OpenAI green
+        case .chatgpt: return Color(red: 0.40, green: 0.85, blue: 0.60)
         }
     }
 
     var brandGradient: [Color] {
         switch self {
-        case .gemini:
-            return [Color(red: 0.26, green: 0.52, blue: 0.96), Color(red: 0.55, green: 0.36, blue: 0.97)]
-        case .claude:
-            return [Color(red: 0.82, green: 0.55, blue: 0.20), Color(red: 0.75, green: 0.38, blue: 0.18)]
         case .chatgpt:
             return [Color(red: 0.40, green: 0.85, blue: 0.60), Color(red: 0.20, green: 0.70, blue: 0.55)]
         }
@@ -59,71 +44,54 @@ enum AIProvider: String, Codable, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .gemini:  return "sparkles"
-        case .claude:  return "brain.head.profile"
         case .chatgpt: return "bubble.left.and.text.bubble.right"
         }
     }
 
     var authMethod: AuthMethod {
         switch self {
-        case .gemini:  return .oauth
-        case .claude:  return .apiKey
-        case .chatgpt: return .apiKey
+        case .chatgpt: return .providerCLI
         }
     }
 
     var keyPrefix: String? {
         switch self {
-        case .gemini:  return nil  // OAuth, no key
-        case .claude:  return "sk-ant-"
-        case .chatgpt: return "sk-"
+        case .chatgpt: return nil
         }
     }
 
     var getKeyURL: URL? {
         switch self {
-        case .gemini:  return nil  // OAuth, no key needed
-        case .claude:  return URL(string: "https://console.anthropic.com/settings/keys")
-        case .chatgpt: return URL(string: "https://platform.openai.com/api-keys")
+        case .chatgpt: return nil
         }
     }
 
     var apiBaseURL: String {
         switch self {
-        case .gemini:  return "https://generativelanguage.googleapis.com"
-        case .claude:  return "https://api.anthropic.com"
-        case .chatgpt: return "https://api.openai.com"
+        case .chatgpt: return ""
         }
     }
 
     var defaultModel: String {
         switch self {
-        case .gemini:  return "gemini-2.5-flash"
-        case .claude:  return "claude-sonnet-4-6"
-        case .chatgpt: return "gpt-4o"
+        case .chatgpt: return ProviderRouter.dynamicCodexModel
         }
     }
 
     var availableModels: [String] {
         switch self {
-        case .gemini:  return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
-        case .claude:  return ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-20250514"]
-        case .chatgpt: return ["gpt-4o", "gpt-4o-mini", "o3-mini"]
+        case .chatgpt: return [ProviderRouter.dynamicCodexModel]
         }
     }
 
     enum AuthMethod {
-        case oauth    // Gemini — browser-based sign-in
-        case apiKey   // Claude, ChatGPT — paste key
+        case apiKey
+        case providerCLI
     }
 
     /// Auto-detect provider from a pasted API key.
     static func detect(from key: String) -> AIProvider? {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("sk-ant-") { return .claude }
-        if trimmed.hasPrefix("sk-proj-") || trimmed.hasPrefix("sk-") { return .chatgpt }
-        return nil
+        nil
     }
 }
 
@@ -219,7 +187,7 @@ enum ProviderStateStore {
         state.connectedProviders.removeValue(forKey: provider)
         // If disconnecting active provider, fall back to any connected one
         if state.activeProvider == provider {
-            state.activeProvider = state.connectedProviders.keys.first ?? .gemini
+            state.activeProvider = state.connectedProviders.keys.first ?? .chatgpt
         }
         save(state)
     }

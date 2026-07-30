@@ -54,25 +54,14 @@ struct GraphEdge: Identifiable {
 
 private let agentColors: [String: String] = [
     "thrawn":  "#7CA7BC",   // chissPrimary — Lead
-    "r2d2":    "#4A90D9",   // blue — Dev
-    "c3po":    "#D4A843",   // gold — Data
-    "quigon":  "#5BBD72",   // green — Research
-    "lando":   "#9B6ED0",   // purple — Marketing
-    "boba":    "#D05B5B",   // red — QA
-    "bart":    "#4ABBB5",   // teal — Deep Research
-    "hunter":  "#D0895B",   // orange — Lead Gen
 ]
 
 private let agentDisplayNames: [String: String] = [
-    "thrawn": "Thrawn", "r2d2": "R2-D2", "c3po": "C-3PO",
-    "quigon": "Qui-Gon", "lando": "Lando", "boba": "Boba Fett",
-    "bart": "Bart", "hunter": "Hunter",
+    "thrawn": "Thrawn",
 ]
 
 private let agentRoles: [String: String] = [
-    "thrawn": "Lead", "r2d2": "Dev", "c3po": "Data & API",
-    "quigon": "Research", "lando": "Marketing", "boba": "QA & Recon",
-    "bart": "Deep Research", "hunter": "Lead Gen & OSINT",
+    "thrawn": "Command",
 ]
 
 private let taskStatusColors: [String: String] = [
@@ -88,13 +77,6 @@ private let taskStatusColors: [String: String] = [
 
 private let ownerToId: [String: String] = [
     "thrawn": "thrawn", "Thrawn": "thrawn",
-    "r2-d2": "r2d2", "R2-D2": "r2d2", "r2d2": "r2d2",
-    "c-3po": "c3po", "C-3PO": "c3po", "c3po": "c3po",
-    "qui-gon": "quigon", "Qui-Gon": "quigon", "quigon": "quigon",
-    "lando": "lando", "Lando": "lando", "Lando Calrissian": "lando",
-    "boba": "boba", "Boba": "boba", "Boba Fett": "boba",
-    "bart": "bart", "Bart": "bart",
-    "hunter": "hunter", "Hunter": "hunter",
     "Andrew": "andrew",
 ]
 
@@ -215,7 +197,7 @@ final class MemoryGraphModel: ObservableObject {
 
         // ── 2. Build agent nodes ──
 
-        let agentIds = ["thrawn", "r2d2", "c3po", "quigon", "lando", "boba", "bart", "hunter"]
+        let agentIds = ["thrawn"]
         let maxActivity = agentIds.map { (heartbeatCounts[$0, default: 0] + llmCounts[$0, default: 0]) }.max() ?? 1
 
         for agentId in agentIds {

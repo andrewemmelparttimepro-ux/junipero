@@ -9,18 +9,27 @@ extension Color {
     static let obsidianMid    = Color(red: 0.072, green: 0.100, blue: 0.132)
     static let sithRed        = Color(red: 0.72, green: 0.08, blue: 0.10)
     static let sithGlow       = Color(red: 0.85, green: 0.12, blue: 0.14)
+    static let ndaiGreen      = Color(red: 0.267, green: 0.933, blue: 0.533)
 }
 
 struct ContentView: View {
     @EnvironmentObject var flowTab: FlowTabStore
     @EnvironmentObject var execution: ExecutionService
+    @EnvironmentObject var bootstrap: ThrawnBootstrap
+    @EnvironmentObject var nav: ConsoleNavigationStore
 
-    private var isUnleashed: Bool { execution.accessMode.isUnleashed }
+    private var fullOperationActive: Bool { execution.accessMode.isFullOperation }
 
     // Reserve clearance for the macOS traffic lights. The title bar is hidden
     // (.hiddenTitleBar) but the close/min/zoom buttons still float above the
     // content, so the top strip of the window needs to stay chrome-free.
     private let trafficLightInset: CGFloat = 30
+
+    /// True when a product board should own the entire window as a full-screen
+    /// freeform canvas. When true, the normal left/right split is hidden.
+    private var productBoardFullScreenActive: Bool {
+        nav.showBoardFullScreen && nav.selectedProjectBoard != nil
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -58,12 +67,39 @@ struct ContentView: View {
                 .padding(.top, trafficLightInset)
                 .transition(.opacity)
             }
+
+            // Full-screen product board overlay — covers everything when a
+            // logo button is tapped. Dismissed by the oversized X or Esc.
+            if productBoardFullScreenActive, let board = nav.selectedProjectBoard {
+                ProductBoardFullScreen(board: board) {
+                    nav.closeBoardFullScreen()
+                }
+                .transition(.opacity)
+                .zIndex(100)
+            }
+
+            // Global floating Command button + popup chat — floats above
+            // every other view (including the full-screen board overlay) so
+            // Andrew has a direct line to Thrawn at all times.
+            GlobalCommandOverlay()
+                .allowsHitTesting(true)
+                .zIndex(200)
+
+            VStack {
+                VoiceConversationOverlay()
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
         }
         .animation(.easeInOut(duration: 0.22), value: flowTab.showFlow)
-        // Unleashed mode: subtle red edge glow
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: productBoardFullScreenActive)
+        .sheet(isPresented: $bootstrap.showSetup) {
+            SetupWizardView()
+        }
+        // Full-operation mode: subtle red edge glow
         .overlay(
             Group {
-                if isUnleashed {
+                if fullOperationActive {
                     RoundedRectangle(cornerRadius: 0)
                         .stroke(
                             LinearGradient(
@@ -85,12 +121,7 @@ struct ContentView: View {
                 }
             }
         )
-        .animation(.easeInOut(duration: 0.4), value: isUnleashed)
-        // Unleash confirmation dialog
-        .sheet(isPresented: $execution.showUnleashConfirmation) {
-            UnleashConfirmationView()
-                .environmentObject(execution)
-        }
+        .animation(.easeInOut(duration: 0.4), value: fullOperationActive)
     }
 }
 

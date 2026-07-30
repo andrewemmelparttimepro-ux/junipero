@@ -153,11 +153,14 @@ private struct ReviewItemCard: View {
                 }
                 Spacer()
                 if !task.owner.isEmpty {
-                    Text(task.owner)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Color.chissPrimary)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Capsule().fill(Color.chissDeep.opacity(0.55)).overlay(Capsule().stroke(Color.chissPrimary.opacity(0.30), lineWidth: 1)))
+                    HStack(spacing: 5) {
+                        Text(task.owner)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color.chissPrimary)
+                        HeartbeatCountdownBadge(owner: task.owner)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.chissDeep.opacity(0.55)).overlay(Capsule().stroke(Color.chissPrimary.opacity(0.30), lineWidth: 1)))
                 }
             }
 

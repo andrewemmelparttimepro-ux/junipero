@@ -12,10 +12,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="${APP_NAME:-Junipero}"
-BUNDLE_ID="${BUNDLE_ID:-ai.junipero.app}"
-APP_EXECUTABLE="${APP_EXECUTABLE:-Junipero}"
-SWIFT_PRODUCT="${SWIFT_PRODUCT:-JuniperoApp}"
+APP_NAME="${APP_NAME:-Thrawn}"
+BUNDLE_ID="${BUNDLE_ID:-com.thrawn.console}"
+APP_EXECUTABLE="${APP_EXECUTABLE:-ThrawnApp}"
+SWIFT_PRODUCT="${SWIFT_PRODUCT:-ThrawnApp}"
 DEVELOPER_ID_APP_CERT="${DEVELOPER_ID_APP_CERT:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 APPCAST_URL="${APPCAST_URL:-}"
@@ -72,7 +72,7 @@ cp "$UNIVERSAL_PRODUCT_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
 # Bundle default clock art for fresh installs.
-DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/JuniperoApp/Resources/clock-reference-default.png"
+DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/ThrawnApp/Resources/clock-reference-default.png"
 if [[ -f "$DEFAULT_CLOCK_ASSET" ]]; then
   cp "$DEFAULT_CLOCK_ASSET" "$APP_BUNDLE/Contents/Resources/clock-reference-default.png"
 fi

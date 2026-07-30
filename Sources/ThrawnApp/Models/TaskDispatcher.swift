@@ -142,6 +142,10 @@ final class TaskDispatcher: ObservableObject {
                 logError(source: path.lastPathComponent, message: "Wrapped in {tasks:[...]} instead of flat array — recovered \(tasks.count) updates")
                 return tasks
             }
+            if let updates = dict["updates"] as? [[String: Any]] {
+                logError(source: path.lastPathComponent, message: "Wrapped in {updates:[...]} instead of flat array — recovered \(updates.count) updates")
+                return updates
+            }
             // Single update object — wrap in array
             if dict["action"] != nil {
                 logError(source: path.lastPathComponent, message: "Single object instead of array — recovered 1 update")
@@ -199,7 +203,13 @@ final class TaskDispatcher: ObservableObject {
                 if let taskId,
                    let field = update["field"] as? String,
                    let value = update["value"] as? String {
-                    if replaceField(in: &boardContent, taskId: taskId, field: field, value: value) {
+                    if isCompletionStatusMutation(field: field, value: value),
+                       !ensureCompletionDeliverable(in: &boardContent, taskId: taskId, candidate: evidenceCandidate(from: update)) {
+                        logError(source: "dispatcher", message: "move to Done blocked — \(taskId) has no Deliverable/evidence pointer")
+                        skippedCount += 1
+                        continue
+                    }
+                    if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                         appliedCount += 1
                         logDispatch(action: "move", taskId: taskId, detail: "\(field) → \(value)")
                     } else {
@@ -219,7 +229,13 @@ final class TaskDispatcher: ObservableObject {
                 }
                 if let field = update["field"] as? String,
                    let value = update["value"] as? String {
-                    if replaceField(in: &boardContent, taskId: taskId, field: field, value: value) {
+                    if isCompletionStatusMutation(field: field, value: value),
+                       !ensureCompletionDeliverable(in: &boardContent, taskId: taskId, candidate: evidenceCandidate(from: update)) {
+                        logError(source: "dispatcher", message: "update to Done blocked — \(taskId) has no Deliverable/evidence pointer")
+                        skippedCount += 1
+                        continue
+                    }
+                    if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                         appliedCount += 1
                         logDispatch(action: "update", taskId: taskId, detail: "\(field)")
                     } else {
@@ -227,8 +243,17 @@ final class TaskDispatcher: ObservableObject {
                         skippedCount += 1
                     }
                 } else if let fields = update["fields"] as? [String: String] {
-                    for (field, value) in fields {
-                        if replaceField(in: &boardContent, taskId: taskId, field: field, value: value) {
+                    var fieldsToApply = fields
+                    if let statusField = fields.keys.first(where: { $0.caseInsensitiveCompare("Status") == .orderedSame }),
+                       let statusValue = fields[statusField],
+                       TaskCompletionPolicy.isDoneStatus(statusValue),
+                       !ensureCompletionDeliverable(in: &boardContent, taskId: taskId, candidate: evidenceCandidate(from: fields)) {
+                        fieldsToApply.removeValue(forKey: statusField)
+                        logError(source: "dispatcher", message: "fields update to Done blocked — \(taskId) has no Deliverable/evidence pointer")
+                        skippedCount += 1
+                    }
+                    for (field, value) in fieldsToApply {
+                        if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                             appliedCount += 1
                         } else {
                             skippedCount += 1
@@ -253,6 +278,15 @@ final class TaskDispatcher: ObservableObject {
                     let priority = update["priority"] as? String ?? "P2"
                     let notes = update["notes"] as? String ?? ""
                     let agent = update["agent"] as? String ?? "Thrawn"
+                    let deliverable = evidenceCandidate(from: update)
+                        ?? (TaskCompletionPolicy.isDoneStatus(status) ? TaskCompletionPolicy.discoverDeliverable(for: resolvedId) : nil)
+
+                    if TaskCompletionPolicy.isDoneStatus(status),
+                       TaskCompletionPolicy.cleanEvidence(deliverable) == nil {
+                        logError(source: "dispatcher", message: "create as Done blocked — \(resolvedId) has no Deliverable/evidence pointer")
+                        skippedCount += 1
+                        continue
+                    }
 
                     // Objective linkage — if Thrawn is creating this task as
                     // part of a phase, he passes the objective id + phase
@@ -276,6 +310,9 @@ final class TaskDispatcher: ObservableObject {
                     newTask += "- Status: \(status)\n"
                     newTask += "- Priority: \(priority)\n"
                     newTask += "- Created: \(ISO8601DateFormatter().string(from: Date()).prefix(10))\n"
+                    if let deliverable {
+                        newTask += "- Deliverable: \(deliverable)\n"
+                    }
                     if let objectiveId, !objectiveId.isEmpty {
                         newTask += "- Objective: \(objectiveId)\n"
                     }
@@ -399,14 +436,11 @@ final class TaskDispatcher: ObservableObject {
     // MARK: - Field Replacement
 
     private func replaceField(in content: inout String, taskId: String, field: String, value: String) -> Bool {
-        guard let taskRange = content.range(of: "### \(taskId)") else { return false }
-
-        let afterTask = content[taskRange.upperBound...]
-        let nextTaskRange = afterTask.range(of: "\n### TASK-") ?? afterTask.endIndex..<afterTask.endIndex
-        let taskSection = String(afterTask[afterTask.startIndex..<nextTaskRange.lowerBound])
+        guard let taskSectionRange = taskSectionRange(in: content, taskId: taskId) else { return false }
+        let taskSection = String(content[taskSectionRange])
 
         let escapedField = NSRegularExpression.escapedPattern(for: field)
-        let pattern = "-\\s+(?:\\*\\*\(escapedField):\\*\\*|\(escapedField):)\\s*.+"
+        let pattern = "-\\s+(?:\\*\\*\(escapedField):\\*\\*|\(escapedField):)\\s*.*"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return false }
 
         let nsTaskSection = taskSection as NSString
@@ -416,10 +450,99 @@ final class TaskDispatcher: ObservableObject {
         let replacement = "- \(field): \(value)"
         let updatedSection = nsTaskSection.replacingCharacters(in: match.range, with: replacement)
 
-        let fullRange = content.index(taskRange.upperBound, offsetBy: 0)..<content.index(taskRange.upperBound, offsetBy: taskSection.count)
-        content.replaceSubrange(fullRange, with: updatedSection)
+        content.replaceSubrange(taskSectionRange, with: updatedSection)
 
         return true
+    }
+
+    private func taskSectionRange(in content: String, taskId: String) -> Range<String.Index>? {
+        guard let taskRange = content.range(of: "### \(taskId)") else { return nil }
+        let afterTask = content[taskRange.upperBound...]
+        let nextTaskRange = afterTask.range(of: "\n### TASK-") ?? afterTask.endIndex..<afterTask.endIndex
+        return taskRange.upperBound..<nextTaskRange.lowerBound
+    }
+
+    private func fieldValue(in content: String, taskId: String, field: String) -> String? {
+        guard let taskSectionRange = taskSectionRange(in: content, taskId: taskId) else { return nil }
+        let taskSection = String(content[taskSectionRange])
+        let escapedField = NSRegularExpression.escapedPattern(for: field)
+        let pattern = "-\\s+(?:\\*\\*\(escapedField):\\*\\*|\(escapedField):)\\s*(.*)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let nsTaskSection = taskSection as NSString
+        guard let match = regex.firstMatch(in: taskSection, range: NSRange(location: 0, length: nsTaskSection.length)),
+              match.numberOfRanges > 1 else { return nil }
+        return nsTaskSection.substring(with: match.range(at: 1))
+    }
+
+    private func upsertField(in content: inout String, taskId: String, field: String, value: String) -> Bool {
+        if replaceField(in: &content, taskId: taskId, field: field, value: value) {
+            return true
+        }
+        guard let taskSectionRange = taskSectionRange(in: content, taskId: taskId) else { return false }
+        content.insert(contentsOf: "\n- \(field): \(value)", at: taskSectionRange.upperBound)
+        return true
+    }
+
+    private func applyFieldMutation(in content: inout String, taskId: String, field: String, value: String) -> Bool {
+        if replaceField(in: &content, taskId: taskId, field: field, value: value) {
+            return true
+        }
+        guard shouldUpsertMissingField(field) else { return false }
+        return upsertField(in: &content, taskId: taskId, field: field, value: value)
+    }
+
+    private func shouldUpsertMissingField(_ field: String) -> Bool {
+        let normalized = field.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return [
+            "collaborators",
+            "created",
+            "due",
+            "inputs",
+            "deliverable",
+            "brain path",
+            "notes",
+            "review status",
+            "blockers",
+            "next step",
+            "project",
+            "requested by",
+            "objective",
+            "phase"
+        ].contains(normalized)
+    }
+
+    private func ensureCompletionDeliverable(in content: inout String, taskId: String, candidate: String?) -> Bool {
+        if TaskCompletionPolicy.cleanEvidence(fieldValue(in: content, taskId: taskId, field: "Deliverable")) != nil {
+            return true
+        }
+        let resolved = TaskCompletionPolicy.cleanEvidence(candidate)
+            ?? TaskCompletionPolicy.discoverDeliverable(for: taskId)
+        guard let resolved else { return false }
+        return upsertField(in: &content, taskId: taskId, field: "Deliverable", value: resolved)
+    }
+
+    private func isCompletionStatusMutation(field: String, value: String) -> Bool {
+        field.caseInsensitiveCompare("Status") == .orderedSame && TaskCompletionPolicy.isDoneStatus(value)
+    }
+
+    private func evidenceCandidate(from update: [String: Any]) -> String? {
+        for key in ["deliverable", "Deliverable", "evidence", "Evidence", "evidence_path", "evidencePath", "path", "file_path", "filePath"] {
+            if let value = TaskCompletionPolicy.cleanEvidence(update[key] as? String) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func evidenceCandidate(from fields: [String: String]) -> String? {
+        for (field, value) in fields {
+            let normalized = field.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["deliverable", "evidence", "evidence path", "evidence_path", "path", "file path", "file_path"].contains(normalized),
+               let value = TaskCompletionPolicy.cleanEvidence(value) {
+                return value
+            }
+        }
+        return nil
     }
 
     private func appendNote(in content: inout String, taskId: String, note: String) -> Bool {

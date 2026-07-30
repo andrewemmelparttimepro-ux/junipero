@@ -1,115 +1,63 @@
-# Junipero User Guide: Setup + Troubleshooting
+# Thrawn User Guide
 
-## What Junipero Does
-Junipero is a Mac app that opens a chat UI and manages your local AI runtime (OpenClaw, with optional Ollama fallback) so you do not need terminal commands.
+## What Thrawn Does
 
-## Normal Install Flow
-1. Download `Junipero.dmg`.
-2. Open it and drag `Junipero.app` to `Applications`.
-3. Open `Junipero.app`.
-4. If first launch, complete setup:
-   - `Free Local` for local-first usage.
-   - `Bring Your Own Plan` if you want your own paid provider/model.
-5. Start chatting.
+Thrawn is a macOS work command center. It keeps a visible Flow Board, routes work to a small team of durable agents, requires proof for completion, and publishes human-readable deliverables.
 
-## Common Problems and Fixes
+## Install
 
-### 1) "Junipero can’t be opened" or macOS security warning
-Cause:
-- App is not signed/notarized for your machine.
+1. Build or obtain `Thrawn.app`.
+2. Move it to `/Applications`.
+3. Open `Thrawn.app`.
+4. Grant file access only for folders that Thrawn needs to inspect for assigned work.
 
-Fix:
-1. In Finder, right-click `Junipero.app` and choose `Open`.
-2. Click `Open` again in the prompt.
-3. If blocked: System Settings > Privacy & Security > allow app launch.
+## Providers
 
-Long-term product fix:
-- Ship Developer ID signed + Apple notarized builds.
+The active Thrawn 2.1 provider stack is:
 
-### 2) Setup opens again even though I used the app before
-Cause:
-- Setup state file missing/reset, or config migration detected an invalid config and forced recovery.
+- Codex CLI/app-server for Command, specialist chats, and normal scheduled agent work.
+- The model and reasoning selector is populated from the models currently available to the signed-in Codex account.
+- Existing API providers remain explicit fallback routes for unattended or provider-specific work.
+- No silent Ollama or local fallback in normal work.
 
-Fix:
-1. Open setup and click `Set Up Now` again.
-2. If using provider mode, re-enter token (stored in macOS Keychain).
-3. Run `Full Test` in app header to verify all checks pass.
+Thrawn does not store a ChatGPT password, access token, or copied subscription credential. Sign in through the provider:
 
-### 3) "Runtime recovering" or status is red/yellow
-Cause:
-- OpenClaw or Ollama is not healthy.
+```bash
+codex login
+```
 
-Fix:
-1. Click `Heal` in the top bar.
-2. Open `Setup` and click `Run Diagnostics`.
-3. If fallback model missing, click `Fix Missing Model`.
+Return to Thrawn Setup and select refresh. The setup screen will show the authentication mode, plan, executable, live model count, selected model, and supported reasoning levels.
 
-### 4) Chat fails with overload/rate-limit errors
-Cause:
-- Provider is overloaded or rate-limited.
+## Browser Sessions
 
-Fix:
-1. Wait 15-60 seconds and retry.
-2. Keep Ollama fallback enabled.
-3. Use `Free Local` mode during provider outages.
+- Login-gated work should use the Browser or Chrome integration exposed to the provider agent and Andrew's signed-in session.
+- If authenticated access fails, verify the signed-in browser integration is connected before signing in again or blaming the product route.
 
-### 5) I can’t copy message text
-Fix:
-1. Drag-select text directly in a chat bubble.
-2. Click the clipboard icon on the bubble.
-3. Right-click bubble and choose `Copy`.
+## Sessions and Approvals
 
-### 6) I need help sending logs to support
-Fix:
-1. Click `Support` in app header.
-2. A zip file is exported to your Desktop.
-3. Send that zip to support.
+- Each Thrawn conversation or durable agent has a stable local session key mapped to a provider thread id.
+- Codex retains the actual conversation/thread state; Thrawn retains only the mapping needed to resume it.
+- Command, file-change, and permission requests appear in Thrawn's Approvals screen.
+- Approve once, allow for the current provider session, or deny. Unknown approval methods fail closed.
 
-## What "Full Test" Checks
-- OpenClaw CLI availability
-- Gateway health
-- Local read/write storage
-- Ollama availability (if enabled)
-- Fallback model presence
+## Flow Board
 
-It reports pass/fail summary in the app status text.
+The Flow Board is the operating core:
 
-## Security Notes
-- Provider token is stored in macOS Keychain (not plain text config).
-- Config file is kept under `~/.junipero/config.json`.
-- Support bundle export redacts token fields.
+- Inbox: raw work that needs shaping.
+- Ready: work with a clear next action.
+- In Progress: work currently owned by an agent or human.
+- Review: work waiting for proof or judgment.
+- Blocked: work needing a decision, missing access, or unavailable input.
+- Done: work with a human-readable deliverable or evidence pointer.
 
-## Current Distribution Limits (and How We Fix Them)
+## Deliverables
 
-### Problem A: Signing/Notarization
-Current risk:
-- Some users may see Gatekeeper warnings or launch blocks.
+Prefer `index.html` as the primary human-facing deliverable. PDFs and supporting assets can sit beside it, but the app should always give the user something easy to open and read.
 
-Engineering fix plan:
-1. Sign app with Apple Developer ID certificate.
-2. Notarize app with `notarytool`.
-3. Staple notarization ticket to app/DMG.
-4. Verify on clean macOS account before release.
+## Troubleshooting
 
-Release check:
-- Fresh machine can open app without security workarounds.
-
-### Problem B: Missing Dependency Auto-Install
-Current risk:
-- If OpenClaw/Ollama are not already installed, setup may fail for non-technical users.
-
-Engineering fix plan:
-1. During setup, detect missing binaries.
-2. Offer one-click install flow for dependencies.
-3. Re-run health checks after install.
-4. Show clear progress and failure reasons in plain language.
-
-Release check:
-- Clean machine with no OpenClaw/Ollama still reaches successful chat from setup.
-
-## Team Ship Checklist (Before Public Distribution)
-1. Signed + notarized DMG build.
-2. Dependency auto-install from clean machine.
-3. First-run setup succeeds with no terminal.
-4. `Heal`, `Run Diagnostics`, `Fix Missing Model`, `Full Test`, and `Support` all verified.
-5. Recovery path tested with intentionally corrupted config.
+- If an agent appears stuck, relaunch Thrawn; startup recovery resets stale working states.
+- If Codex is unavailable, run `codex login status`, then refresh the Provider Agent Runtime card.
+- If a task is Done without a deliverable, move it back for review.
+- If a route label looks wrong, refresh the live model catalog and inspect the agent spec before running proof.

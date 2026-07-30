@@ -6,8 +6,8 @@ import AVFoundation
 //
 // SOD/EOD self-reviews with audio output.
 //
-// Every morning (SOD) and evening (EOD), each agent that was active in
-// the last 24 hours produces a short briefing:
+// Every morning (SOD) and evening (EOD), every persistent agent produces
+// a short briefing:
 //   • a self-grade (A–F letter),
 //   • one concrete improvement they'll implement,
 //   • a 30–45 second spoken briefing, in their own voice.
@@ -152,20 +152,30 @@ final class BriefingService: NSObject, ObservableObject {
             detail: "\(kind.rawValue): \(ordered.count) candidates"
         )
 
-        var results: [BriefingEntry] = []
+        let priorEntries = loadDay(kind: kind, date: Date())
+        let canResumePartialRun = !priorEntries.isEmpty
+            && priorEntries.count < ordered.count
+            && priorEntries.allSatisfy { Calendar.current.isDate($0.date, inSameDayAs: Date()) }
+        var results: [BriefingEntry] = canResumePartialRun ? priorEntries : []
+        let completedAgentIds = Set(results.map(\.agentId))
+        let candidates = canResumePartialRun
+            ? ordered.filter { !completedAgentIds.contains($0.id) }
+            : ordered
 
-        for spec in ordered {
-            // Active-in-24h gate — zero rows in the flight recorder = no briefing.
-            guard Self.wasActive(agentId: spec.id, windowHours: 24) else {
-                FlightRecorder.logEvent(
-                    category: "briefing", action: "skipped-inactive",
-                    detail: "\(spec.id) \(kind.rawValue)"
-                )
-                continue
-            }
+        if canResumePartialRun {
+            FlightRecorder.logEvent(
+                category: "briefing", action: "resume",
+                detail: "\(kind.rawValue): \(results.count) complete, \(candidates.count) remaining"
+            )
+        }
 
+        for spec in candidates {
             if let entry = await generateOne(for: spec, kind: kind, dayDir: dayDir) {
                 results.append(entry)
+                // Checkpoint after every agent. If a later provider stalls or
+                // the app exits, the already-grounded reports remain the
+                // authoritative set instead of leaving yesterday's index live.
+                saveIndex(results, kind: kind, dayDir: dayDir)
             }
         }
 
@@ -233,35 +243,39 @@ final class BriefingService: NSObject, ObservableObject {
         dayDir: URL
     ) async -> BriefingEntry? {
         let activity = Self.activitySummary(agentId: spec.id, windowHours: 24)
-        let prompt = Self.buildPrompt(spec: spec, kind: kind, activity: activity)
+        let board = Self.currentBoardSummary(agentId: spec.id)
+        let prompt = Self.buildPrompt(spec: spec, kind: kind, activity: activity, board: board)
         let system = Self.systemPrompt(for: spec, kind: kind)
 
-        // Route through the scheduler so Bart lands on OpenAI,
-        // everyone else lands on Ollama. Same code path as heartbeats.
-        guard let raw = await scheduler?.sendOneShot(
+        // Route through the scheduler so every briefing uses the same path
+        // as that agent's heartbeat.
+        let raw = await scheduler?.sendOneShot(
             agentId: spec.id,
             prompt: prompt,
             systemPrompt: system,
             sessionKey: "briefing-\(spec.id)-\(kind.rawValue)"
-        ), !raw.isEmpty else {
+        ) ?? ""
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             FlightRecorder.logEvent(
                 category: "briefing", action: "no-response",
                 detail: "\(spec.id) \(kind.rawValue)"
             )
-            return nil
+            return await writeEntry(
+                spec: spec,
+                kind: kind,
+                payload: Self.fallbackBriefingPayload(for: spec, kind: kind, raw: raw, activity: activity, board: board),
+                dayDir: dayDir
+            )
         }
 
-        guard let parsed = Self.parseBriefingJSON(raw) else {
+        guard let parsed = Self.parseBriefingJSON(raw),
+              Self.isBoardGrounded(parsed, kind: kind, board: board) else {
             FlightRecorder.logEvent(
                 category: "briefing", action: "parse-fail",
                 detail: "\(spec.id) \(kind.rawValue): \(raw.prefix(200))"
             )
             // Try to salvage something so the user still gets a file.
-            let fallback = BriefingPayload(
-                grade: "C",
-                improvement: "Return valid JSON next time.",
-                spoken: raw.prefix(400).description
-            )
+            let fallback = Self.fallbackBriefingPayload(for: spec, kind: kind, raw: raw, activity: activity, board: board)
             return await writeEntry(spec: spec, kind: kind, payload: fallback, dayDir: dayDir)
         }
 
@@ -275,11 +289,13 @@ final class BriefingService: NSObject, ObservableObject {
         dayDir: URL
     ) async -> BriefingEntry {
         // Text file (.md) — easy to read and version-control
-        let textURL = dayDir.appendingPathComponent("\(spec.id).md")
+        let fileStem = Self.briefingFileStem(for: spec)
+        let textURL = dayDir.appendingPathComponent("\(fileStem).md")
         let md = """
         # \(spec.name) — \(kind == .sod ? "Start of Day" : "End of Day")
         \(Self.humanDate(Date()))
 
+        **Stable:** Thrawn 2.1
         **Role:** \(spec.role)
         **Grade:** \(payload.grade)
 
@@ -299,7 +315,7 @@ final class BriefingService: NSObject, ObservableObject {
         }
 
         // Audio file (.caf) — Apple native, no transcode
-        let audioURL = dayDir.appendingPathComponent("\(spec.id).caf")
+        let audioURL = dayDir.appendingPathComponent("\(fileStem).caf")
         var finalAudioURL: URL? = nil
         if let voice {
             let ok = await voice.renderToFile(
@@ -363,6 +379,9 @@ final class BriefingService: NSObject, ObservableObject {
         Your mission: \(spec.purpose).
 
         Your job right now is to \(verb) based on the activity summary below.
+        The CURRENT BOARD SNAPSHOT is authoritative. Recent response snippets are historical
+        context only and must never be described as current board state. Do not claim ownership
+        of another agent's card. For SOD, mention only task IDs present in your current snapshot.
         Return STRICT JSON — no prose, no markdown fences, no commentary.
         Shape: {"grade":"A-F","improvement":"one sentence","spoken":"30-45s spoken briefing"}
         The "spoken" field MUST be one or two short paragraphs, in your own voice,
@@ -374,7 +393,8 @@ final class BriefingService: NSObject, ObservableObject {
     private static func buildPrompt(
         spec: AgentSpec,
         kind: BriefingKind,
-        activity: String
+        activity: String,
+        board: String
     ) -> String {
         let header = (kind == .sod)
             ? "Morning briefing — report today's plan based on your last 24 hours of work and the current board."
@@ -387,9 +407,129 @@ final class BriefingService: NSObject, ObservableObject {
         ACTIVITY SUMMARY (last 24h):
         \(activity)
 
+        CURRENT BOARD SNAPSHOT (authoritative now):
+        \(board)
+
         Return JSON only. Shape:
         {"grade":"A-F","improvement":"one sentence","spoken":"30-45s spoken briefing"}
         """
+    }
+
+    private static func briefingFileStem(for spec: AgentSpec) -> String {
+        switch spec.id {
+        case "archivist": return "samwell-tarly"
+        case "sentinel": return "sir-davos"
+        default: return spec.id
+        }
+    }
+
+    private static func currentBoardSummary(agentId: String) -> String {
+        let boardURL = ThrawnPaths.opsDir.appendingPathComponent("TASK_BOARD.md")
+        guard let content = try? String(contentsOf: boardURL, encoding: .utf8) else {
+            return "Board unavailable. Do not infer current tasks from activity logs."
+        }
+
+        let aliases: Set<String>
+        switch agentId {
+        case "thrawn": aliases = ["thrawn"]
+        case "archivist": aliases = ["archivist", "samwell", "samwell tarly"]
+        case "sentinel": aliases = ["sentinel", "davos", "sir davos"]
+        case "dwight": aliases = ["dwight"]
+        case "steven": aliases = ["steven"]
+        default: aliases = [agentId.lowercased()]
+        }
+
+        var rows: [String] = []
+        var seenIDs: Set<String> = []
+        for rawSection in content.components(separatedBy: "\n### ").dropFirst() {
+            let lines = rawSection.components(separatedBy: .newlines)
+            guard let heading = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  heading.hasPrefix("TASK-") else { continue }
+            let taskID = heading
+
+            func field(_ name: String) -> String {
+                let prefix = "- \(name):"
+                guard let line = lines.first(where: { $0.hasPrefix(prefix) }) else { return "" }
+                return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let status = field("Status")
+            guard status.lowercased() != "done" else { continue }
+            let owner = field("Owner")
+            let ownerMatches = aliases.contains(owner.lowercased())
+            guard ownerMatches || (agentId == "thrawn" && status.lowercased() == "blocked") else { continue }
+
+            let title = field("Title")
+            let next = String(field("Next step").prefix(220))
+            let blocker = String(field("Blockers").prefix(220))
+            let duplicate = seenIDs.insert(taskID).inserted ? "" : " | DUPLICATE ID"
+            var row = "- \(taskID) | \(status) | \(owner) | \(title)\(duplicate)"
+            if !next.isEmpty { row += " | Next: \(next)" }
+            if !blocker.isEmpty && blocker.lowercased() != "none" { row += " | Blocker: \(blocker)" }
+            rows.append(row)
+        }
+
+        if rows.isEmpty {
+            return "No current non-Done cards are assigned to this agent. Do not reuse historical task IDs as current work."
+        }
+        return rows.prefix(14).joined(separator: "\n")
+    }
+
+    private static func isBoardGrounded(_ payload: BriefingPayload, kind: BriefingKind, board: String) -> Bool {
+        guard kind == .sod else { return true }
+        let allowed = Set(taskIDs(in: board))
+        let claimed = Set(taskIDs(in: payload.improvement + "\n" + payload.spoken))
+        return claimed.isSubset(of: allowed)
+    }
+
+    private static func taskIDs(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"TASK-\d+"#) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: text) else { return nil }
+            return String(text[swiftRange])
+        }
+    }
+
+    private static func fallbackBriefingPayload(
+        for spec: AgentSpec,
+        kind: BriefingKind,
+        raw: String,
+        activity: String,
+        board: String
+    ) -> BriefingPayload {
+        let activityLine = activity
+            .split(separator: "\n")
+            .first(where: { $0.contains("Commands executed") || $0.contains("Heartbeats run") })
+            .map(String.init) ?? "No activity recorded."
+        let label = kind == .sod ? "start-of-day" : "end-of-day"
+        let rawText = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let boardRows = board.split(separator: "\n").prefix(2).map { row -> String in
+            let parts = row.components(separatedBy: " | ")
+            guard parts.count >= 4 else { return String(row.prefix(260)) }
+            return parts.prefix(4).joined(separator: " | ")
+        }
+        let boardLine = String(boardRows.joined(separator: "; ").prefix(280))
+        let spoken: String
+        if rawText.isEmpty {
+            spoken = "\(spec.name) \(label) fallback. \(activityLine) Current board: \(boardLine) Work only this live snapshot and preserve any explicit blocker until its decision or evidence arrives."
+        } else {
+            spoken = String(rawText.prefix(500))
+        }
+        let improvement: String
+        if board.hasPrefix("No current non-Done cards") {
+            improvement = "Stay ready without inventing work; route the next live card in the same cycle it appears."
+        } else if boardRows.allSatisfy({ $0.contains(" | Blocked | ") }) {
+            improvement = "Keep the current blockers pinned and execute only when the named decision or evidence arrives."
+        } else {
+            improvement = "Anchor the next update to the current board snapshot and move the first unblocked step with proof."
+        }
+
+        return BriefingPayload(
+            grade: "C",
+            improvement: improvement,
+            spoken: String(spoken.prefix(500))
+        )
     }
 
     // MARK: - Activity detection

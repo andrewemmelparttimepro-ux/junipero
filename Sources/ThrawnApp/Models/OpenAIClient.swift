@@ -1,11 +1,11 @@
 import Foundation
 import SwiftUI
 
-// MARK: - OpenAI API Client
+// MARK: - GLM API Client
 //
-// Same wrapper pattern as AnthropicClient and GeminiAPIClient.
-// Talks to api.openai.com/v1/chat/completions with SSE streaming.
-// API key auth (no OAuth available for third-party apps).
+// Kept under the existing OpenAIClient type name so current SwiftUI
+// environment bindings keep working. The implementation targets Z.ai's
+// OpenAI-compatible Chat Completions API for GLM-5.2.
 
 @MainActor
 final class OpenAIClient: ObservableObject {
@@ -15,46 +15,43 @@ final class OpenAIClient: ObservableObject {
     @Published var apiKeyConfigured = false
 
     private var apiKey: String = ""
+    private var providerAPIKeys: [String: String] = [:]
     private var model: String
+    private var reasoningEffort: String
     private var activeRuns: [String: Task<Void, Never>] = [:]
-    private var baseURL = "https://api.openai.com/v1"
+    private var baseURL = ProviderRouter.glmBaseURL
 
-    init(model: String = AIProvider.chatgpt.defaultModel) {
+    init(
+        model: String = AIProvider.chatgpt.defaultModel,
+        reasoningEffort: String = ProviderRouter.premiumOpenAIReasoningEffort
+    ) {
         self.model = model
+        self.reasoningEffort = reasoningEffort
         loadKey()
     }
 
     // MARK: - Configuration
 
     private func loadKey() {
-        // 1. Keychain (primary — written by setAPIKey or by the app itself)
-        if let key = KeychainHelper.read(service: "com.thrawn.openai", account: "api-key"), !key.isEmpty {
-            apiKey = key
-            apiKeyConfigured = true
-            return
-        }
-        // 2. File fallback — ~/Library/Application Support/Thrawn/openai-config.json
-        //    Lets CLI tools or external setup write the key without keychain ACL issues.
-        //    On first successful read, promotes the key to keychain and deletes the file.
-        let configURL = ThrawnPaths.appSupportDir.appendingPathComponent("openai-config.json")
-        if let data = try? Data(contentsOf: configURL),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-           let key = json["apiKey"], !key.isEmpty {
-            apiKey = key
-            apiKeyConfigured = true
-            // Promote to keychain so future launches skip the file
-            KeychainHelper.save(service: "com.thrawn.openai", account: "api-key", value: key)
-            try? FileManager.default.removeItem(at: configURL)
-            return
-        }
-        apiKey = ""
-        apiKeyConfigured = false
+        // macOS may display an authorization dialog for every Keychain read when
+        // an app is rebuilt or re-signed. Status checks happen during SwiftUI
+        // rendering, so Keychain access here can multiply into dozens of blocking
+        // dialogs. Runtime provider credentials are deliberately loaded only from
+        // environment variables or private app-support files.
+        apiKey = loadProviderKey(service: ProviderRouter.glmKeychainService)
+        apiKeyConfigured = !apiKey.isEmpty
+        providerAPIKeys[ProviderRouter.glmKeychainService] = apiKey
+
+        let xaiKey = loadProviderKey(service: ProviderRouter.xaiKeychainService)
+        providerAPIKeys[ProviderRouter.xaiKeychainService] = xaiKey
     }
 
     func setAPIKey(_ key: String) {
-        KeychainHelper.save(service: "com.thrawn.openai", account: "api-key", value: key)
-        apiKey = key
-        apiKeyConfigured = true
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        apiKey = trimmed
+        apiKeyConfigured = !trimmed.isEmpty
+        providerAPIKeys[ProviderRouter.glmKeychainService] = trimmed
+        persistProviderKey(trimmed, service: ProviderRouter.glmKeychainService)
         Task { await refreshConnectionStatus() }
     }
 
@@ -62,14 +59,75 @@ final class OpenAIClient: ObservableObject {
         self.model = model
     }
 
+    func setReasoningEffort(_ effort: String) {
+        self.reasoningEffort = effort
+    }
+
     func setBaseURL(_ url: String?) {
         let trimmed = (url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        self.baseURL = trimmed.isEmpty ? "https://api.openai.com/v1" : trimmed
+        self.baseURL = trimmed.isEmpty ? ProviderRouter.glmBaseURL : trimmed
+    }
+
+    func hasAPIKey(service: String) -> Bool {
+        guard let key = providerAPIKeys[service] else { return false }
+        return !key.isEmpty
+    }
+
+    private func loadProviderKey(service: String) -> String {
+        let env = ProcessInfo.processInfo.environment
+        let environmentKey: String?
+        let configFileName: String
+
+        switch service {
+        case ProviderRouter.xaiKeychainService:
+            environmentKey = env["XAI_API_KEY"]
+            configFileName = ProviderRouter.xaiConfigFileName
+        default:
+            environmentKey = env["ZAI_API_KEY"] ?? env["GLM_API_KEY"]
+            configFileName = ProviderRouter.glmConfigFileName
+        }
+
+        if let key = environmentKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            return key
+        }
+
+        let configURL = ThrawnPaths.appSupportDir.appendingPathComponent(configFileName)
+        guard let data = try? Data(contentsOf: configURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let key = json["apiKey"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty else {
+            return ""
+        }
+        return key
+    }
+
+    private func persistProviderKey(_ key: String, service: String) {
+        let configFileName = service == ProviderRouter.xaiKeychainService
+            ? ProviderRouter.xaiConfigFileName
+            : ProviderRouter.glmConfigFileName
+        let configURL = ThrawnPaths.appSupportDir.appendingPathComponent(configFileName)
+
+        do {
+            try FileManager.default.createDirectory(
+                at: ThrawnPaths.appSupportDir,
+                withIntermediateDirectories: true
+            )
+            if key.isEmpty {
+                try? FileManager.default.removeItem(at: configURL)
+                return
+            }
+            let data = try JSONSerialization.data(withJSONObject: ["apiKey": key])
+            try data.write(to: configURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+        } catch {
+            lastError = "Could not save API key: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Connection
 
     func connect() {
+        loadKey()
         Task { await refreshConnectionStatus() }
     }
 
@@ -95,11 +153,17 @@ final class OpenAIClient: ObservableObject {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return false }
             if http.statusCode == 401 {
-                lastError = "Invalid API key."
+                lastError = "Invalid GLM API key."
                 return false
             }
-            return http.statusCode == 200
+            if !(200...299).contains(http.statusCode) {
+                lastError = "GLM reachability check failed with HTTP \(http.statusCode)."
+                return false
+            }
+            lastError = nil
+            return true
         } catch {
+            lastError = "Could not reach GLM: \(error.localizedDescription)"
             return false
         }
     }
@@ -112,59 +176,76 @@ final class OpenAIClient: ObservableObject {
         history: [OpenAIMessage] = [],
         systemPrompt: String? = nil,
         sessionKey: String = "main",
+        modelOverride: String? = nil,
+        reasoningEffortOverride: String? = nil,
+        baseURLOverride: String? = nil,
+        apiKeyServiceOverride: String? = nil,
+        providerLabel: String = "GLM",
+        includeReasoningControls: Bool = true,
         onDelta: @escaping (String) -> Void,
         onComplete: @escaping (String, String?) -> Void,
         onError: @escaping (String) -> Void
     ) {
-        guard apiKeyConfigured else {
-            onError("No API key configured.")
-            return
-        }
+        let cachedAPIKey = apiKeyServiceOverride.flatMap { providerAPIKeys[$0] } ?? apiKey
 
         let runTask = Task { [weak self] in
             guard let self else { return }
             defer { self.activeRuns.removeValue(forKey: sessionKey) }
 
-            // Build messages array
+            guard !cachedAPIKey.isEmpty else {
+                onError("No \(providerLabel) API key configured.")
+                return
+            }
+
             var messages: [[String: Any]] = []
+            let requestModel = modelOverride ?? self.model
+            let requestReasoningEffort = reasoningEffortOverride ?? self.reasoningEffort
+            let requestBaseURL = baseURLOverride ?? self.baseURL
 
             if let systemPrompt, !systemPrompt.isEmpty {
                 messages.append(["role": "system", "content": systemPrompt])
             }
 
-            // History
             for msg in history {
                 messages.append(["role": msg.role, "content": msg.text])
             }
 
-            // Current user message
             if let imageData {
                 let base64 = imageData.base64EncodedString()
                 messages.append([
                     "role": "user",
                     "content": [
-                        ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(base64)"]],
-                        ["type": "text", "text": text]
+                        ["type": "text", "text": text],
+                        ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(base64)"]]
                     ]
                 ])
             } else {
                 messages.append(["role": "user", "content": text])
             }
 
-            let body: [String: Any] = [
-                "model": self.model,
+            var body: [String: Any] = [
+                "model": requestModel,
                 "messages": messages,
-                "stream": true,
-                "max_tokens": 8192
+                "stream": false,
+                "max_tokens": 65536,
+                "temperature": 0.6,
+                "top_p": 0.95
             ]
 
-            guard let url = URL(string: "\(self.baseURL)/chat/completions") else {
-                onError("Invalid API URL.")
+            if includeReasoningControls {
+                body["thinking"] = ["type": "enabled"]
+                if !requestReasoningEffort.isEmpty {
+                    body["reasoning_effort"] = requestReasoningEffort
+                }
+            }
+
+            guard let url = URL(string: "\(requestBaseURL)/chat/completions") else {
+                onError("Invalid \(providerLabel) API URL.")
                 return
             }
 
             guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
-                onError("Could not encode request.")
+                onError("Could not encode \(providerLabel) request.")
                 return
             }
 
@@ -172,10 +253,17 @@ final class OpenAIClient: ObservableObject {
             request.httpMethod = "POST"
             request.httpBody = bodyData
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(self.apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(cachedAPIKey)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 600
 
-            await self.streamOpenAISSE(request: request, onDelta: onDelta, onComplete: onComplete, onError: onError)
+            await self.sendGLMResponse(
+                request: request,
+                responseModel: requestModel,
+                providerLabel: providerLabel,
+                onDelta: onDelta,
+                onComplete: onComplete,
+                onError: onError
+            )
         }
 
         activeRuns[sessionKey]?.cancel()
@@ -187,10 +275,12 @@ final class OpenAIClient: ObservableObject {
         activeRuns.removeValue(forKey: sessionKey)
     }
 
-    // MARK: - SSE Streaming (OpenAI format)
+    // MARK: - Chat Completions API
 
-    private func streamOpenAISSE(
+    private func sendGLMResponse(
         request: URLRequest,
+        responseModel: String,
+        providerLabel: String,
         maxRetries: Int = 3,
         onDelta: @escaping (String) -> Void,
         onComplete: @escaping (String, String?) -> Void,
@@ -202,7 +292,7 @@ final class OpenAIClient: ObservableObject {
             guard !Task.isCancelled else { return }
 
             do {
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                let (data, response) = try await URLSession.shared.data(for: request)
 
                 guard let http = response as? HTTPURLResponse else {
                     lastError = "Non-HTTP response"
@@ -210,87 +300,56 @@ final class OpenAIClient: ObservableObject {
                 }
 
                 if http.statusCode == 401 || http.statusCode == 403 {
-                    self.lastError = "Invalid API key."
-                    onError("Authentication failed. Check your API key.")
+                    self.lastError = "Invalid \(providerLabel) API key."
+                    onError("\(providerLabel) authentication failed. Check the API key.")
                     return
                 }
 
                 if http.statusCode == 429 {
-                    lastError = "Rate limited."
-                    let backoff: UInt64 = UInt64(pow(2.0, Double(attempt))) * 1_000_000_000
+                    let errorMessage = Self.extractErrorMessage(from: data)
+                    if Self.isInsufficientQuota(errorMessage) {
+                        self.lastError = errorMessage
+                        onError("\(providerLabel) quota exhausted: \(errorMessage)")
+                        return
+                    }
+                    lastError = errorMessage.isEmpty ? "\(providerLabel) rate limited." : errorMessage
+                    let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
+                        .flatMap { UInt64($0) }
+                    let backoff: UInt64 = (retryAfter ?? UInt64(pow(2.0, Double(attempt)))) * 1_000_000_000
                     try? await Task.sleep(nanoseconds: backoff)
                     continue
                 }
 
                 if http.statusCode != 200 {
-                    var errorBody = ""
-                    for try await line in bytes.lines {
-                        errorBody += line
-                        if errorBody.count > 500 { break }
-                    }
-                    onError("API error (\(http.statusCode)): \(String(errorBody.prefix(300)))")
+                    let errorMessage = Self.extractErrorMessage(from: data)
+                    let detail = errorMessage.isEmpty
+                        ? String((String(data: data, encoding: .utf8) ?? "").prefix(300))
+                        : errorMessage
+                    onError("\(providerLabel) API error (\(http.statusCode)): \(detail)")
                     return
                 }
 
-                // Parse OpenAI SSE stream
-                // data: {"choices":[{"delta":{"content":"..."}}]}
-                // data: [DONE]
-                var fullText = ""
-
-                // Idle watchdog — same rationale as in AnthropicClient: kill
-                // stalled streams long before the 600s request timeout.
-                let idleWatchdog = StreamIdleWatchdog(timeoutSeconds: 90)
-                let watchdogTask = startStreamIdleWatchdog(idleWatchdog) { idle in
-                    FlightRecorder.logError(
-                        source: "openai:idle",
-                        message: "SSE stream idle for \(Int(idle))s — aborting"
-                    )
-                }
-                defer { watchdogTask.cancel() }
-
-                for try await line in bytes.lines {
-                    guard !Task.isCancelled else { return }
-                    await idleWatchdog.touch()
-
-                    guard line.hasPrefix("data: ") else { continue }
-                    let payload = String(line.dropFirst(6))
-
-                    if payload == "[DONE]" {
-                        self.connected = true
-                        self.lastError = nil
-                        await idleWatchdog.stop()
-                        onComplete(fullText, self.model)
-                        return
-                    }
-
-                    guard let jsonData = payload.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                          let choices = json["choices"] as? [[String: Any]],
-                          let first = choices.first,
-                          let delta = first["delta"] as? [String: Any],
-                          let content = delta["content"] as? String else {
-                        continue
-                    }
-
-                    fullText += content
-                    onDelta(content)
-                }
-
-                // Stream ended without [DONE] sentinel — truncation. Log it so
-                // we don't silently deliver partial responses without notice.
-                if !fullText.isEmpty {
-                    FlightRecorder.logEvent(
-                        category: "openai",
-                        action: "stream-truncated",
-                        detail: "Stream ended without [DONE] — delivering partial \(fullText.count) chars",
-                        metadata: ["model": self.model]
-                    )
-                    onComplete(fullText, self.model)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    onError("Could not parse \(providerLabel) response.")
                     return
                 }
 
-                lastError = "Stream ended without response"
-                continue
+                if let error = json["error"] as? [String: Any] {
+                    let message = error["message"] as? String ?? "GLM request failed."
+                    onError(message)
+                    return
+                }
+
+                guard let text = Self.extractOutputText(from: json), !text.isEmpty else {
+                    onError("\(providerLabel) returned no text.")
+                    return
+                }
+
+                self.connected = true
+                self.lastError = nil
+                onDelta(text)
+                onComplete(text, responseModel)
+                return
 
             } catch is CancellationError {
                 return
@@ -305,6 +364,61 @@ final class OpenAIClient: ObservableObject {
         }
 
         onError(lastError)
+    }
+
+    private static func extractOutputText(from json: [String: Any]) -> String? {
+        if let choices = json["choices"] as? [[String: Any]],
+           let first = choices.first,
+           let message = first["message"] as? [String: Any] {
+            if let content = message["content"] as? String {
+                return content
+            }
+            if let content = message["content"] as? [[String: Any]] {
+                let chunks = content.compactMap { block -> String? in
+                    if let text = block["text"] as? String { return text }
+                    if let text = block["content"] as? String { return text }
+                    return nil
+                }
+                return chunks.joined()
+            }
+        }
+
+        if let direct = json["output_text"] as? String {
+            return direct
+        }
+
+        guard let output = json["output"] as? [[String: Any]] else { return nil }
+        var chunks: [String] = []
+
+        for item in output {
+            guard let content = item["content"] as? [[String: Any]] else { continue }
+            for block in content {
+                if let text = block["text"] as? String {
+                    chunks.append(text)
+                }
+            }
+        }
+
+        return chunks.joined()
+    }
+
+    private static func extractErrorMessage(from data: Data) -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return String(data: data, encoding: .utf8) ?? ""
+        }
+        guard let error = json["error"] as? [String: Any] else {
+            return String(data: data, encoding: .utf8) ?? ""
+        }
+        let message = error["message"] as? String ?? "GLM request failed."
+        if let code = error["code"] as? String, !code.isEmpty {
+            return "\(message) [\(code)]"
+        }
+        return message
+    }
+
+    private static func isInsufficientQuota(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("insufficient_quota") || lower.contains("exceeded your current quota")
     }
 }
 

@@ -2,9 +2,9 @@ import Foundation
 
 // MARK: - Standard Loadout
 //
-// The Standard Loadout is the single source of truth for the dev-ops
-// squad's defaults. Any agent whose spec sets `tools: .inherit` or
-// `tier: .inherit` reads from here at resolve-time — not at copy-time.
+// The Standard Loadout is the console's metadata source for dev-ops squad
+// defaults. Any agent whose spec sets `tools: .inherit` or `tier: .inherit`
+// reads from here at resolve-time — not at copy-time.
 //
 // If you change the Standard Loadout, every inheriting agent follows
 // immediately. Dev-ops squad is the canonical inheritor.
@@ -14,8 +14,8 @@ import Foundation
 // we seed with the historical dev-ops defaults.
 
 struct StandardLoadout: Codable, Equatable {
-    /// Tool IDs available to any agent that inherits. Must match IDs in
-    /// ToolRegistry (bash, file_read, task_write, memory_read, memory_write).
+    /// Tool IDs shown for any agent that inherits. Execution itself remains
+    /// full-operation bash through ExecutionService.
     var toolIds: [String]
 
     /// Model tier for inheriting agents.
@@ -24,12 +24,10 @@ struct StandardLoadout: Codable, Equatable {
     /// Default rank for newly-spawned agents that inherit.
     var defaultRank: AgentRank
 
-    /// The historical dev-ops default — exactly what pre-Step-2 code used.
-    /// Bash is a wildcard, so behavior is identical until the loadout is
-    /// intentionally narrowed.
+    /// Full-operation default metadata for the dev-ops squad.
     static let devopsDefault = StandardLoadout(
         toolIds: ["bash", "file_read", "task_write"],
-        tier: .local,
+        tier: .premium,
         defaultRank: .b
     )
 }

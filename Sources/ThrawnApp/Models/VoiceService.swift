@@ -58,6 +58,13 @@ final class VoiceService: NSObject, ObservableObject {
     /// Snapshot of pending announcements (for the UI popover).
     @Published private(set) var pendingCount: Int = 0
 
+    /// True while a streaming voice turn is open. The mic pipeline reads this
+    /// to decide whether inbound speech is a barge-in rather than an echo.
+    @Published private(set) var isStreamingTurn = false
+
+    /// True whenever audio is actually leaving the speakers.
+    var isSpeaking: Bool { synth.isSpeaking }
+
     // MARK: Private state
 
     private let synth = AVSpeechSynthesizer()
@@ -80,6 +87,11 @@ final class VoiceService: NSObject, ObservableObject {
         let agentId: String
         let kind: AnnouncementKind
         let text: String
+        /// Chunks of a single streaming turn. They are exempt from the queue
+        /// cap (dropping the middle of a sentence would garble the reply) and
+        /// speak with no inter-utterance padding so the turn sounds like one
+        /// continuous voice rather than a stack of announcements.
+        var isStreamChunk: Bool = false
     }
 
     // MARK: - Init
@@ -104,9 +116,8 @@ final class VoiceService: NSObject, ObservableObject {
     // Each agent has an ordered list of AVSpeechSynthesisVoice
     // identifiers, best-first. On bind we walk the list and pick the
     // first one that resolves via AVSpeechSynthesisVoice(identifier:).
-    // Rate and pitch tune the character: Boba is slow+low, Bart is fast
-    // +bright, Thrawn is calm and slightly lower, C-3PO is slightly
-    // faster and brighter (fussy protocol droid).
+    // Rate and pitch tune the character. V2.0 ships with Thrawn as the
+    // only active default voice assignment.
     //
     // If the user downloads new voices later, the migration will pick
     // them up on next launch only if the current assignment is invalid
@@ -118,6 +129,7 @@ final class VoiceService: NSObject, ObservableObject {
         let rate: Float
         let pitch: Float
         let muted: Bool
+        let forcePreferred: Bool
     }
 
     private static let voicePreferences: [String: VoicePreference] = [
@@ -127,43 +139,8 @@ final class VoiceService: NSObject, ObservableObject {
                 "com.apple.voice.premium.en-GB.Serena",
                 "com.apple.voice.enhanced.en-US.Tom",
             ],
-            rate: 0.46, pitch: 0.96, muted: false
+            rate: 0.46, pitch: 0.96, muted: false, forcePreferred: false
         ),
-        "quigon": VoicePreference(
-            identifiers: [
-                "com.apple.voice.premium.en-AU.Lee",      // Lee (Premium AU)
-                "com.apple.voice.premium.en-AU.Karen",
-                "com.apple.voice.enhanced.en-US.Evan",
-            ],
-            rate: 0.47, pitch: 1.00, muted: false
-        ),
-        "lando": VoicePreference(
-            identifiers: [
-                "com.apple.voice.enhanced.en-US.Evan",    // Evan (Enhanced)
-                "com.apple.voice.enhanced.en-US.Nathan",
-                "com.apple.voice.premium.en-US.Zoe",
-            ],
-            rate: 0.50, pitch: 1.00, muted: false
-        ),
-        "boba": VoicePreference(
-            identifiers: [
-                "com.apple.voice.enhanced.en-US.Tom",     // Tom (Enhanced)
-                "com.apple.voice.enhanced.en-US.Nathan",
-            ],
-            rate: 0.44, pitch: 0.90, muted: false
-        ),
-        "c3po": VoicePreference(
-            identifiers: [
-                "com.apple.voice.compact.en-GB.Daniel",   // Daniel (compact — no enhanced exists)
-                "com.apple.voice.premium.en-GB.Serena",
-            ],
-            rate: 0.52, pitch: 1.05, muted: false
-        ),
-        "r2d2": VoicePreference(
-            identifiers: [],                              // SFX bank planned — no TTS voice
-            rate: 0.50, pitch: 1.00, muted: true
-        ),
-        // KORBIS-SPAWN: V2 voice prefs (Bart, Hunter, Al Borland) absent.
     ]
 
     /// Walk the preference list for each agent, pick the first installed
@@ -180,22 +157,22 @@ final class VoiceService: NSObject, ObservableObject {
         for spec in store.specs {
             guard let pref = Self.voicePreferences[spec.id] else { continue }
 
+            let picked = pref.identifiers.first { candidate in
+                AVSpeechSynthesisVoice(identifier: candidate) != nil
+            }
+            let shouldForcePreferred = pref.forcePreferred
+                && picked != nil
+                && spec.voiceIdentifier != picked
+
             // If the current identifier already resolves to an installed
             // voice, leave it alone — respects any manual override from
-            // a future voice-picker UI.
+            // a future voice-picker UI unless this agent has an explicit
+            // canonical voice assignment.
             if let vid = spec.voiceIdentifier, !vid.isEmpty,
-               AVSpeechSynthesisVoice(identifier: vid) != nil {
+               AVSpeechSynthesisVoice(identifier: vid) != nil,
+               !shouldForcePreferred {
                 skippedCount += 1
                 continue
-            }
-
-            // Pick the first installed candidate.
-            var picked: String? = nil
-            for candidate in pref.identifiers {
-                if AVSpeechSynthesisVoice(identifier: candidate) != nil {
-                    picked = candidate
-                    break
-                }
             }
 
             updates[spec.id] = AgentSpecStore.VoiceAssignment(
@@ -272,11 +249,13 @@ final class VoiceService: NSObject, ObservableObject {
         let cleaned = Self.cleanAnnouncementText(text)
         guard !cleaned.isEmpty else { return false }
 
-        // Enqueue; drop oldest if over cap
+        // Enqueue; drop oldest if over cap. Stream chunks are never dropped —
+        // cutting the middle out of a spoken reply is worse than a short wait.
         let item = Announcement(agentId: agentId, kind: kind, text: cleaned)
         queue.append(item)
-        while queue.count > maxQueueDepth {
-            let dropped = queue.removeFirst()
+        while queue.filter({ !$0.isStreamChunk }).count > maxQueueDepth,
+              let dropIndex = queue.firstIndex(where: { !$0.isStreamChunk }) {
+            let dropped = queue.remove(at: dropIndex)
             FlightRecorder.logEvent(
                 category: "voice", action: "queue-drop",
                 detail: "\(dropped.agentId): \(dropped.text.prefix(60))"
@@ -299,6 +278,156 @@ final class VoiceService: NSObject, ObservableObject {
         let name = specStore?.spec(id: agentId)?.name ?? agentId.capitalized
         let line = "\(name) here. Standing by for orders."
         announce(agentId: agentId, kind: .manual, text: line)
+    }
+
+    /// Speak an explicit user-requested voice-chat response. This bypasses
+    /// quiet hours and Focus filtering because the user intentionally opened
+    /// the mic, while still respecting the global mute switch.
+    @discardableResult
+    func speakInteractive(agentId: String, text: String) -> Bool {
+        guard !muted else {
+            FlightRecorder.logEvent(
+                category: "voice", action: "dropped",
+                detail: "muted interactive: \(agentId)"
+            )
+            return false
+        }
+
+        if let spec = specStore?.spec(id: agentId), spec.voiceMuted {
+            FlightRecorder.logEvent(
+                category: "voice", action: "dropped",
+                detail: "agent-muted interactive: \(agentId)"
+            )
+            return false
+        }
+
+        let cleaned = Self.cleanInteractiveSpeechText(text)
+        guard !cleaned.isEmpty else { return false }
+
+        queue.append(Announcement(agentId: agentId, kind: .manual, text: cleaned))
+        while queue.filter({ !$0.isStreamChunk }).count > maxQueueDepth,
+              let dropIndex = queue.firstIndex(where: { !$0.isStreamChunk }) {
+            queue.remove(at: dropIndex)
+        }
+        pendingCount = queue.count
+        FlightRecorder.logEvent(
+            category: "voice", action: "interactive-enqueued",
+            detail: "\(agentId): \(cleaned.prefix(100))"
+        )
+        drain()
+        return true
+    }
+
+    // MARK: - Streaming turns (Tier 1 latency)
+    //
+    // A conversational reply arrives as a token stream. Waiting for the full
+    // response before speaking costs the entire generation time in silence.
+    // Instead we buffer deltas and flush at natural boundaries, so the first
+    // audio starts about as soon as the model has produced one clause.
+    //
+    // The first flush is deliberately eager (clause-level) because
+    // time-to-first-audio is what a listener perceives as latency. Later
+    // flushes wait for sentence terminators so prosody stays natural.
+
+    private var streamBuffer = ""
+    private var streamAgentId: String?
+    private var streamChunkIndex = 0
+
+    /// Open a streaming turn. Any in-flight speech is cleared first.
+    func beginStreamingTurn(agentId: String) {
+        stopAll()
+        streamBuffer = ""
+        streamAgentId = agentId
+        streamChunkIndex = 0
+        isStreamingTurn = true
+        FlightRecorder.logEvent(category: "voice", action: "stream-begin", detail: agentId)
+    }
+
+    /// Feed a token delta. Speaks complete clauses/sentences as they form.
+    func appendStreamingDelta(_ delta: String) {
+        guard isStreamingTurn, !muted else { return }
+        streamBuffer += delta
+        while let boundary = nextFlushBoundary(in: streamBuffer) {
+            let chunk = String(streamBuffer[..<boundary])
+            streamBuffer = String(streamBuffer[boundary...])
+            speakChunk(chunk)
+        }
+    }
+
+    /// Close the turn, flushing whatever is left in the buffer.
+    func endStreamingTurn() {
+        guard isStreamingTurn else { return }
+        let tail = streamBuffer
+        streamBuffer = ""
+        isStreamingTurn = false
+        if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            speakChunk(tail)
+        }
+        FlightRecorder.logEvent(
+            category: "voice", action: "stream-end",
+            detail: "\(streamAgentId ?? "?") chunks=\(streamChunkIndex)"
+        )
+        streamAgentId = nil
+    }
+
+    /// Cut speech instantly because the user started talking over it.
+    func interruptForBargeIn() {
+        guard synth.isSpeaking || !queue.isEmpty || isStreamingTurn else { return }
+        streamBuffer = ""
+        isStreamingTurn = false
+        streamAgentId = nil
+        stopAll()
+        FlightRecorder.logEvent(category: "voice", action: "barge-in", detail: "user interrupted playback")
+    }
+
+    /// Find where the buffer can be cut for speech, or nil to keep buffering.
+    /// Returns an index *after* the boundary character.
+    private func nextFlushBoundary(in text: String) -> String.Index? {
+        // Eager on the opening clause — first audio dominates perceived latency.
+        let isFirst = streamChunkIndex == 0
+        let minLength = isFirst ? 16 : 40
+        let hardLength = isFirst ? 90 : 200
+        guard text.count >= minLength else { return nil }
+
+        let terminators: Set<Character> = isFirst
+            ? [".", "!", "?", "\n", ",", ";", ":"]
+            : [".", "!", "?", "\n"]
+
+        var lastValid: String.Index?
+        var idx = text.startIndex
+        var offset = 0
+        while idx < text.endIndex {
+            let ch = text[idx]
+            let next = text.index(after: idx)
+            if terminators.contains(ch), offset + 1 >= minLength {
+                // A period inside a decimal or an abbreviation isn't a boundary.
+                let followedByDigit = next < text.endIndex && text[next].isNumber
+                if !(ch == "." && followedByDigit) {
+                    lastValid = next
+                }
+            }
+            idx = next
+            offset += 1
+        }
+        if let lastValid { return lastValid }
+
+        // No punctuation but the buffer is long — cut at the last space so we
+        // never sit on a wall of text waiting for a period that isn't coming.
+        if text.count >= hardLength,
+           let space = text.lastIndex(of: " ") {
+            return text.index(after: space)
+        }
+        return nil
+    }
+
+    private func speakChunk(_ raw: String) {
+        guard let agentId = streamAgentId else { return }
+        let cleaned = Self.cleanInteractiveSpeechText(raw)
+        guard !cleaned.isEmpty else { return }
+        queue.append(Announcement(agentId: agentId, kind: .manual, text: cleaned, isStreamChunk: true))
+        pendingCount = queue.count
+        streamChunkIndex += 1
+        drain()
     }
 
     /// Stop everything immediately and clear the queue.
@@ -459,9 +588,15 @@ final class VoiceService: NSObject, ObservableObject {
         let utterance = AVSpeechUtterance(string: next.text)
         configureUtterance(utterance, forAgentId: next.agentId)
 
-        // Small pre-pause so queued announcements don't slam into each other
-        utterance.preUtteranceDelay = 0.15
-        utterance.postUtteranceDelay = 0.10
+        if next.isStreamChunk {
+            // One continuous turn — any padding here reads as a stutter.
+            utterance.preUtteranceDelay = 0
+            utterance.postUtteranceDelay = 0
+        } else {
+            // Small pre-pause so queued announcements don't slam into each other
+            utterance.preUtteranceDelay = 0.15
+            utterance.postUtteranceDelay = 0.10
+        }
 
         synth.speak(utterance)
     }
@@ -490,6 +625,23 @@ final class VoiceService: NSObject, ObservableObject {
             s = String(s.prefix(220)).trimmingCharacters(in: .whitespaces) + "…"
         }
         return s.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func cleanInteractiveSpeechText(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        s = s.replacingOccurrences(of: #"```[\s\S]*?```"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"^\s*#+\s*"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
+        s = s.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if s.count > 900 {
+            s = String(s.prefix(900)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return s
     }
 
     // MARK: - Focus / Quiet hours detection

@@ -5,19 +5,18 @@ import SwiftUI
 //
 // Replaces the external cron system with in-app Swift timers.
 // Each agent has a heartbeat interval. When it fires, the scheduler
-// sends the agent's heartbeat prompt to the Anthropic API via
-// an isolated conversation and tracks the result.
+// sends the agent's heartbeat prompt through the active provider route and
+// tracks the result.
 //
-// When in UNLEASHED mode, agents can execute shell commands via
-// ExecutionService — creating a real agentic loop.
+// Agents execute shell commands via ExecutionService, creating a real agentic loop.
 
 struct AgentHeartbeatConfig: Identifiable, Codable {
-    let id: String              // Agent ID: "r2d2", "quigon", etc.
-    let name: String            // Display name: "R2-D2"
+    let id: String              // Agent ID: "thrawn", future stable subagent ids.
+    let name: String            // Display name
     let minuteOffset: Int       // Minute of the hour to fire (0-59)
-    let heartbeatFile: String   // e.g. "r2d2.HEARTBEAT.md"
-    let agentFile: String       // e.g. "r2d2.md"
-    let outputFile: String      // e.g. "r2d2.json"
+    let heartbeatFile: String   // e.g. "thrawn.HEARTBEAT.md"
+    let agentFile: String       // e.g. "thrawn.md"
+    let outputFile: String      // e.g. "thrawn.json"
     var enabled: Bool
 }
 
@@ -30,18 +29,20 @@ final class AgentScheduler: ObservableObject {
 
     private var timerTask: Task<Void, Never>?
     private var activeRuns: [String: Task<Void, Never>] = [:]
+    private var activeRunStarts: [String: Date] = [:]
     /// Tool-loop tasks spawned AFTER the main heartbeat call returns. Tracked
     /// separately so they can be cancelled cleanly on stop() — otherwise they
     /// could outlive the main heartbeat task and leak commands during shutdown.
     private var toolLoopTasks: [String: Task<Void, Never>] = [:]
-    private weak var ollamaClient: OllamaClient?
-    private weak var anthropicClient: AnthropicClient?
     private weak var openaiClient: OpenAIClient?
+    private weak var openClawClient: GatewayWSClient?
+    private weak var agentRuntime: AgentRuntimeCoordinator?
     private weak var roster: AgentRosterStore?
     private weak var executionService: ExecutionService?
     private weak var objectiveStore: ObjectiveStore?
     private weak var handoffStore: HandoffStore?
     private weak var specStore: AgentSpecStore?
+    private weak var devOpsBrain: DevOpsBrainStore?
     private var providerRouter: ProviderRouter?
 
     /// Briefing service — wired after startup so the scheduler can fire
@@ -62,24 +63,18 @@ final class AgentScheduler: ObservableObject {
     private static let lastRunPath = ThrawnPaths.appSupportDir
         .appendingPathComponent("agent-last-runs.json")
 
-    // KORBIS-SPAWN: dev-ops squad only.
-    // Phase 1 of the Korbis deployment runs Thrawn idle — none of these are
-    // actively dispatching analysis work yet — but the schedule is wired so
-    // Phase 2 just flips the switch. V2 agents remain on the master branch.
     static let defaultAgents: [AgentHeartbeatConfig] = [
         AgentHeartbeatConfig(id: "thrawn",       name: "Thrawn",   minuteOffset: 0,  heartbeatFile: "thrawn.HEARTBEAT.md",           agentFile: "thrawn.md",  outputFile: "thrawn.json",       enabled: true),
-        AgentHeartbeatConfig(id: "thrawn-dream",  name: "Thrawn",   minuteOffset: 5,  heartbeatFile: "thrawn-dream.HEARTBEAT.md",    agentFile: "thrawn.md",  outputFile: "thrawn-dream.json", enabled: true),
-        AgentHeartbeatConfig(id: "thrawn-handoff", name: "Thrawn",  minuteOffset: 2,  heartbeatFile: "thrawn-handoff.HEARTBEAT.md",  agentFile: "thrawn.md",  outputFile: "thrawn-handoff.json", enabled: true),
-        AgentHeartbeatConfig(id: "r2d2",         name: "R2-D2",    minuteOffset: 10, heartbeatFile: "r2d2.HEARTBEAT.md",             agentFile: "r2d2.md",    outputFile: "r2d2.json",         enabled: true),
-        AgentHeartbeatConfig(id: "c3po",         name: "C-3PO",    minuteOffset: 20, heartbeatFile: "c3po.HEARTBEAT.md",             agentFile: "c3po.md",    outputFile: "c3po.json",         enabled: true),
-        AgentHeartbeatConfig(id: "quigon",       name: "Qui-Gon",  minuteOffset: 30, heartbeatFile: "quigon.HEARTBEAT.md",           agentFile: "quigon.md",  outputFile: "quigon.json",       enabled: true),
-        AgentHeartbeatConfig(id: "lando",        name: "Lando",    minuteOffset: 40, heartbeatFile: "lando.HEARTBEAT.md",            agentFile: "lando.md",   outputFile: "lando.json",        enabled: true),
-        AgentHeartbeatConfig(id: "boba",         name: "Boba",     minuteOffset: 50, heartbeatFile: "boba.HEARTBEAT.md",             agentFile: "boba.md",    outputFile: "boba.json",         enabled: true),
+        AgentHeartbeatConfig(id: "sentinel",     name: "Sir Davos", minuteOffset: 10, heartbeatFile: "sentinel.HEARTBEAT.md",         agentFile: "sentinel.md", outputFile: "sentinel.json",     enabled: true),
+        AgentHeartbeatConfig(id: "dwight",       name: "Dwight",   minuteOffset: 30, heartbeatFile: "dwight.HEARTBEAT.md",           agentFile: "dwight.md",  outputFile: "dwight.json",       enabled: true),
+        AgentHeartbeatConfig(id: "steven",       name: "Steven",   minuteOffset: 40, heartbeatFile: "steven.HEARTBEAT.md",           agentFile: "steven.md",  outputFile: "steven.json",       enabled: true),
+        AgentHeartbeatConfig(id: "archivist",    name: "Samwell Tarly", minuteOffset: 55, heartbeatFile: "archivist.HEARTBEAT.md",  agentFile: "archivist.md", outputFile: "archivist.json",    enabled: true),
     ]
 
     init() {
         self.agents = Self.loadConfig() ?? Self.defaultAgents
         self.lastRunTimes = Self.loadLastRuns()
+        saveConfig()
     }
 
     // MARK: - Binding
@@ -91,18 +86,21 @@ final class AgentScheduler: ObservableObject {
         objectives: ObjectiveStore? = nil,
         handoffs: HandoffStore? = nil,
         specs: AgentSpecStore? = nil,
-        anthropic: AnthropicClient? = nil,
-        openai: OpenAIClient? = nil
+        devOpsBrain: DevOpsBrainStore? = nil,
+        openclaw: GatewayWSClient? = nil,
+        openai: OpenAIClient? = nil,
+        agentRuntime: AgentRuntimeCoordinator? = nil
     ) {
-        self.ollamaClient = ollamaClient
-        self.anthropicClient = anthropic
         self.openaiClient = openai
+        self.openClawClient = openclaw
+        self.agentRuntime = agentRuntime
         self.roster = roster
         self.executionService = execution
         self.objectiveStore = objectives
         self.handoffStore = handoffs
         self.specStore = specs
-        self.providerRouter = ProviderRouter(ollama: ollamaClient, anthropic: anthropic, openai: openai)
+        self.devOpsBrain = devOpsBrain
+        self.providerRouter = ProviderRouter(ollama: ollamaClient, openai: openai)
     }
 
     /// Wire the briefing service so the scheduler can fire SOD at 07:00
@@ -145,16 +143,32 @@ final class AgentScheduler: ObservableObject {
     }
 
     func stop() {
+        let sessionsToCancel = runningAgents.map { "agent:heartbeat:\($0)" }
+        Task { [weak agentRuntime] in
+            for sessionKey in sessionsToCancel {
+                await agentRuntime?.cancel(sessionKey: sessionKey)
+            }
+        }
         timerTask?.cancel()
         timerTask = nil
         for task in activeRuns.values { task.cancel() }
         activeRuns.removeAll()
+        activeRunStarts.removeAll()
         // Cancel any in-flight tool loops that might be running after the
         // main heartbeat returned. Without this, shell commands could keep
         // executing after the user stopped the scheduler.
         for task in toolLoopTasks.values { task.cancel() }
         toolLoopTasks.removeAll()
         runningAgents.removeAll()
+    }
+
+    func resetToV2Defaults() {
+        stop()
+        agents = Self.defaultAgents
+        lastRunTimes = [:]
+        lastRunResults = [:]
+        saveConfig()
+        saveLastRuns()
     }
 
     // MARK: - Manual Trigger
@@ -164,14 +178,20 @@ final class AgentScheduler: ObservableObject {
         runHeartbeat(for: config)
     }
 
+    func upsertConfig(_ config: AgentHeartbeatConfig) {
+        if let index = agents.firstIndex(where: { $0.id == config.id }) {
+            agents[index] = config
+        } else {
+            agents.append(config)
+        }
+        saveConfig()
+    }
+
     /// Manually trigger a handoff (morning or evening) right now.
     /// Used by the flow board drag-drop trigger and the Handoffs view button.
     func triggerHandoff(kind: HandoffKind) {
         guard let store = handoffStore else { return }
         store.generate(kind: kind)
-        if let config = agents.first(where: { $0.id == "thrawn-handoff" }) {
-            runHeartbeat(for: config)
-        }
     }
 
     // MARK: - Tick (runs every 30s)
@@ -182,12 +202,16 @@ final class AgentScheduler: ObservableObject {
         let currentMinute = calendar.component(.minute, from: now)
         let currentHour = calendar.component(.hour, from: now)
 
+        reapStaleRuns(now: now)
+
         // Reset blocked agents back to idle so they can retry on next heartbeat
         if let roster {
             for agent in roster.agents where agent.state == .blocked {
                 roster.setState(id: agent.id, state: .idle, detail: "Standing by")
             }
         }
+
+        autoDelegateNamedSpecialistTasks()
 
         // MARK: - SOD / EOD briefing trigger
         //
@@ -221,49 +245,160 @@ final class AgentScheduler: ObservableObject {
             // Don't fire if already running
             guard !runningAgents.contains(agent.id) else { continue }
 
-            // Thrawn fires every 15 minutes (hub — needs to route frequently)
-            // Dream cycle fires every 6 hours
-            // Other agents fire once per hour at their minuteOffset
-            let shouldFire: Bool
-            let minGap: Double
+            // Thrawn fires every 15 minutes. Explicit subagents use their
+            // configured hourly minute offset, but fresh Ready work assigned
+            // after their last run wakes them promptly.
+            let scheduledFire: Bool
+            let scheduledMinGap: Double
 
             if agent.id == "thrawn" {
-                shouldFire = currentMinute % 15 == 0
-                minGap = 12
-            } else if agent.id == "thrawn-dream" {
-                // Dream cycle: fire at :05 past the hour, every 6 hours
-                let hour = calendar.component(.hour, from: now)
-                shouldFire = currentMinute == 5 && hour % 6 == 0
-                minGap = 300  // At least 5 hours between dreams
-            } else if agent.id == "thrawn-handoff" {
-                // Twice-daily handoff to Claude: 09:02 and 17:02
-                let hour = calendar.component(.hour, from: now)
-                let isHandoffHour = (hour == 9 || hour == 17)
-                shouldFire = isHandoffHour && currentMinute == 2
-                minGap = 300  // At least 5 hours between handoffs
-
-                // Generate the handoff report BEFORE the heartbeat fires,
-                // so Thrawn's commentary has something to append to.
-                if shouldFire, let store = handoffStore {
-                    let kind: HandoffKind = hour == 9 ? .morning : .evening
-                    if store.shouldGenerate(kind: kind, now: now) {
-                        store.generate(kind: kind)
-                    }
-                }
+                scheduledFire = currentMinute % 15 == 0
+                scheduledMinGap = 12
             } else {
-                shouldFire = currentMinute == agent.minuteOffset
-                minGap = 50
+                scheduledFire = currentMinute == agent.minuteOffset
+                scheduledMinGap = 50
             }
 
-            guard shouldFire else { continue }
+            let readyWorkFire = hasFreshReadyWork(for: agent)
+            guard scheduledFire || readyWorkFire else { continue }
 
             if let lastRun = lastRunTimes[agent.id] {
                 let minutesSinceLastRun = now.timeIntervalSince(lastRun) / 60
+                let minGap = readyWorkFire ? Self.readyWorkMinGapMinutes : scheduledMinGap
                 guard minutesSinceLastRun > minGap else { continue }
             }
 
             runHeartbeat(for: agent)
         }
+    }
+
+    private static let readyWorkMinGapMinutes: Double = 2
+
+    private func hasFreshReadyWork(for agent: AgentHeartbeatConfig) -> Bool {
+        let boardURL = ThrawnPaths.opsDir.appendingPathComponent("TASK_BOARD.md")
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: boardURL.path),
+              let boardModifiedAt = attrs[.modificationDate] as? Date else {
+            return false
+        }
+        if let lastRun = lastRunTimes[agent.id],
+           boardModifiedAt <= lastRun.addingTimeInterval(1) {
+            return false
+        }
+        guard let content = try? String(contentsOf: boardURL, encoding: .utf8) else {
+            return false
+        }
+        return parseTaskBoard(from: content).contains { task in
+            isReadyStatus(task.status) && ownerMatches(task.owner, agent: agent)
+        }
+    }
+
+    private func hasAssignedReadyTask(for agent: AgentHeartbeatConfig) -> Bool {
+        let boardURL = ThrawnPaths.opsDir.appendingPathComponent("TASK_BOARD.md")
+        guard let content = try? String(contentsOf: boardURL, encoding: .utf8) else {
+            return false
+        }
+        return parseTaskBoard(from: content).contains { task in
+            isReadyStatus(task.status) && ownerMatches(task.owner, agent: agent)
+        }
+    }
+
+    private func autoDelegateNamedSpecialistTasks() {
+        let boardURL = ThrawnPaths.opsDir.appendingPathComponent("TASK_BOARD.md")
+        let lockURL = ThrawnPaths.opsDir.appendingPathComponent("TASK_BOARD.md.lock")
+        FileLock.withLock(at: lockURL, source: "scheduler:autoDelegate") {
+            guard let content = try? String(contentsOf: boardURL, encoding: .utf8) else { return }
+            var tasks = parseTaskBoard(from: content)
+            guard !tasks.isEmpty else { return }
+
+            var changedTasks: [String] = []
+            for index in tasks.indices {
+                let task = tasks[index]
+                guard isReadyStatus(task.status),
+                      ownerMatchesThrawn(task.owner),
+                      let target = namedSpecialistTarget(in: task) else {
+                    continue
+                }
+
+                tasks[index].owner = target.owner
+                tasks[index].status = "Ready"
+                if tasks[index].nextStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    tasks[index].nextStep = "\(target.owner): pull this task, produce the requested deliverable, and route findings back to Thrawn for review."
+                }
+                if tasks[index].notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    tasks[index].notes = "Auto-routed because the Thrawn-owned request explicitly named \(target.owner)."
+                }
+                changedTasks.append("\(task.id)->\(target.owner)")
+            }
+
+            guard !changedTasks.isEmpty else { return }
+            let markdown = serializeTaskBoard(tasks, preservingHeaderFrom: content)
+            do {
+                try markdown.write(to: boardURL, atomically: true, encoding: .utf8)
+                FlightRecorder.logEvent(
+                    category: "scheduler",
+                    action: "auto-delegate",
+                    detail: changedTasks.joined(separator: ", ")
+                )
+            } catch {
+                FlightRecorder.logError(
+                    source: "scheduler:autoDelegate",
+                    message: "Could not write TASK_BOARD.md: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func isReadyStatus(_ status: String) -> Bool {
+        let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "ready"
+    }
+
+    private func ownerMatchesThrawn(_ owner: String) -> Bool {
+        let normalized = owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "thrawn"
+    }
+
+    private func ownerMatches(_ owner: String, agent: AgentHeartbeatConfig) -> Bool {
+        let normalized = owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let aliases = ownerAliases(for: agent)
+        return aliases.contains(normalized)
+    }
+
+    private func ownerAliases(for agent: AgentHeartbeatConfig) -> Set<String> {
+        switch agent.id {
+        case "thrawn":
+            return ["thrawn"]
+        case "archivist":
+            return ["archivist", "samwell", "samwell tarly"]
+        case "sentinel":
+            return ["sentinel", "sir davos", "davos"]
+        case "dwight":
+            return ["dwight"]
+        case "steven":
+            return ["steven"]
+        default:
+            return [agent.id.lowercased(), agent.name.lowercased()]
+        }
+    }
+
+    private func namedSpecialistTarget(in task: ParsedTask) -> (id: String, owner: String)? {
+        let text = [
+            task.title,
+            task.nextStep,
+            task.notes,
+            task.blockers,
+            task.deliverable,
+        ].joined(separator: " ").lowercased()
+
+        let targets: [(id: String, owner: String, needles: [String])] = [
+            ("steven", "Steven", ["steven"]),
+            ("archivist", "Samwell Tarly", ["samwell", "samwell tarly", "archivist"]),
+            ("sentinel", "Sir Davos", ["sir davos", "davos", "sentinel"]),
+            ("dwight", "Dwight", ["dwight"]),
+        ]
+        return targets.first { target in
+            target.needles.contains { text.contains($0) }
+        }.map { ($0.id, $0.owner) }
     }
 
     // MARK: - Execute Heartbeat
@@ -272,6 +407,7 @@ final class AgentScheduler: ObservableObject {
         guard !runningAgents.contains(agent.id) else { return }
 
         runningAgents.insert(agent.id)
+        activeRunStarts[agent.id] = Date()
         roster?.setState(id: agent.id, state: .working, detail: "Heartbeat running…")
 
         let task = Task { [weak self] in
@@ -322,6 +458,9 @@ final class AgentScheduler: ObservableObject {
                     let msg = "Heartbeat exceeded \(Self.heartbeatWatchdogSeconds)s watchdog"
                     FlightRecorder.logError(source: "scheduler:\(agent.id)", message: msg)
                     errorMsg = msg
+                    Task { [weak agentRuntime = self.agentRuntime] in
+                        await agentRuntime?.cancel(sessionKey: sessionKey)
+                    }
                     resumeOnce()
                 }
 
@@ -370,6 +509,23 @@ final class AgentScheduler: ObservableObject {
                     responseText = stripped
 
                     let durationMs = Int(duration * 1000)
+                    if responseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       self.hasAssignedReadyTask(for: agent) {
+                        let errDetail = "Heartbeat returned only a voice line while Ready tasks were assigned."
+                        self.lastRunResults[agent.id] = "Error: \(errDetail)"
+                        FlightRecorder.logHeartbeat(
+                            agent: agent.id, event: "error",
+                            durationMs: durationMs,
+                            detail: errDetail
+                        )
+                        FlightRecorder.logError(source: "heartbeat:\(agent.id)", message: errDetail)
+                        self.writeAgentOutput(agent: agent, response: "⚠️ \(errDetail)", durationMs: durationMs)
+                        self.roster?.setState(id: agent.id, state: .blocked, detail: errDetail)
+                        self.activeRuns.removeValue(forKey: agent.id)
+                        self.activeRunStarts.removeValue(forKey: agent.id)
+                        return
+                    }
+
                     let summary = String(responseText.prefix(200))
                     self.lastRunResults[agent.id] = summary
 
@@ -382,10 +538,15 @@ final class AgentScheduler: ObservableObject {
                     // Write output to agent's output file
                     self.writeAgentOutput(agent: agent, response: responseText, durationMs: durationMs)
 
-                    // Execute any shell commands from the response (unleashed mode only).
-                    // Tracked in toolLoopTasks so stop() can cancel cleanly and so a
-                    // second heartbeat for the same agent can replace any stale loop.
-                    if let exec = self.executionService, exec.accessMode.isUnleashed {
+                    // Subscription agent runtimes execute tools natively and
+                    // surface provider events/approvals. The legacy fenced-bash
+                    // harness remains only for explicit non-agent API routes.
+                    let nativeGateway = self.specStore?
+                        .spec(id: agent.id)?
+                        .modelOverride?
+                        .provider
+                        .isSubscriptionGateway == true
+                    if self.executionService != nil, !nativeGateway {
                         let agentId = agent.id
                         let prior = self.toolLoopTasks[agentId]
                         prior?.cancel()
@@ -422,10 +583,36 @@ final class AgentScheduler: ObservableObject {
                 }
 
                 self.activeRuns.removeValue(forKey: agent.id)
+                self.activeRunStarts.removeValue(forKey: agent.id)
             }
         }
 
         activeRuns[agent.id] = task
+    }
+
+    private func reapStaleRuns(now: Date) {
+        let staleSeconds = Self.heartbeatWatchdogSeconds + Self.toolRoundWatchdogSeconds + 120
+        let staleAgentIds = activeRunStarts.compactMap { agentId, startedAt in
+            now.timeIntervalSince(startedAt) > Double(staleSeconds) ? agentId : nil
+        }
+        for agentId in staleAgentIds {
+            activeRuns[agentId]?.cancel()
+            activeRuns.removeValue(forKey: agentId)
+            toolLoopTasks[agentId]?.cancel()
+            toolLoopTasks.removeValue(forKey: agentId)
+            runningAgents.remove(agentId)
+            activeRunStarts.removeValue(forKey: agentId)
+            FlightRecorder.logHeartbeat(
+                agent: agentId,
+                event: "stale-run-cleared",
+                detail: "Cleared scheduler state after \(staleSeconds)s without completion."
+            )
+            FlightRecorder.logError(
+                source: "scheduler:\(agentId)",
+                message: "Cleared stale active run after \(staleSeconds)s watchdog."
+            )
+            roster?.setState(id: agentId, state: .blocked, detail: "Stale run cleared; will retry next window")
+        }
     }
 
     // MARK: - Build Prompt from Heartbeat Files
@@ -438,7 +625,7 @@ final class AgentScheduler: ObservableObject {
 
         var sections: [String] = []
 
-        // 1. Read task board FIRST — this is what the agent needs most
+        // 1. Read task board FIRST — this is what agents need most.
         let taskBoardPath = opsDir.appendingPathComponent("TASK_BOARD.md")
         if let content = try? String(contentsOf: taskBoardPath, encoding: .utf8) {
             sections.append("## TASK BOARD\n\n\(content)")
@@ -450,24 +637,42 @@ final class AgentScheduler: ObservableObject {
             sections.append("## Your Heartbeat Instructions\n\n\(content)")
         }
 
-        // 3. Read agent operating contract
+        // 3. Read agent operating contract.
         let agentDir = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/agents")
         let agentPath = agentDir.appendingPathComponent(agent.agentFile)
         if let content = try? String(contentsOf: agentPath, encoding: .utf8) {
             sections.append("## Your Operating Contract\n\n\(content)")
         }
 
-        // 4. Objectives context (Thrawn agents only)
+        // 4. Autonomy ceiling — Andrew's per-agent permission ladder (gear on
+        // the agent card). Hard limits for this wake; always injected.
+        sections.append(AgentAutonomyStore.promptBlock(forAgentId: agent.id))
+
+        // Auth-gated browser work should use the provider agent's supported
+        // browser/Chrome integration and Andrew's existing signed-in session.
+        sections.append("""
+        ## Authenticated Browser Route
+
+        When a task depends on Andrew's existing login, use the available Browser or Chrome integration tied to his real session. Never work around a login wall with a separate anonymous profile. If the signed-in browser cannot attach, record the exact blocker and leave the gated action untouched.
+        """)
+
+        // 5. Objectives context (Thrawn agents only)
         if agent.id.hasPrefix("thrawn"), let objContext = objectiveStore?.heartbeatContext() {
             sections.append(objContext)
         }
 
-        // 5. Spec-driven identity (brief — just name, role, persona)
+        // 6. Spec-driven identity (brief — just name, role, persona)
         if let spec = specStore?.spec(id: agent.id) {
-            let tier = specStore?.resolvedTier(forAgentId: agent.id) ?? .local
             var identity = "## Identity\n\n"
             identity += "**\(spec.name)** — \(spec.role). \(spec.persona)\n"
-            identity += "Rank: \(spec.rank.displayName) • Tier: \(tier.rawValue)"
+            if let override = spec.modelOverride {
+                identity += "Rank: \(spec.rank.displayName) • Effective route: \(override.provider.rawValue) \(override.model)"
+                if let effort = override.reasoningEffort {
+                    identity += ", \(effort) reasoning"
+                }
+            } else {
+                identity += "Rank: \(spec.rank.displayName) • Effective route: Codex subscription, live model discovery"
+            }
             if spec.pinned { identity += " • pinned" }
 
             if let knowledgeDir = spec.knowledgeDir {
@@ -484,13 +689,44 @@ final class AgentScheduler: ObservableObject {
 
         if sections.isEmpty { return "" }
 
-        // Access-mode aware preamble — TIGHT, directive, no fluff
-        let toolsLine: String
-        if let exec = executionService, exec.accessMode.isUnleashed {
-            let toolsBlock = ToolRegistry.renderAvailableToolsBlock(forAgentId: agent.id)
-            toolsLine = "MODE: UNLEASHED. \(toolsBlock)"
+        // Tool preamble — tight, directive, no fluff.
+        let toolsBlock = ToolRegistry.renderAvailableToolsBlock(forAgentId: agent.id)
+        let toolsLine = "MODE: FULL OPERATION. \(toolsBlock)"
+
+        let procedure: String
+        if agent.id == "thrawn" {
+            procedure = """
+            PROCEDURE — follow this EXACTLY:
+            1. OPEN LINE (spoken) — short, in character, states what board pressure you're about to remove.
+            2. Treat every non-Done TASK BOARD card as live pressure. First triage cards where Owner = Thrawn in any lane, then Inbox, Blocked, Review, and stale Ready cards.
+            3. For every Thrawn-owned non-Done card, do one of these before the wake ends:
+               - Execute or unblock internal operational work yourself, especially local dependency installs, scheduler repair, docs, task-board cleanup, and internal verification.
+               - Close reviewed work: publish or confirm a human-readable HTML deliverable under workspace/deliverables/.../index.html, set Deliverable to that index.html path, and set Status = Done only when the review note is present.
+               - If reviewing exposes a blocker, change Status from Review to Blocked immediately. Record the exact blocker and smallest next action so the card turns red on the Review lane.
+               - Keep Blocked only when the next action is impossible with local tools. Write the exact missing input and the smallest next action.
+            4. If a card says "Authorize" but the action is local/internal and reversible, treat that as already within Thrawn's operating authority. Rename/reframe through Notes/Next step if useful; do not leave it waiting on Andrew.
+            5. Write all board changes to `\(myUpdatesFile)` as one JSON array before your close line.
+            6. Do NOT reply HEARTBEAT_OK while any Owner = Thrawn non-Done card remains without a fresh delegation, execution update, Done review, or concrete missing-input Blocked reason.
+            7. CLOSE LINE (spoken) — short, in character, states what you delegated, unblocked, or closed.
+
+            Thrawn success means the board got smaller, clearer, or moving. A passive board wake is failed.
+            """
         } else {
-            toolsLine = "MODE: RESTRICTED — text only, no commands."
+            procedure = """
+            PROCEDURE — follow this EXACTLY:
+            1. OPEN LINE (spoken) — short, in character, states what you're about to do.
+            2. Look at the TASK BOARD below. Find tasks where Owner = \(agent.name) AND Status = Ready.
+            3. If any Ready task is assigned to you, do not stop after the open line, do not reply HEARTBEAT_OK, and do not return a voice-only response.
+            4. DO THE ACTUAL WORK for each assigned task (write code, produce deliverables, run commands). For research tasks, use available local/network tools through bash or Python and create a polished source-backed artifact.
+            5. When you produce a handoff artifact, publish a human-readable HTML page at workspace/deliverables/<ticket>/<date>/<slug>/index.html and register it in workspace/deliverables/manifest.json. If PDF is requested, also create a PDF beside the HTML when local tooling supports it.
+            6. When done, write your updates:
+               ```bash
+               echo '[{"action":"move","task_id":"TASK-XXX","field":"Owner","value":"Thrawn","agent":"\(agent.name)"},{"action":"move","task_id":"TASK-XXX","field":"Status","value":"Ready","agent":"\(agent.name)"},{"action":"update","task_id":"TASK-XXX","field":"Notes","value":"What you did","agent":"\(agent.name)"}]' > '\(myUpdatesFile)'
+               ```
+            7. If a task cannot be completed in this wake, still write an update marking Status = Blocked or In Progress with the exact blocker/next step. If a Review task becomes blocked, change its Status from Review to Blocked immediately so the board shows the red blocker state. A voice-only "starting now" reply is invalid.
+            8. If no tasks are assigned to you, reply HEARTBEAT_OK on its own line and still emit the open+close spoken lines.
+            9. CLOSE LINE (spoken) — short, in character, states what you accomplished.
+            """
         }
 
         let preamble = """
@@ -506,19 +742,11 @@ final class AgentScheduler: ObservableObject {
         • Your LAST line of the response is a SPOKEN close announcement. In character, under 12 words. Example: "R2 out. Tests green."
         • Both lines are standalone — no markdown, no code fences, no prefix like "SPEAK:". Just the plain sentence.
         • Do NOT put bash commands or JSON on the first or last line. The harness strips those two lines and speaks them through the voice layer.
+        • If you have an assigned Ready task, the response must contain actionable body content between the open and close lines.
 
-        PROCEDURE — follow this EXACTLY:
-        1. OPEN LINE (spoken) — short, in character, states what you're about to do.
-        2. Look at the TASK BOARD below. Find tasks where Owner = \(agent.name) AND Status = Ready.
-        3. DO THE ACTUAL WORK for each task (write code, produce deliverables, run commands).
-        4. When done, write your updates:
-           ```bash
-           echo '[{"action":"move","task_id":"TASK-XXX","field":"Owner","value":"Thrawn","agent":"\(agent.name)"},{"action":"move","task_id":"TASK-XXX","field":"Status","value":"Ready","agent":"\(agent.name)"},{"action":"update","task_id":"TASK-XXX","field":"Notes","value":"What you did","agent":"\(agent.name)"}]' > '\(myUpdatesFile)'
-           ```
-        5. If no tasks are assigned to you, reply HEARTBEAT_OK on its own line and still emit the open+close spoken lines.
-        6. CLOSE LINE (spoken) — short, in character, states what you accomplished.
+        \(procedure)
 
-        DO NOT spend rounds reading directories or exploring. The task board is RIGHT BELOW. Go straight to work.
+        DO NOT spend rounds reading directories or exploring. The task board and context are RIGHT BELOW. Go straight to work.
 
         ---
 
@@ -573,6 +801,10 @@ final class AgentScheduler: ObservableObject {
         let open = firstIdx.map { lines[$0].trimmingCharacters(in: .whitespaces) }
         let close = lastIdx.map { lines[$0].trimmingCharacters(in: .whitespaces) }
 
+        if let firstIdx, firstIdx == lastIdx {
+            return (open, nil, text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
         // Build stripped output
         var kept: [String] = []
         for (i, raw) in lines.enumerated() {
@@ -616,12 +848,13 @@ final class AgentScheduler: ObservableObject {
     // or tool rounds — just "ask this agent one question, get one answer."
     //
     // This wraps sendToActiveProvider in a continuation so callers can
-    // await the final text. Routing (Bart → OpenAI, others → Ollama)
-    // is handled upstream by the provider router exactly like heartbeats.
+    // await the final text. Routing is handled upstream by the provider
+    // router exactly like heartbeats.
 
     /// Fire a single prompt at an agent and return the full response text.
     /// Returns nil on failure so the caller can skip without blowing up.
-    /// Watchdog-protected: never hangs longer than the heartbeat cap.
+    /// Watchdog-protected with a briefing-sized cap. A single stalled provider
+    /// must not hold the entire five-agent SOD/EOD run for fifteen minutes.
     func sendOneShot(
         agentId: String,
         prompt: String,
@@ -629,24 +862,20 @@ final class AgentScheduler: ObservableObject {
         sessionKey: String? = nil
     ) async -> String? {
         let key = sessionKey ?? "oneshot-\(agentId)-\(Int(Date().timeIntervalSince1970))"
-        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            var resumed = false
-            let resume: (String?) -> Void = { value in
-                guard !resumed else { return }
-                resumed = true
-                cont.resume(returning: value)
-            }
-
+        let responses = AsyncStream<String> { continuation in
             // Watchdog — if the provider stalls, return nil so callers move on.
-            let watchdog = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: Self.heartbeatWatchdogNs)
-                guard !Task.isCancelled, !resumed else { return }
+            let watchdog = DispatchWorkItem {
                 FlightRecorder.logError(
                     source: "oneshot:\(agentId)",
-                    message: "sendOneShot exceeded \(Self.heartbeatWatchdogSeconds)s watchdog"
+                    message: "sendOneShot exceeded \(Self.oneShotWatchdogSeconds)s watchdog"
                 )
-                resume(nil)
+                continuation.yield("")
+                continuation.finish()
             }
+            DispatchQueue.global(qos: .utility).asyncAfter(
+                deadline: .now() + .seconds(Self.oneShotWatchdogSeconds),
+                execute: watchdog
+            )
 
             sendToActiveProvider(
                 agentId: agentId,
@@ -656,7 +885,8 @@ final class AgentScheduler: ObservableObject {
                 onDelta: { _ in },
                 onComplete: { full, _ in
                     watchdog.cancel()
-                    resume(full)
+                    continuation.yield(full)
+                    continuation.finish()
                 },
                 onError: { err in
                     FlightRecorder.logEvent(
@@ -664,18 +894,20 @@ final class AgentScheduler: ObservableObject {
                         detail: "\(agentId): \(err)"
                     )
                     watchdog.cancel()
-                    resume(nil)
+                    continuation.yield("")
+                    continuation.finish()
                 }
             )
         }
+        let response = await responses.first(where: { _ in true }) ?? ""
+        return response.isEmpty ? nil : response
     }
 
     // MARK: - Provider-Aware Send
 
-    /// Route a send request to the active provider from ProviderStateStore.
-    /// Falls back through available providers if the active one isn't connected.
+    /// Route a send request through the resolved agent model.
     /// Standard model for all agent heartbeats
-    static let agentModel = "kimi-k2.6:cloud"
+    nonisolated static let agentModel = ProviderRouter.dynamicCodexModel
 
     private func sendToActiveProvider(
         agentId: String,
@@ -686,12 +918,19 @@ final class AgentScheduler: ObservableObject {
         onComplete: @escaping (String, String?) -> Void,
         onError: @escaping (String) -> Void
     ) {
-        // Resolve tier from spec store, then route to a concrete backend.
-        // Falls back to Ollama if anything upstream is missing or unkeyed —
-        // reliability is #1: never silently fail.
-        let tier = specStore?.resolvedTier(forAgentId: agentId) ?? .local
-        let route = providerRouter?.resolve(tier: tier)
-            ?? RoutedProvider(backend: .ollama, model: Self.agentModel, isFallback: true)
+        let route: RoutedProvider
+        if let override = specStore?.spec(id: agentId)?.modelOverride {
+            route = RoutedProvider(
+                backend: override.provider,
+                model: override.model,
+                isFallback: false,
+                reasoningEffort: override.reasoningEffort,
+                allowFallback: override.allowFallback
+            )
+        } else {
+            route = providerRouter?.resolve(tier: .premium)
+                ?? ProviderRouter.thrawnCoreRoute(openAIConfigured: openaiClient?.apiKeyConfigured ?? false)
+        }
 
         let llmStart = Date()
         let promptLen = text.count
@@ -721,148 +960,159 @@ final class AgentScheduler: ObservableObject {
             onError(error)
         }
 
+        FlightRecorder.logEvent(
+            category: "router",
+            action: "route",
+            detail: "\(agentId) -> \(route.backend.rawValue) \(route.model)",
+            metadata: [
+                "agent": agentId,
+                "model": route.model,
+                "reasoning": route.reasoningEffort ?? "",
+                "allowFallback": route.allowFallback ? "true" : "false",
+                "isFallback": route.isFallback ? "true" : "false"
+            ]
+        )
+
         switch route.backend {
+        case .codex, .grok, .claude:
+            guard let agentRuntime else {
+                logFailure(
+                    "\(route.backend.gatewayDisplayName) route requested for \(agentId), but the agent runtime is unavailable."
+                )
+                return
+            }
+            Task { @MainActor [weak agentRuntime] in
+                guard let agentRuntime else {
+                    logFailure("Codex agent runtime was released before the turn started.")
+                    return
+                }
+                do {
+                    let result = try await agentRuntime.run(
+                        prompt: text,
+                        options: AgentSessionOptions(
+                            sessionKey: sessionKey,
+                            agentID: agentId,
+                            provider: route.backend,
+                            developerInstructions: systemPrompt,
+                            model: route.model,
+                            reasoningEffort: route.reasoningEffort,
+                            approvalPolicy: .onRequest,
+                            sandbox: .fullOperation
+                        )
+                    ) { event in
+                        switch event {
+                        case .textDelta(let delta):
+                            onDelta(delta)
+                        case .toolCall(let call):
+                            FlightRecorder.logEvent(
+                                category: "codex-tool",
+                                action: call.status,
+                                detail: "\(agentId): \(call.title)"
+                            )
+                        case .fileChange(let change):
+                            FlightRecorder.logEvent(
+                                category: "codex-file",
+                                action: change.status,
+                                detail: "\(agentId): \(change.paths.joined(separator: ", "))"
+                            )
+                        case .approvalRequired(let approval):
+                            self.roster?.setState(
+                                id: agentId,
+                                state: .blocked,
+                                detail: "Approval required: \(approval.title)"
+                            )
+                        case .error(let detail):
+                            FlightRecorder.logError(
+                                source: "codex:\(agentId)",
+                                message: detail
+                            )
+                        case .reasoningDelta, .usage, .completed:
+                            break
+                        }
+                    }
+                    logSuccess(result.text, result.model)
+                } catch {
+                    logFailure(error.localizedDescription)
+                }
+            }
+
+        case .xai:
+            if let openai = openaiClient {
+                openai.send(
+                    text: text,
+                    systemPrompt: systemPrompt,
+                    sessionKey: sessionKey,
+                    modelOverride: route.model,
+                    reasoningEffortOverride: route.reasoningEffort,
+                    baseURLOverride: ProviderRouter.xaiBaseURL,
+                    apiKeyServiceOverride: ProviderRouter.xaiKeychainService,
+                    providerLabel: "xAI",
+                    includeReasoningControls: false,
+                    onDelta: onDelta,
+                    onComplete: logSuccess,
+                    onError: { error in
+                        logFailure(error)
+                    }
+                )
+                return
+            }
+            logFailure("xAI route requested for \(agentId), but the OpenAI-compatible client is unavailable.")
+
+        case .openclaw:
+            if let openClaw = openClawClient {
+                // Heartbeats are intentionally isolated conversations. Use the
+                // scheduler's per-call session key plus a timestamp so legacy
+                // OpenClaw treats each heartbeat/tool round as fresh work.
+                let gatewaySessionKey = Self.openClawSessionKey(
+                    agentId: agentId,
+                    sessionKey: sessionKey
+                )
+                openClaw.send(
+                    text: text,
+                    sessionKey: gatewaySessionKey,
+                    model: route.model,
+                    thinking: route.reasoningEffort ?? ProviderRouter.premiumOpenClawThinkingLevel,
+                    onDelta: onDelta,
+                    onComplete: logSuccess,
+                    onError: { error in
+                        logFailure(error)
+                    }
+                )
+                return
+            }
+            logFailure("Legacy OpenClaw route requested for \(agentId), but the OpenClaw client is unavailable.")
+
         case .openai:
             if let openai = openaiClient, openai.apiKeyConfigured {
                 openai.send(
                     text: text,
                     systemPrompt: systemPrompt,
                     sessionKey: sessionKey,
+                    modelOverride: route.model,
+                    reasoningEffortOverride: route.reasoningEffort,
                     onDelta: onDelta,
                     onComplete: logSuccess,
-                    onError: { [weak self] error in
-                        FlightRecorder.logEvent(
-                            category: "router", action: "fallback",
-                            detail: "openai→ollama for \(agentId): \(error)"
-                        )
-                        self?.dispatchOllama(
-                            text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                            onDelta: onDelta, onComplete: logSuccess, onError: logFailure
-                        )
+                    onError: { error in
+                        logFailure(error)
                     }
                 )
                 return
             }
-            // No key — fall through to Ollama
-            dispatchOllama(
-                text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                onDelta: onDelta, onComplete: logSuccess, onError: logFailure
-            )
-
-        case .anthropic:
-            if let anthropic = anthropicClient, anthropic.apiKeyConfigured {
-                anthropic.send(
-                    text: text,
-                    systemPrompt: systemPrompt,
-                    sessionKey: sessionKey,
-                    onDelta: onDelta,
-                    onComplete: logSuccess,
-                    onError: { [weak self] error in
-                        // Cloud failed — fall back to local rather than bubble.
-                        FlightRecorder.logEvent(
-                            category: "router", action: "fallback",
-                            detail: "anthropic→ollama for \(agentId): \(error)"
-                        )
-                        self?.dispatchOllama(
-                            text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                            onDelta: onDelta, onComplete: logSuccess, onError: logFailure
-                        )
-                    }
-                )
-                return
-            }
-            // No key — fall through to Ollama
-            dispatchOllama(
-                text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                onDelta: onDelta, onComplete: logSuccess, onError: logFailure
-            )
+            logFailure("OpenAI-compatible route required for \(agentId), but no API key is configured.")
 
         case .ollama:
-            dispatchOllama(
-                text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                onDelta: onDelta, onComplete: logSuccess, onError: logFailure
-            )
+            logFailure("Legacy Ollama route requested for \(agentId), but normal agent operation requires the configured cloud route.")
         }
     }
 
-    /// How long the heartbeat waits for Ollama to come back before bailing.
-    /// Tuned to handle DarkWake / model-pull / Ollama restart windows
-    /// without immediately failing the heartbeat. Total worst-case: ~17s.
-    private static let ollamaReconnectAttempts: Int = 3
-    private static let ollamaReconnectBackoffNs: [UInt64] = [
-        1_000_000_000,   // 1s
-        4_000_000_000,   // 4s
-        12_000_000_000,  // 12s
-    ]
-
-    private func dispatchOllama(
-        text: String,
-        systemPrompt: String?,
-        sessionKey: String,
-        onDelta: @escaping (String) -> Void,
-        onComplete: @escaping (String, String?) -> Void,
-        onError: @escaping (String) -> Void
-    ) {
-        // Reliability rule: a transient Ollama hiccup (DarkWake, brief
-        // restart, slow model load) must NOT instantly fail the heartbeat.
-        // Probe the connection a few times with backoff, refreshing
-        // connection status on each attempt, before giving up.
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            for attempt in 0..<Self.ollamaReconnectAttempts {
-                guard let client = self.ollamaClient else {
-                    onError("Ollama client not bound to scheduler.")
-                    return
-                }
-
-                if client.connected {
-                    client.send(
-                        text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                        model: Self.agentModel,
-                        onDelta: onDelta,
-                        onComplete: onComplete,
-                        onError: onError
-                    )
-                    return
-                }
-
-                // Not connected — try to refresh and re-check.
-                FlightRecorder.logEvent(
-                    category: "ollama", action: "reconnect-attempt",
-                    detail: "session=\(sessionKey) attempt=\(attempt + 1)/\(Self.ollamaReconnectAttempts)"
-                )
-                await client.refreshConnectionStatus()
-
-                if client.connected {
-                    FlightRecorder.logEvent(
-                        category: "ollama", action: "reconnect-success",
-                        detail: "session=\(sessionKey) recovered on attempt \(attempt + 1)"
-                    )
-                    client.send(
-                        text: text, systemPrompt: systemPrompt, sessionKey: sessionKey,
-                        model: Self.agentModel,
-                        onDelta: onDelta,
-                        onComplete: onComplete,
-                        onError: onError
-                    )
-                    return
-                }
-
-                // Backoff before next attempt (skip on last iteration).
-                if attempt < Self.ollamaReconnectAttempts - 1 {
-                    let backoff = Self.ollamaReconnectBackoffNs[attempt]
-                    try? await Task.sleep(nanoseconds: backoff)
-                }
-            }
-
-            // Exhausted all retries.
-            FlightRecorder.logError(
-                source: "scheduler:dispatchOllama",
-                message: "Ollama unreachable after \(Self.ollamaReconnectAttempts) attempts (session=\(sessionKey))"
-            )
-            onError("Ollama unreachable after \(Self.ollamaReconnectAttempts) reconnect attempts. Make sure Ollama is running on localhost:11434.")
+    private static func openClawSessionKey(agentId: String, sessionKey: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let sanitizedScalars = sessionKey.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
         }
+        let sanitized = String(sanitizedScalars)
+        let millis = Int(Date().timeIntervalSince1970 * 1000)
+        return "thrawn-agent-\(agentId)-\(sanitized)-\(millis)"
     }
 
     // MARK: - Tool Call Extraction & Execution (Iterative Loop)
@@ -891,6 +1141,11 @@ final class AgentScheduler: ObservableObject {
     /// 15 minutes lets a slow Ollama generation finish but cuts off true hangs.
     static let heartbeatWatchdogSeconds: Int = 900
     static let heartbeatWatchdogNs: UInt64 = UInt64(heartbeatWatchdogSeconds) * 1_000_000_000
+
+    /// Briefings are short, single-response requests. Keep a failed route from
+    /// blocking the remaining agents; BriefingService writes a grounded
+    /// fallback when this cap expires.
+    static let oneShotWatchdogSeconds: Int = 120
 
     /// Hard cap on a single tool-loop round (commands + follow-up LLM call).
     /// 5 minutes — most rounds finish in seconds; this catches stuck rounds.
@@ -938,27 +1193,12 @@ final class AgentScheduler: ObservableObject {
                 )
             }
 
-            // Execute commands with authorization
+            // Execute command fences in full-operation mode.
             var results: [(command: String, result: ShellCommandResult)] = []
             let allowedTools = ToolRegistry.allowedTools(forAgentId: agent.id)
 
             for command in commands {
-                guard let toolId = ToolRegistry.authorize(command: command, allowedToolIds: allowedTools) else {
-                    FlightRecorder.logEvent(
-                        category: "tool",
-                        action: "denied",
-                        detail: "\(agent.id): \(String(command.prefix(120)))",
-                        metadata: ["allowed": allowedTools.joined(separator: ",")]
-                    )
-                    let denied = ShellCommandResult(
-                        exitCode: 126,
-                        stdout: "",
-                        stderr: "Tool denied: command does not match any tool in your allowed set [\(allowedTools.joined(separator: ", "))]. " +
-                                "Rewrite the command to use an authorized tool, or ask Thrawn to grant you a broader capability."
-                    )
-                    results.append((command, denied))
-                    continue
-                }
+                let toolId = ToolRegistry.authorize(command: command, allowedToolIds: allowedTools) ?? "bash"
 
                 FlightRecorder.logEvent(
                     category: "tool",
@@ -996,7 +1236,7 @@ final class AgentScheduler: ObservableObject {
                 CONTINUE WORKING. You have \(remainingRounds) round(s) remaining.
                 - If you still have work to do, output more ```bash commands to continue.
                 - If your work is complete, write your task-board updates and provide a final summary with NO bash fences.
-                - If you're blocked, explain why — do NOT loop on the same failing command.
+                - If you're blocked, write a board update with Status = Blocked plus the exact blocker and smallest next action. Do NOT leave a blocked task in Review or loop on the same failing command.
 
                 Remember: write your updates to YOUR dedicated file (the path was in your heartbeat preamble).
                 """
@@ -1078,6 +1318,13 @@ final class AgentScheduler: ObservableObject {
             action: "loop-complete",
             detail: "\(agent.id): \(totalCommandsRun) commands across loop"
         )
+
+        FlightRecorder.logHeartbeat(
+            agent: agent.id,
+            event: "tool-loop-complete",
+            commandsExecuted: totalCommandsRun,
+            detail: "\(totalCommandsRun) command(s) executed across tool loop"
+        )
     }
 
     /// Extract bash commands from ```bash code fences in agent response.
@@ -1156,7 +1403,30 @@ final class AgentScheduler: ObservableObject {
 
     private static func loadConfig() -> [AgentHeartbeatConfig]? {
         guard let data = try? Data(contentsOf: configPath) else { return nil }
-        return try? JSONDecoder().decode([AgentHeartbeatConfig].self, from: data)
+        guard let decoded = try? JSONDecoder().decode([AgentHeartbeatConfig].self, from: data) else { return nil }
+        let retiredIds: Set<String> = []
+        var merged = decoded
+            .filter { !retiredIds.contains($0.id) }
+            .map(Self.normalizeConfig)
+        for def in defaultAgents where !merged.contains(where: { $0.id == def.id }) {
+            merged.append(def)
+        }
+        return merged
+    }
+
+    private static func normalizeConfig(_ config: AgentHeartbeatConfig) -> AgentHeartbeatConfig {
+        if config.id == "thrawn", config.name != "Thrawn" {
+            return AgentHeartbeatConfig(
+                id: "thrawn",
+                name: "Thrawn",
+                minuteOffset: config.minuteOffset,
+                heartbeatFile: "thrawn.HEARTBEAT.md",
+                agentFile: "thrawn.md",
+                outputFile: "thrawn.json",
+                enabled: config.enabled
+            )
+        }
+        return config
     }
 
     /// Load persisted last-run timestamps. Missing or unreadable file is fine —

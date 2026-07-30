@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ThrawnNeonWidget: View {
+    @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -42,7 +44,7 @@ struct ThrawnNeonWidget: View {
                         .foregroundStyle(Color(red: 0.55, green: 0.82, blue: 0.95))
                         .shadow(color: Color(red: 0.55, green: 0.82, blue: 0.95).opacity(0.65), radius: 6)
 
-                    Text("powered by Claude")
+                    Text(agentRuntime.selectedModel?.displayName ?? "CODEX")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color(red: 0.65, green: 0.85, blue: 1.0))
                         .shadow(color: Color(red: 0.45, green: 0.75, blue: 0.95).opacity(0.60), radius: 7)

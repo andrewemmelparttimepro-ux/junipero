@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - Objectives View
 //
-// Top-level UI for the factory: select a playbook, provide input,
-// launch an objective, monitor progress. The factory never stops.
+// Top-level UI for explicit v2 objectives: select a playbook, provide input,
+// launch an objective, and monitor progress.
 
 struct ObjectivesView: View {
     @EnvironmentObject var objectiveStore: ObjectiveStore

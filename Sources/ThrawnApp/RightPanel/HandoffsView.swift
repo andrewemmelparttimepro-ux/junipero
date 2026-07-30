@@ -1,10 +1,9 @@
 import SwiftUI
 
-// MARK: - Handoffs View (Dex Layer)
+// MARK: - Handoffs View
 //
-// Twice-daily handoffs between Thrawn and Claude.
-// Morning = debrief + course correction.
-// Evening = debrief + one implemented improvement.
+// Historical internal review packets. This view is no longer linked from the
+// active V2 console, but remains compilable for migration compatibility.
 
 struct HandoffsView: View {
     @EnvironmentObject var handoffStore: HandoffStore
@@ -53,12 +52,12 @@ struct HandoffsView: View {
                 Image(systemName: "arrow.left.arrow.right.circle.fill")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.chissPrimary)
-                Text("DEX HANDOFF LAYER")
+                Text("INTERNAL REVIEW PACKETS")
                     .font(.system(size: 14, weight: .heavy, design: .serif))
                     .tracking(2)
                     .foregroundColor(.white.opacity(0.9))
             }
-            Text("Twice-daily handoffs between Thrawn and Claude. Morning debriefs run at 09:02. Evening implementation handoffs run at 17:02 and ship one concrete business improvement per day.")
+            Text("Historical review packets. Active V2 work now moves through the Flow Board and HTML deliverables.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.55))
         }

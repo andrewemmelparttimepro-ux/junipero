@@ -3,13 +3,36 @@ set -euo pipefail
 
 # ─── Thrawn Console — Build & Install as macOS .app ───
 # Builds the Swift package, packages it as a proper .app bundle,
-# and installs to ~/Applications so Spotlight can find it.
+# and installs to /Applications so Spotlight can find it.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/.build/release"
 APP_NAME="Thrawn"
-APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
+PACKAGE_ROOT="$(mktemp -d /tmp/thrawn-app-build.XXXXXX)"
+APP_BUNDLE="$PACKAGE_ROOT/$APP_NAME.app"
 INSTALL_DIR="/Applications"
+LOCAL_SIGNING_IDENTITY="${LOCAL_SIGNING_IDENTITY:-NDAI Local App Signing}"
+
+cleanup_package_root() {
+    rm -rf "$PACKAGE_ROOT"
+}
+trap cleanup_package_root EXIT
+
+sign_app_bundle() {
+    local bundle="$1"
+    find "$bundle" \( -name '.DS_Store' -o -name '._*' \) -delete 2>/dev/null || true
+    xattr -cr "$bundle" 2>/dev/null || true
+    xattr -dr com.apple.FinderInfo "$bundle" 2>/dev/null || true
+    xattr -dr 'com.apple.fileprovider.fpfs#P' "$bundle" 2>/dev/null || true
+    xattr -dr com.apple.ResourceFork "$bundle" 2>/dev/null || true
+    if ! security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" | grep -Fq "\"$LOCAL_SIGNING_IDENTITY\""; then
+        echo "Missing local code-signing identity: $LOCAL_SIGNING_IDENTITY" >&2
+        echo "Install the persistent local identity before building so Keychain permissions survive app updates." >&2
+        exit 1
+    fi
+    codesign --force --deep --sign "$LOCAL_SIGNING_IDENTITY" "$bundle"
+    codesign --verify --deep --strict "$bundle"
+}
 
 echo "═══════════════════════════════════════"
 echo "  THRAWN — Build & Install"
@@ -64,9 +87,19 @@ else
 fi
 
 # ── Step 6: Copy Resources bundle (if built by SPM) ──
-RESOURCE_BUNDLE="$BUILD_DIR/ThrawnApp_ThrawnApp.bundle"
-if [ -d "$RESOURCE_BUNDLE" ]; then
-    cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
+RESOURCE_BUNDLE=""
+for candidate in \
+    "$BUILD_DIR/ThrawnApp_ThrawnApp.bundle" \
+    "$SCRIPT_DIR/.build/arm64-apple-macosx/release/ThrawnConsole_ThrawnApp.bundle" \
+    "$SCRIPT_DIR/.build/x86_64-apple-macosx/release/ThrawnConsole_ThrawnApp.bundle"
+do
+    if [ -d "$candidate" ]; then
+        RESOURCE_BUNDLE="$candidate"
+        break
+    fi
+done
+if [ -n "$RESOURCE_BUNDLE" ]; then
+    ditto --norsrc --noextattr "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
     echo "  ✓ Resources bundle copied"
 fi
 
@@ -79,23 +112,27 @@ fi
 # every time, sandbox or no sandbox.
 OPSBUNDLE_SRC="$SCRIPT_DIR/OpsBundle"
 if [ -d "$OPSBUNDLE_SRC" ]; then
-    cp -R "$OPSBUNDLE_SRC" "$APP_BUNDLE/Contents/Resources/OpsBundle"
+    ditto --norsrc --noextattr "$OPSBUNDLE_SRC" "$APP_BUNDLE/Contents/Resources/OpsBundle"
     echo "  ✓ OpsBundle bundled ($(find "$OPSBUNDLE_SRC" -type f | wc -l | tr -d ' ') files)"
 else
     echo "  ⚠ No OpsBundle source found at $OPSBUNDLE_SRC — runtime will fall back to dev-tree lookup"
 fi
 
-# ── Step 7: Ad-hoc code sign ──
+# ── Step 7: Stable local code sign ──
 echo "▸ Code signing..."
-codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
-echo "  ✓ Code signed (ad-hoc)"
+sign_app_bundle "$APP_BUNDLE"
+echo "  ✓ Code signed (stable local identity)"
 
-# ── Step 8: Install to ~/Applications ──
+# ── Step 8: Install to /Applications ──
 echo "▸ Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 rm -rf "$INSTALL_DIR/$APP_NAME.app"
-cp -R "$APP_BUNDLE" "$INSTALL_DIR/$APP_NAME.app"
+ditto --norsrc --noextattr "$APP_BUNDLE" "$INSTALL_DIR/$APP_NAME.app"
 echo "  ✓ Installed to $INSTALL_DIR/$APP_NAME.app"
+
+echo "▸ Verifying installed app signature..."
+sign_app_bundle "$INSTALL_DIR/$APP_NAME.app"
+echo "  ✓ Installed signature verified"
 
 # ── Step 9: Touch Spotlight index ──
 echo "▸ Updating Spotlight index..."

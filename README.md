@@ -1,103 +1,34 @@
-# Junipero
+# Thrawn Console
 
-A native macOS SwiftUI chat client for [OpenClaw](https://openclaw.ai).
+Thrawn 2.1 is a native macOS command app led by Thrawn with a four-agent specialist stable.
 
-## Overview
+## Runtime
 
-Junipero is a clean, fast macOS app that interfaces with the OpenClaw gateway. It features:
+- Primary route: the signed-in Codex CLI, launched as `codex app-server`.
+- Models and supported reasoning levels come from the live `model/list` catalog. Thrawn does not pin the subscription route to a model slug.
+- Command threads, specialist chats, and agent heartbeats each map to persisted Codex threads and receive structured streamed tool, file, usage, and approval events.
+- Codex owns ChatGPT/API authentication and refreshes its own credentials. Thrawn persists only provider-neutral session metadata and Codex thread ids.
+- xAI, OpenAI-compatible, OpenClaw, and Ollama clients remain explicit fallback adapters; they are not silent replacements for the primary route.
+- Active owners: Andrew, Thrawn, Samwell Tarly, Sir Davos, Dwight, and Steven.
+- Stable: Dwight routes; Samwell owns SandPro OMP; Sir Davos owns Hit Zero; Steven owns Spas 360; Thrawn reviews and leads.
+- Future agents require explicit versioned specs, tools, cadence, and review standards.
+- Normal operation has no silent Ollama or local fallback.
+- Authenticated browser work uses the provider agent's supported Browser/Chrome integration and Andrew's existing signed-in session.
 
-- **Two-panel layout** — left panel with analog clock + Bitcoin widget, right panel with threaded chat
-- **Thread management** — create, browse, and continue conversations
-- **Real-time streaming** — live response streaming from OpenClaw
-- **Native macOS feel** — built with SwiftUI, targets macOS 13+
+## Provider setup
 
-## Structure
-
-```
-Sources/JuniperoApp/
-├── JuniperoApp.swift          # App entry point
-├── ContentView.swift          # Root layout
-├── LeftPanel/
-│   ├── LeftPanelView.swift
-│   ├── AnalogClockView.swift
-│   └── BitcoinWidget.swift
-├── RightPanel/
-│   ├── RightPanelView.swift
-│   ├── ThreadListView.swift
-│   ├── ThreadDetailView.swift
-│   ├── ThreadCard.swift
-│   └── ChatInputView.swift
-└── Models/
-    ├── Thread.swift
-    ├── ThreadStore.swift
-    ├── OpenClawClient.swift
-    └── ChatDiagnostics.swift
+```bash
+codex login
+codex login status
 ```
 
-## Requirements
-
-- macOS 13+
-- Xcode 15+ or Swift 5.9+
-- OpenClaw gateway running locally
+Thrawn discovers the executable from `THRAWN_CODEX_PATH`, the ChatGPT app bundle, or `PATH`. The native app is the persistent runtime machine and therefore uses the Developer ID/local distribution path rather than a browser-only or Mac App Store sandbox.
 
 ## Build
 
-Open in Xcode or build via Swift Package Manager:
-
 ```bash
 swift build
-swift run
+./build-app.sh
 ```
 
-## Local Distro (Universal + Apple-style DMG)
-
-Build a clean desktop distro folder with:
-- universal `Junipero.app` (Intel + Apple Silicon)
-- drag-to-Applications `Junipero.dmg` (includes `Applications` alias)
-- checksums and architecture report
-
-```bash
-./scripts/build-local-distro.sh
-```
-
-Output:
-- `~/Desktop/junipero_distro`
-- `~/Desktop/junipero-distro` (optional copy target for handoff)
-
-The packaged app includes Sparkle feed metadata (`SUFeedURL`) so in-app update checks can run.
-
-## Release (Signed + Notarized)
-
-See [RELEASE_SIGNING.md](RELEASE_SIGNING.md) for end-to-end macOS signing/notarization.
-
-Once credentials are configured:
-
-```bash
-export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
-export NOTARY_PROFILE="junipero-notary"
-export APPCAST_URL="https://raw.githubusercontent.com/andrewemmelparttimepro-ux/junipero/main/appcast.xml"
-./scripts/release-macos.sh
-```
-
-## Publish In-App Updates (Sparkle)
-
-To make `Check for Updates` install the latest build, publish via:
-
-```bash
-export DEVELOPER_ID_APP_CERT="Developer ID Application: Your Name (TEAMID)"
-export NOTARY_PROFILE="junipero-notary"
-export SPARKLE_PUBLIC_ED_KEY="<Sparkle public key>"
-export SPARKLE_PRIVATE_KEY_FILE="$HOME/.config/junipero/sparkle_private_ed25519.pem"
-
-VERSION=1.0.1 ./scripts/publish-sparkle-update.sh
-```
-
-This script:
-- builds and notarizes release artifacts
-- generates signed `appcast.xml`
-- commits/pushes appcast to `main`
-- uploads update assets to the GitHub release tag
-
-## License
-
-Private — Andrew Emmel / BoredRoom
+The installer writes `/Applications/Thrawn.app`.

@@ -1,27 +1,28 @@
 import Foundation
 import SwiftUI
 
-// MARK: - Dex Handoff System
+// MARK: - Internal Review Packet System
 //
-// The "dex" layer: twice-daily handoff between Thrawn and Claude.
+// Dormant packet generator retained for internal diagnostics and historical
+// migration compatibility. It is no longer exposed in the active Thrawn UI.
 //
 //  Morning handoff  (09:00): Thrawn debriefs on overnight work.
-//                            Claude reviews, suggests course corrections.
+//                            reviewer notes course corrections.
 //  Evening handoff  (17:00): Thrawn debriefs on today's work AND requests
-//                            Claude to implement ONE business-improving change.
+//                            one business-improving change.
 //
 // The handoff report is generated from FlightRecorder logs + agent outputs
 // + deliverables + objective progress. It is written to:
 //   ~/Library/Application Support/Thrawn/workspace/handoffs/YYYY-MM-DD-{morning|evening}.md
 //
-// Claude's scheduled task picks these up, analyzes, and (on evening) commits
-// one concrete improvement. Claude then drops a response report next to it.
+// The active V2 system favors Flow Board cards and HTML deliverables instead
+// of scheduled review packets.
 //
 // This closes the loop: the factory runs 24/7, and a human-level reviewer
 // audits it twice a day AND makes one improvement per day.
 
 enum HandoffKind: String, Codable, CaseIterable {
-    case morning   // Debrief only — course correction from Claude
+    case morning   // Debrief only
     case evening   // Debrief + implementation request
 
     var displayName: String { self == .morning ? "Morning Debrief" : "Evening Implementation" }
@@ -30,9 +31,9 @@ enum HandoffKind: String, Codable, CaseIterable {
 }
 
 enum HandoffStatus: String, Codable {
-    case pending       // Generated, waiting for Claude
-    case reviewed      // Claude reviewed (morning flow)
-    case implemented   // Claude implemented the change (evening flow)
+    case pending       // Generated, waiting for review
+    case reviewed      // Reviewed
+    case implemented   // Implemented
     case stale         // Never picked up
 }
 
@@ -42,7 +43,7 @@ struct Handoff: Identifiable, Codable {
     let createdAt: Date
     var status: HandoffStatus
     var reportPath: String         // Markdown file on disk
-    var responsePath: String?      // Claude's response after review
+    var responsePath: String?      // Response after review
     var summary: String            // Short one-line summary
     var metrics: HandoffMetrics
 
@@ -170,7 +171,7 @@ final class HandoffStore: ObservableObject {
             metadata: ["kind": kind.rawValue, "path": reportURL.path]
         )
 
-        // Drop a pointer file so Claude's cron can find the latest
+        // Drop a pointer file for the latest packet.
         writeLatestPointer(handoff: handoff)
 
         // Re-score every agent and retire ephemerals at task budget.
@@ -180,7 +181,7 @@ final class HandoffStore: ObservableObject {
         return handoff
     }
 
-    /// Mark a handoff as reviewed/implemented by Claude.
+    /// Mark a packet as reviewed or implemented.
     /// Called when a response file appears in handoffs dir.
     func markReviewed(_ id: String, responsePath: String, implemented: Bool) {
         guard let idx = handoffs.firstIndex(where: { $0.id == id }) else { return }
@@ -194,7 +195,12 @@ final class HandoffStore: ObservableObject {
         )
     }
 
-    /// Scan handoffs dir for Claude response files and update statuses.
+    func resetToEmpty() {
+        handoffs = []
+        save()
+    }
+
+    /// Scan packet directory for response files and update statuses.
     func scanForResponses() {
         guard let files = try? fm.contentsOfDirectory(at: handoffsDir, includingPropertiesForKeys: nil) else { return }
         for h in handoffs where h.status == .pending {
@@ -225,7 +231,7 @@ final class HandoffStore: ObservableObject {
         if let store = objectiveStore {
             let active = store.activeObjectives
             if active.isEmpty {
-                objectiveSection += "_No user-defined objectives. Running NDAI fallback protocol._\n\n"
+                objectiveSection += "_No active objectives. Thrawn 2.0 is standing by._\n\n"
             } else {
                 for obj in active {
                     let pct = Int(obj.progressPercent)
@@ -263,7 +269,7 @@ final class HandoffStore: ObservableObject {
                 return created > date.addingTimeInterval(-24 * 3600)
             }
             if recent.isEmpty {
-                deliverables += "_No deliverables produced in the last 24 hours. Claude should infer impact from work logs._\n\n"
+                deliverables += "_No deliverables produced in the last 24 hours. Infer impact from work logs._\n\n"
             } else {
                 for f in recent.prefix(20) {
                     deliverables += "- `\(f.lastPathComponent)`\n"
@@ -274,12 +280,12 @@ final class HandoffStore: ObservableObject {
             deliverables += "_Deliverables directory not yet created._\n\n"
         }
 
-        // Kind-specific instruction block for Claude
-        let claudeInstructions: String
+        // Kind-specific instruction block for a human or internal reviewer.
+        let reviewInstructions: String
         switch kind {
         case .morning:
-            claudeInstructions = """
-            ## Instructions for Claude
+            reviewInstructions = """
+            ## Review Instructions
 
             This is the **morning debrief**. Your job:
             1. Read the metrics and agent output summaries above.
@@ -297,8 +303,8 @@ final class HandoffStore: ObservableObject {
             6. Do NOT implement changes at this handoff. Save implementation for the evening handoff.
             """
         case .evening:
-            claudeInstructions = """
-            ## Instructions for Claude
+            reviewInstructions = """
+            ## Review Instructions
 
             This is the **evening implementation handoff**. Your job:
             1. Read the metrics, outputs, and deliverables above.
@@ -362,7 +368,7 @@ final class HandoffStore: ObservableObject {
 
         ---
 
-        \(claudeInstructions)
+        \(reviewInstructions)
 
         ---
 

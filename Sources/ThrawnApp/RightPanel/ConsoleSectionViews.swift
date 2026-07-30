@@ -1,71 +1,30 @@
 import SwiftUI
 
-struct ConsoleSectionSwitcher: View {
-    @EnvironmentObject var nav: ConsoleNavigationStore
-
-    private let sections = ConsoleSection.allCases
-    private var topRow: [ConsoleSection] { Array(sections.prefix(4)) }
-    private var bottomRow: [ConsoleSection] { Array(sections.dropFirst(4)) }
-
-    var body: some View {
-        VStack(spacing: 6) {
-            sectionRow(topRow)
-            sectionRow(bottomRow)
-        }
-    }
-
-    private func sectionRow(_ items: [ConsoleSection]) -> some View {
-        HStack(spacing: 6) {
-            ForEach(items) { section in
-                Button { nav.selectedSection = section; nav.dismissAgent() } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: section.icon)
-                            .font(.system(size: 10, weight: .bold))
-                        Text(section.rawValue)
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundColor(nav.selectedSection == section ? .white : Color.white.opacity(0.55))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(
-                        Capsule()
-                            .fill(nav.selectedSection == section ? Color.chissDeep : Color.white.opacity(0.05))
-                            .overlay(
-                                Capsule().stroke(
-                                    nav.selectedSection == section ? Color.chissPrimary.opacity(0.55) : Color.clear,
-                                    lineWidth: 1
-                                )
-                            )
-                    )
-                    .shadow(color: nav.selectedSection == section ? Color.chissPrimary.opacity(0.20) : .clear, radius: 6)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-}
-
 struct ConsoleSectionBody: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
     @EnvironmentObject var threadStore: ThreadStore
     @EnvironmentObject var roster: AgentRosterStore
 
     var body: some View {
-        // 3D memory graph takes priority when active
-        if nav.showMemoryGraph {
+        // The Citadel takes priority when active
+        if nav.showCitadel {
+            CitadelView()
+        // 3D memory graph remains available as an internal diagnostics surface
+        } else if nav.showMemoryGraph {
             MemoryGraphView()
         // If a specialist agent is selected, show their dedicated chat session
         } else if let agentId = nav.selectedAgentId,
            let agent = roster.agents.first(where: { $0.id == agentId }) {
             SpecialistChatView(agent: agent)
+        } else if let board = nav.selectedProjectBoard {
+            ProductBoardView(board: board)
+                .id(board)
         } else {
             switch nav.selectedSection {
             case .command:
                 CommandTabView()
             case .objectives:
                 ObjectivesView()
-            case .handoffs:
-                HandoffsView()
             case .briefings:
                 BriefingsView()
             case .agents:
@@ -159,11 +118,6 @@ struct SpecialistChatView: View {
     private func agentInitial(for agent: AgentStatus) -> String {
         switch agent.id {
         case "thrawn":  return "T"
-        case "r2d2":    return "R2"
-        case "c3po":    return "3P"
-        case "quigon":  return "QG"
-        case "lando":   return "L"
-        case "boba":    return "BF"
         default:        return String(agent.name.prefix(1))
         }
     }

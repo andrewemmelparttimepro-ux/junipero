@@ -8,8 +8,7 @@ import SwiftUI
 // Thrawn reads active objectives on every heartbeat, decomposes them
 // into task board items, and tracks progress toward completion.
 //
-// The factory never stops: if no objectives exist, Thrawn falls back
-// to the NDAI improvement protocol.
+// V2 starts clean: objectives are optional, explicit work containers.
 
 // MARK: - Playbook Definition
 
@@ -73,13 +72,56 @@ struct Objective: Identifiable, Codable {
 
 enum PlaybookLibrary {
     static let all: [Playbook] = [
-        competitiveAnalysis,
-        marketResearch,
-        contentPipeline,
-        productAudit,
-        leadGeneration,
-        ndaiImprovement,
+        thrawnTask,
+        revenueStream,
     ]
+
+    // ── Revenue Stream (perpetual, one objective per business) ──
+    // The standing work container for a business the stable services.
+    // Thrawn decomposes the current phase into board cards for the phase's
+    // agent; the Pipeline/Grow phases are intentionally long-lived so the
+    // flow board always shows live, attributable work per business.
+    static let revenueStream = Playbook(
+        id: "revenue-stream",
+        name: "Revenue Stream",
+        icon: "arrow.triangle.2.circlepath.circle.fill",
+        description: "Perpetual per-business work container. Baseline the account, keep a live pipeline of evidence-cited tasks on the flow board, execute growth work, and review weekly. Never runs dry: every wake, the lead derives next actions from signals, proofs, Clarity, and the objective notes.",
+        inputLabel: "Business Name",
+        inputPlaceholder: "e.g. SandPro OMP, Hit Zero, Spas 360",
+        phases: [
+            PlaybookPhase(name: "Baseline", agent: "Lead", description: "Audit the current account state for {{INPUT}}: product health, open commitments, receivables, contacts, and instrumentation. Bring the citadel page current with proof citations.", taskTemplate: "{{INPUT}}: baseline account state and citadel page", estimatedTasks: 2),
+            PlaybookPhase(name: "Pipeline", agent: "Lead", description: "Decompose the objective notes, routed signals, proof verdicts, and Clarity data for {{INPUT}} into concrete next-action cards. Every card cites its source.", taskTemplate: "{{INPUT}}: build task pipeline from evidence", estimatedTasks: 4),
+            PlaybookPhase(name: "Grow", agent: "Lead", description: "Execute the pipeline for {{INPUT}} and file weekly evidence-cited improvement suggestions (max 3/week).", taskTemplate: "{{INPUT}}: execute pipeline and grow the stream", estimatedTasks: 6),
+            PlaybookPhase(name: "Review", agent: "Thrawn", description: "Review {{INPUT}} deliverables against the Usability Contract, close what is Done, and surface what needs Andrew.", taskTemplate: "{{INPUT}}: review and close completed work", estimatedTasks: 2),
+        ]
+    )
+
+    static let thrawnTask = Playbook(
+        id: "thrawn-task",
+        name: "Thrawn Task",
+        icon: "bolt.fill",
+        description: "A one-agent objective for Thrawn 2.0. Thrawn clarifies the target, creates the smallest useful task set, executes locally where possible, and reviews completion.",
+        inputLabel: "Objective",
+        inputPlaceholder: "e.g. clean up a repo, verify an app, draft a briefing",
+        phases: [
+            PlaybookPhase(name: "Define", agent: "Thrawn", description: "Clarify the target, constraints, and Done standard for {{INPUT}}.", taskTemplate: "Define {{INPUT}} objective and Done standard", estimatedTasks: 1),
+            PlaybookPhase(name: "Execute", agent: "Thrawn", description: "Perform the local work or write the concrete blocked next step for {{INPUT}}.", taskTemplate: "Execute {{INPUT}}", estimatedTasks: 3),
+            PlaybookPhase(name: "Review", agent: "Thrawn", description: "Verify output, attach deliverables when relevant, and close only after review.", taskTemplate: "Review and close {{INPUT}}", estimatedTasks: 1),
+        ]
+    )
+
+    static let productSentinel = Playbook(
+        id: "legacy-product-proof",
+        name: "Legacy Product Proof",
+        icon: "checkmark.shield.fill",
+        description: "Dormant legacy product proof template with screenshots, logs, verdicts, and a rolling operating brief.",
+        inputLabel: "Product or Focus",
+        inputPlaceholder: "e.g. all products, Cyclops, release smoke",
+        phases: [
+            PlaybookPhase(name: "Proof Capture", agent: "Thrawn", description: "Run proof capture and field inspection for {{INPUT}}.", taskTemplate: "Capture proof for {{INPUT}}", estimatedTasks: 1),
+            PlaybookPhase(name: "Proof Synthesis", agent: "Thrawn", description: "Update local context from proof evidence for {{INPUT}}.", taskTemplate: "Synthesize proof for {{INPUT}}", estimatedTasks: 1),
+        ]
+    )
 
     // ── Competitive Analysis ──
     static let competitiveAnalysis = Playbook(
@@ -92,56 +134,56 @@ enum PlaybookLibrary {
         phases: [
             PlaybookPhase(
                 name: "Discovery & Landscape",
-                agent: "Qui-Gon",
+                agent: "Thrawn",
                 description: "Research the target company: what they do, founding story, funding, team size, recent news. Identify their top 3-5 direct competitors. Map the competitive landscape.",
                 taskTemplate: "Research {{INPUT}} — company overview, funding, team, recent news",
                 estimatedTasks: 3
             ),
             PlaybookPhase(
                 name: "Product & Pricing Analysis",
-                agent: "Qui-Gon",
+                agent: "Thrawn",
                 description: "Deep-dive on {{INPUT}}'s product: features, pricing tiers, free vs paid, integrations, API, platform support. Compare with each identified competitor.",
                 taskTemplate: "Analyze {{INPUT}} product features and pricing vs competitors",
                 estimatedTasks: 4
             ),
             PlaybookPhase(
                 name: "Marketing & Content Audit",
-                agent: "Lando",
+                agent: "Thrawn",
                 description: "Analyze {{INPUT}}'s marketing: website messaging, blog content strategy, social media presence, SEO positioning, ad spend signals, brand voice.",
                 taskTemplate: "Audit {{INPUT}} marketing channels and content strategy",
                 estimatedTasks: 4
             ),
             PlaybookPhase(
                 name: "Technical Assessment",
-                agent: "R2-D2",
+                agent: "Thrawn",
                 description: "Investigate {{INPUT}}'s tech stack (builtwith, job postings, GitHub repos), API quality, developer experience, infrastructure choices.",
                 taskTemplate: "Assess {{INPUT}} technical stack and developer experience",
                 estimatedTasks: 3
             ),
             PlaybookPhase(
                 name: "Data Synthesis",
-                agent: "C-3PO",
+                agent: "Thrawn",
                 description: "Compile all research into structured datasets: feature comparison matrix, pricing comparison table, SWOT analysis, market positioning map.",
                 taskTemplate: "Synthesize {{INPUT}} competitive data into structured analysis",
                 estimatedTasks: 3
             ),
             PlaybookPhase(
                 name: "QA & Fact Check",
-                agent: "Boba",
+                agent: "Thrawn",
                 description: "Validate all claims, check for outdated info, verify pricing, confirm feature accuracy. Flag anything unverifiable.",
                 taskTemplate: "Validate {{INPUT}} competitive analysis for accuracy",
                 estimatedTasks: 2
             ),
             PlaybookPhase(
                 name: "Strategic Recommendations",
-                agent: "Lando",
+                agent: "Thrawn",
                 description: "Based on the full analysis, draft strategic recommendations: differentiation opportunities, messaging angles, feature gaps to exploit, market positioning strategy.",
                 taskTemplate: "Draft strategic recommendations from {{INPUT}} analysis",
                 estimatedTasks: 2
             ),
             PlaybookPhase(
                 name: "Final Report",
-                agent: "C-3PO",
+                agent: "Thrawn",
                 description: "Compile everything into a polished final report with executive summary, detailed sections, data tables, and appendices.",
                 taskTemplate: "Compile final {{INPUT}} competitive analysis report",
                 estimatedTasks: 1
@@ -158,12 +200,12 @@ enum PlaybookLibrary {
         inputLabel: "Market / Industry",
         inputPlaceholder: "e.g. AI Code Assistants, EdTech for K-12",
         phases: [
-            PlaybookPhase(name: "Market Definition", agent: "Qui-Gon", description: "Define the market boundaries, key segments, and adjacent markets for {{INPUT}}.", taskTemplate: "Define market boundaries and segments for {{INPUT}}", estimatedTasks: 2),
-            PlaybookPhase(name: "Player Mapping", agent: "Qui-Gon", description: "Identify all significant players in {{INPUT}}: incumbents, challengers, emerging startups.", taskTemplate: "Map all players in {{INPUT}} market", estimatedTasks: 3),
-            PlaybookPhase(name: "Customer Research", agent: "Lando", description: "Analyze customer segments, buyer personas, pain points, and purchase drivers in {{INPUT}}.", taskTemplate: "Research {{INPUT}} customer segments and personas", estimatedTasks: 3),
-            PlaybookPhase(name: "Sizing & Trends", agent: "C-3PO", description: "Estimate TAM/SAM/SOM for {{INPUT}}. Identify growth trends, inflection points, regulatory factors.", taskTemplate: "Size {{INPUT}} market and identify trends", estimatedTasks: 2),
-            PlaybookPhase(name: "Channel Analysis", agent: "Lando", description: "Map distribution and marketing channels that work in {{INPUT}}: SEO, paid, PLG, sales-led, partnerships.", taskTemplate: "Analyze distribution channels for {{INPUT}}", estimatedTasks: 2),
-            PlaybookPhase(name: "Validation & Report", agent: "Boba", description: "Cross-check all data, validate claims, compile into final market research report.", taskTemplate: "Validate and compile {{INPUT}} market research report", estimatedTasks: 2),
+            PlaybookPhase(name: "Market Definition", agent: "Thrawn", description: "Define the market boundaries, key segments, and adjacent markets for {{INPUT}}.", taskTemplate: "Define market boundaries and segments for {{INPUT}}", estimatedTasks: 2),
+            PlaybookPhase(name: "Player Mapping", agent: "Thrawn", description: "Identify all significant players in {{INPUT}}: incumbents, challengers, emerging startups.", taskTemplate: "Map all players in {{INPUT}} market", estimatedTasks: 3),
+            PlaybookPhase(name: "Customer Research", agent: "Thrawn", description: "Analyze customer segments, buyer personas, pain points, and purchase drivers in {{INPUT}}.", taskTemplate: "Research {{INPUT}} customer segments and personas", estimatedTasks: 3),
+            PlaybookPhase(name: "Sizing & Trends", agent: "Thrawn", description: "Estimate TAM/SAM/SOM for {{INPUT}}. Identify growth trends, inflection points, regulatory factors.", taskTemplate: "Size {{INPUT}} market and identify trends", estimatedTasks: 2),
+            PlaybookPhase(name: "Channel Analysis", agent: "Thrawn", description: "Map distribution and marketing channels that work in {{INPUT}}: SEO, paid, PLG, sales-led, partnerships.", taskTemplate: "Analyze distribution channels for {{INPUT}}", estimatedTasks: 2),
+            PlaybookPhase(name: "Validation & Report", agent: "Thrawn", description: "Cross-check all data, validate claims, compile into final market research report.", taskTemplate: "Validate and compile {{INPUT}} market research report", estimatedTasks: 2),
         ]
     )
 
@@ -176,11 +218,11 @@ enum PlaybookLibrary {
         inputLabel: "Brand / Topic Focus",
         inputPlaceholder: "e.g. NDAI, Thrawn Console, AI Agents",
         phases: [
-            PlaybookPhase(name: "Keyword & Topic Research", agent: "Qui-Gon", description: "Research SEO keywords, trending topics, and content gaps for {{INPUT}}.", taskTemplate: "Research keywords and content opportunities for {{INPUT}}", estimatedTasks: 3),
-            PlaybookPhase(name: "Content Calendar", agent: "C-3PO", description: "Create a structured content calendar from the research. Prioritize by impact and difficulty.", taskTemplate: "Build content calendar for {{INPUT}}", estimatedTasks: 1),
-            PlaybookPhase(name: "Content Drafting", agent: "Lando", description: "Draft articles, posts, and copy based on the content calendar for {{INPUT}}.", taskTemplate: "Draft content pieces for {{INPUT}}", estimatedTasks: 8),
-            PlaybookPhase(name: "QA & Editing", agent: "Boba", description: "Review all drafted content for quality, accuracy, tone consistency, and brand alignment.", taskTemplate: "Review and edit {{INPUT}} content drafts", estimatedTasks: 4),
-            PlaybookPhase(name: "Final Assembly", agent: "C-3PO", description: "Format all approved content for publishing. Add metadata, images specs, internal links.", taskTemplate: "Finalize {{INPUT}} content for publishing", estimatedTasks: 2),
+            PlaybookPhase(name: "Keyword & Topic Research", agent: "Thrawn", description: "Research SEO keywords, trending topics, and content gaps for {{INPUT}}.", taskTemplate: "Research keywords and content opportunities for {{INPUT}}", estimatedTasks: 3),
+            PlaybookPhase(name: "Content Calendar", agent: "Thrawn", description: "Create a structured content calendar from the research. Prioritize by impact and difficulty.", taskTemplate: "Build content calendar for {{INPUT}}", estimatedTasks: 1),
+            PlaybookPhase(name: "Content Drafting", agent: "Thrawn", description: "Draft articles, posts, and copy based on the content calendar for {{INPUT}}.", taskTemplate: "Draft content pieces for {{INPUT}}", estimatedTasks: 8),
+            PlaybookPhase(name: "QA & Editing", agent: "Thrawn", description: "Review all drafted content for quality, accuracy, tone consistency, and brand alignment.", taskTemplate: "Review and edit {{INPUT}} content drafts", estimatedTasks: 4),
+            PlaybookPhase(name: "Final Assembly", agent: "Thrawn", description: "Format all approved content for publishing. Add metadata, images specs, internal links.", taskTemplate: "Finalize {{INPUT}} content for publishing", estimatedTasks: 2),
         ]
     )
 
@@ -193,11 +235,11 @@ enum PlaybookLibrary {
         inputLabel: "Product / Repo Name",
         inputPlaceholder: "e.g. thrawn-console, ndai.dev",
         phases: [
-            PlaybookPhase(name: "Architecture Review", agent: "R2-D2", description: "Analyze the codebase structure, dependencies, and architectural patterns of {{INPUT}}.", taskTemplate: "Review {{INPUT}} architecture and code structure", estimatedTasks: 3),
-            PlaybookPhase(name: "UX Audit", agent: "Lando", description: "Walk through {{INPUT}} from a user perspective. Document friction points, confusing flows, missing features.", taskTemplate: "Audit {{INPUT}} user experience and flows", estimatedTasks: 3),
-            PlaybookPhase(name: "Quality Analysis", agent: "Boba", description: "Assess {{INPUT}} test coverage, error handling, edge cases, and known bugs.", taskTemplate: "Assess {{INPUT}} quality and test coverage", estimatedTasks: 3),
-            PlaybookPhase(name: "Performance & Security", agent: "R2-D2", description: "Check {{INPUT}} for performance bottlenecks, security surface, and infrastructure concerns.", taskTemplate: "Analyze {{INPUT}} performance and security", estimatedTasks: 2),
-            PlaybookPhase(name: "Improvement Roadmap", agent: "C-3PO", description: "Compile findings into a prioritized improvement roadmap with effort estimates.", taskTemplate: "Create {{INPUT}} improvement roadmap", estimatedTasks: 1),
+            PlaybookPhase(name: "Architecture Review", agent: "Thrawn", description: "Analyze the codebase structure, dependencies, and architectural patterns of {{INPUT}}.", taskTemplate: "Review {{INPUT}} architecture and code structure", estimatedTasks: 3),
+            PlaybookPhase(name: "UX Audit", agent: "Thrawn", description: "Walk through {{INPUT}} from a user perspective. Document friction points, confusing flows, missing features.", taskTemplate: "Audit {{INPUT}} user experience and flows", estimatedTasks: 3),
+            PlaybookPhase(name: "Quality Analysis", agent: "Thrawn", description: "Assess {{INPUT}} test coverage, error handling, edge cases, and known bugs.", taskTemplate: "Assess {{INPUT}} quality and test coverage", estimatedTasks: 3),
+            PlaybookPhase(name: "Performance & Security", agent: "Thrawn", description: "Check {{INPUT}} for performance bottlenecks, security surface, and infrastructure concerns.", taskTemplate: "Analyze {{INPUT}} performance and security", estimatedTasks: 2),
+            PlaybookPhase(name: "Improvement Roadmap", agent: "Thrawn", description: "Compile findings into a prioritized improvement roadmap with effort estimates.", taskTemplate: "Create {{INPUT}} improvement roadmap", estimatedTasks: 1),
         ]
     )
 
@@ -210,13 +252,13 @@ enum PlaybookLibrary {
         inputLabel: "Target Profile / ICP",
         inputPlaceholder: "e.g. SaaS founders, 10-50 employees, Series A, using AI tools",
         phases: [
-            PlaybookPhase(name: "ICP Definition & Source Mapping", agent: "Qui-Gon", description: "Define the ideal customer profile for {{INPUT}} with surgical precision. Map every public platform and community where these people congregate: LinkedIn groups, Reddit subs, Facebook groups, Discord servers, Slack communities, niche forums, conference speaker lists, podcast guest rolls, ProductHunt commenters, GitHub orgs. Build the hunting ground map.", taskTemplate: "Define ICP and map all public lead sources for {{INPUT}}", estimatedTasks: 3),
-            PlaybookPhase(name: "Digital Footprint Sweep", agent: "Hunter", description: "Systematically sweep every source from the map. For each platform: scrape public profiles, posts, comments, team pages, about pages, contributor lists. Use curl, site-specific searches, and public APIs. Cast the widest net possible. Every name, every handle, every company mention goes into raw collection. Don't filter yet — collect everything.", taskTemplate: "Sweep public sources for {{INPUT}} leads — raw collection", estimatedTasks: 8),
-            PlaybookPhase(name: "Cross-Reference & Enrichment", agent: "Hunter", description: "Cross-reference the raw collection across platforms. Same person on LinkedIn + Reddit + GitHub? Connect them. Find email patterns from company domains (first.last@, f.last@). Check personal websites, GitHub profiles for contact info. Verify company details: size, funding, tech stack, hiring signals. The Don't F*** With Cats methodology — every breadcrumb leads somewhere.", taskTemplate: "Cross-reference and enrich {{INPUT}} leads across platforms", estimatedTasks: 6),
-            PlaybookPhase(name: "Qualification & Scoring", agent: "C-3PO", description: "Structure all enriched leads into a scored database. Score on: ICP fit (title, company size, industry), engagement signals (posting about pain points we solve, asking questions in relevant communities), buying signals (job postings for roles we replace, tech stack mentions, budget indicators from funding rounds). Tier into Hot / Warm / Cold.", taskTemplate: "Score and qualify {{INPUT}} leads into tiers", estimatedTasks: 3),
-            PlaybookPhase(name: "Dossier Assembly", agent: "Hunter", description: "Build individual lead dossiers for every Hot and Warm lead. Each dossier: full name, title, company, company size, funding stage, all social profiles found, email (verified or pattern-matched), recent public activity relevant to our offering, specific pain points expressed publicly, mutual connections or communities. One file per lead in knowledge dir.", taskTemplate: "Assemble lead dossiers for qualified {{INPUT}} leads", estimatedTasks: 5),
-            PlaybookPhase(name: "Outreach Strategy", agent: "Lando", description: "For each dossier, draft a personalized outreach angle. Reference their specific public activity, their pain points, their community context. Not generic templates — each message should make the lead think 'how did they know that about me.' Draft multi-channel sequences: LinkedIn DM, email, community reply. Charm offensive.", taskTemplate: "Draft personalized outreach for {{INPUT}} leads", estimatedTasks: 5),
-            PlaybookPhase(name: "QA & Validation", agent: "Boba", description: "Validate every lead dossier. Verify contact info is current, companies still exist, titles are accurate, email patterns check out. Flag stale data, dead links, merged companies. Cross-check scoring accuracy. Final quality gate before any outreach fires.", taskTemplate: "Validate {{INPUT}} lead data and outreach accuracy", estimatedTasks: 3),
+            PlaybookPhase(name: "ICP Definition & Source Mapping", agent: "Thrawn", description: "Define the ideal customer profile for {{INPUT}} with surgical precision. Map every public platform and community where these people congregate: LinkedIn groups, Reddit subs, Facebook groups, Discord servers, Slack communities, niche forums, conference speaker lists, podcast guest rolls, ProductHunt commenters, GitHub orgs. Build the source map.", taskTemplate: "Define ICP and map all public lead sources for {{INPUT}}", estimatedTasks: 3),
+            PlaybookPhase(name: "Digital Footprint Sweep", agent: "Thrawn", description: "Systematically sweep every source from the map. For each platform: collect public profiles, posts, comments, team pages, about pages, contributor lists. Use curl, site-specific searches, and public APIs. Cast the widest net possible. Every name, every handle, every company mention goes into raw collection. Do not filter yet.", taskTemplate: "Sweep public sources for {{INPUT}} leads — raw collection", estimatedTasks: 8),
+            PlaybookPhase(name: "Cross-Reference & Enrichment", agent: "Thrawn", description: "Cross-reference the raw collection across platforms. Same person on LinkedIn + Reddit + GitHub? Connect them. Find contact patterns from company domains. Check personal websites and public profiles for contact routes. Verify company details: size, funding, tech stack, hiring signals. Every breadcrumb must lead to a source.", taskTemplate: "Cross-reference and enrich {{INPUT}} leads across platforms", estimatedTasks: 6),
+            PlaybookPhase(name: "Qualification & Scoring", agent: "Thrawn", description: "Structure all enriched leads into a scored database. Score on: ICP fit (title, company size, industry), engagement signals (posting about pain points we solve, asking questions in relevant communities), buying signals (job postings for roles we replace, tech stack mentions, budget indicators from funding rounds). Tier into Hot / Warm / Cold.", taskTemplate: "Score and qualify {{INPUT}} leads into tiers", estimatedTasks: 3),
+            PlaybookPhase(name: "Dossier Assembly", agent: "Thrawn", description: "Build individual lead dossiers for every Hot and Warm lead. Each dossier: full name, title, company, company size, funding stage, public profiles found, verified contact route or pattern, recent public activity relevant to our offering, specific pain points expressed publicly, mutual connections or communities. One file per lead in knowledge dir.", taskTemplate: "Assemble lead dossiers for qualified {{INPUT}} leads", estimatedTasks: 5),
+            PlaybookPhase(name: "Outreach Strategy", agent: "Thrawn", description: "For each dossier, draft a personalized outreach angle. Reference their specific public activity, their pain points, and their community context. Avoid generic templates. Draft multi-channel sequences: LinkedIn DM, email, community reply.", taskTemplate: "Draft personalized outreach for {{INPUT}} leads", estimatedTasks: 5),
+            PlaybookPhase(name: "QA & Validation", agent: "Thrawn", description: "Validate every lead dossier. Verify contact info is current, companies still exist, titles are accurate, and contact patterns check out. Flag stale data, dead links, merged companies. Cross-check scoring accuracy. Final quality gate before any outreach fires.", taskTemplate: "Validate {{INPUT}} lead data and outreach accuracy", estimatedTasks: 3),
         ]
     )
 
@@ -229,11 +271,11 @@ enum PlaybookLibrary {
         inputLabel: "Focus Area (optional)",
         inputPlaceholder: "Leave blank for general improvement",
         phases: [
-            PlaybookPhase(name: "Product Enhancement Scan", agent: "R2-D2", description: "Review Thrawn Console codebase for bugs, UX improvements, missing features, and reliability fixes.", taskTemplate: "Scan NDAI products for improvement opportunities", estimatedTasks: 5),
-            PlaybookPhase(name: "Marketing Audit", agent: "Lando", description: "Review NDAI's current marketing presence, messaging, and content. Identify gaps and opportunities.", taskTemplate: "Audit NDAI marketing and identify opportunities", estimatedTasks: 3),
-            PlaybookPhase(name: "Operations Review", agent: "C-3PO", description: "Analyze agent performance data, task completion rates, error patterns. Recommend process improvements.", taskTemplate: "Review NDAI operations and agent performance", estimatedTasks: 2),
-            PlaybookPhase(name: "Strategic Research", agent: "Qui-Gon", description: "Research AI agent market trends, new techniques, competitor moves relevant to NDAI.", taskTemplate: "Research market trends and opportunities for NDAI", estimatedTasks: 3),
-            PlaybookPhase(name: "Implementation", agent: "R2-D2", description: "Implement the highest-priority improvements identified in earlier phases.", taskTemplate: "Implement top NDAI improvements", estimatedTasks: 5),
+            PlaybookPhase(name: "Product Enhancement Scan", agent: "Thrawn", description: "Review Thrawn Console codebase for bugs, UX improvements, missing features, and reliability fixes.", taskTemplate: "Scan NDAI products for improvement opportunities", estimatedTasks: 5),
+            PlaybookPhase(name: "Marketing Audit", agent: "Thrawn", description: "Review NDAI's current marketing presence, messaging, and content. Identify gaps and opportunities.", taskTemplate: "Audit NDAI marketing and identify opportunities", estimatedTasks: 3),
+            PlaybookPhase(name: "Operations Review", agent: "Thrawn", description: "Analyze agent performance data, task completion rates, error patterns. Recommend process improvements.", taskTemplate: "Review NDAI operations and agent performance", estimatedTasks: 2),
+            PlaybookPhase(name: "Strategic Research", agent: "Thrawn", description: "Research AI agent market trends, new techniques, competitor moves relevant to NDAI.", taskTemplate: "Research market trends and opportunities for NDAI", estimatedTasks: 3),
+            PlaybookPhase(name: "Implementation", agent: "Thrawn", description: "Implement the highest-priority improvements identified in earlier phases.", taskTemplate: "Implement top NDAI improvements", estimatedTasks: 5),
         ]
     )
 }
@@ -508,6 +550,11 @@ final class ObjectiveStore: ObservableObject {
         )
     }
 
+    func resetToEmpty() {
+        objectives = []
+        save()
+    }
+
     func pause(_ id: String) {
         guard let idx = objectives.firstIndex(where: { $0.id == id }) else { return }
         objectives[idx].status = .paused
@@ -571,14 +618,12 @@ final class ObjectiveStore: ObservableObject {
     func heartbeatContext() -> String? {
         let active = activeObjectives
         guard !active.isEmpty else {
-            // Fallback protocol — always have something to do
             return """
             ## Active Objectives: NONE
 
-            **FALLBACK PROTOCOL ACTIVE** — No user-defined objectives are running.
-            Default to NDAI Improvement: scan for product improvements, marketing opportunities,
-            operational efficiency, and strategic research for NDAI.
-            Create tasks from the NDAI Improvement playbook. The factory never stops.
+            **THRAWN 2.0 CLEAN MODE** — No legacy objectives are running.
+            Do not create generic NDAI improvement tasks. Keep Command clean unless Andrew assigns work.
+            Supervise proof state, deliverables, and local context.
             """
         }
 

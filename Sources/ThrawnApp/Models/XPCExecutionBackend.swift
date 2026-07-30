@@ -37,7 +37,7 @@ final class XPCExecutionBackend: ExecutionBackend {
     }
 
     /// Install the helper tool via SMAppService.
-    /// Called when user first enables unleashed mode on an App Store build.
+    /// Called when helper installation is requested on an App Store build.
     func installHelper() async throws {
         // Phase 2: Register helper via SMAppService
         // SMAppService.loginItem(identifier: "com.thrawn.helper").register()

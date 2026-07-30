@@ -2,14 +2,12 @@ import Foundation
 
 // MARK: - Tool Registry
 //
-// Every capability an agent can invoke is modeled as a Tool. Agents declare
-// which tools they're allowed to use; unauthorized commands are denied at
-// the scheduler level before they ever reach ExecutionService.
+// Every capability an agent can invoke is modeled as a Tool for UI metadata
+// and prompt vocabulary. Runtime execution is full-operation: bash fences
+// route directly through ExecutionService for every agent.
 //
 // For v1, all tool invocations flow through bash code fences — the agent
-// outputs ```bash blocks and we match each command against their allowed
-// tools. This keeps LLMs fluent in a syntax they already know while giving
-// us per-agent capability gating.
+// outputs ```bash blocks and ExecutionService runs them.
 //
 // Built-in tools:
 //   • bash        — wildcard shell access (dev-ops squad tier)
@@ -18,9 +16,8 @@ import Foundation
 //   • memory_read — read from workspace/agents/{agent}/knowledge/
 //   • memory_write— append to workspace/agents/{agent}/knowledge/
 //
-// Step 2 will replace the hardcoded default toolset with a per-agent list
-// read from AgentSpec. For Step 1, every existing dev-ops agent inherits
-// the default `[bash, file_read, task_write]` loadout so nothing changes.
+// Per-agent tool lists still render in the console as organizational metadata,
+// but they are no longer a scheduler gate.
 
 struct Tool {
     let id: String
@@ -92,6 +89,77 @@ enum ToolRegistry {
         }
     )
 
+    static let logRead = Tool(
+        id: "log_read",
+        description: "Read-only access to Thrawn runtime logs under workspace/logs/.",
+        matches: { cmd in
+            guard cmd.contains("workspace/logs/") else { return false }
+            return readOnlyCommand(cmd)
+        }
+    )
+
+    static let proofRead = Tool(
+        id: "proof_read",
+        description: "Read immutable proof bundles under workspace/proofs/.",
+        matches: { cmd in
+            guard cmd.contains("workspace/proofs/") else { return false }
+            return readOnlyCommand(cmd)
+        }
+    )
+
+    static let proofWrite = Tool(
+        id: "proof_write",
+        description: "Write new proof metadata under workspace/proofs/. Do not edit older proof runs.",
+        matches: { cmd in
+            guard cmd.contains("workspace/proofs/") else { return false }
+            return appendOrCreateCommand(cmd)
+        }
+    )
+
+    static let wikiRead = Tool(
+        id: "wiki_read",
+        description: "Read local knowledge pages under workspace/citadel/.",
+        matches: { cmd in
+            guard citadelCommand(cmd) else { return false }
+            return readOnlyCommand(cmd)
+        }
+    )
+
+    static let wikiWrite = Tool(
+        id: "wiki_write",
+        description: "Update local knowledge pages under workspace/citadel/.",
+        matches: { cmd in
+            guard citadelCommand(cmd) else { return false }
+            return appendOrCreateCommand(cmd)
+        }
+    )
+
+    static let summaryWrite = Tool(
+        id: "summary_write",
+        description: "Write synthesized summaries for product proofs and rolling 72-hour context.",
+        matches: { cmd in
+            guard citadelCommand(cmd) || cmd.contains("workspace/proofs/") else { return false }
+            return appendOrCreateCommand(cmd)
+        }
+    )
+
+    static let deliverableWrite = Tool(
+        id: "deliverable_write",
+        description: "Publish human-readable HTML deliverables under workspace/deliverables/ and register them in manifest.json.",
+        matches: { cmd in
+            guard cmd.contains("workspace/deliverables/") || cmd.contains("deliverable-publish.py") else { return false }
+            return appendOrCreateCommand(cmd)
+        }
+    )
+
+    static let browserUser = Tool(
+        id: "browser_user",
+        description: "Use Andrew's existing signed-in Chrome for authenticated sites via `openclaw browser --browser-profile user ...`. Never substitute the isolated OpenClaw profile when login state matters.",
+        matches: { cmd in
+            cmd.contains("openclaw browser") && cmd.contains("--browser-profile user")
+        }
+    )
+
     static let webSearch = Tool(
         id: "web_search",
         description: "Search the web via curl + search APIs / site-specific queries. Google dorking, LinkedIn public search, Reddit search, GitHub user/org search. Build search URLs and fetch results.",
@@ -130,7 +198,23 @@ enum ToolRegistry {
 
     // MARK: - Catalog
 
-    static let all: [Tool] = [bash, fileRead, taskWrite, memoryRead, memoryWrite, webSearch, webScrape]
+    static let all: [Tool] = [
+        bash,
+        fileRead,
+        taskWrite,
+        memoryRead,
+        memoryWrite,
+        logRead,
+        proofRead,
+        proofWrite,
+        wikiRead,
+        wikiWrite,
+        summaryWrite,
+        deliverableWrite,
+        browserUser,
+        webSearch,
+        webScrape
+    ]
 
     static func tool(id: String) -> Tool? {
         all.first(where: { $0.id == id })
@@ -157,50 +241,65 @@ enum ToolRegistry {
     /// to the dev-ops default to preserve pre-Step-2 behavior.
     @MainActor
     static func allowedTools(forAgentId id: String) -> [String] {
+        var resolved: [String]
         if let store = specStore {
-            return store.resolvedTools(forAgentId: id)
+            resolved = store.resolvedTools(forAgentId: id)
+        } else {
+            resolved = devopsDefault
         }
-        return devopsDefault
+        if !resolved.contains("bash") {
+            resolved.insert("bash", at: 0)
+        }
+        return resolved
     }
 
-    // MARK: - Authorization
+    // MARK: - Execution Classification
 
-    /// Check whether an agent is allowed to execute the given command.
-    /// Returns the ID of the matching tool, or nil if the command is denied.
-    ///
-    /// Bash is a wildcard — if an agent has `bash` in their toolset, every
-    /// command is authorized regardless of what other tools they have.
+    /// Classify a command for logging. Execution is full-operation, so an
+    /// unknown command still runs as `bash`.
     static func authorize(command: String, allowedToolIds: [String]) -> String? {
-        // Wildcard short-circuit
-        if allowedToolIds.contains("bash") { return "bash" }
-
-        // Check each non-bash tool in order
         for toolId in allowedToolIds where toolId != "bash" {
             guard let tool = tool(id: toolId) else { continue }
             if tool.matches(command) { return toolId }
         }
-        return nil
+        return "bash"
+    }
+
+    private static func readOnlyCommand(_ cmd: String) -> Bool {
+        let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+        let first = trimmed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+        let readOnlyTools: Set<String> = [
+            "cat", "head", "tail", "less", "more",
+            "ls", "find", "grep", "rg", "fgrep", "egrep",
+            "wc", "stat", "file", "du", "tree", "pwd"
+        ]
+        guard readOnlyTools.contains(first) else { return false }
+        let dangerous = [">", ">>", "&&", "||", ";", "`", "$("]
+        return !dangerous.contains { cmd.contains($0) }
+    }
+
+    private static func appendOrCreateCommand(_ cmd: String) -> Bool {
+        let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+        let first = trimmed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+        guard ["echo", "printf", "tee", "cp", "python", "python3"].contains(first) else { return false }
+        guard !cmd.contains(" rm ") && !cmd.hasPrefix("rm ") else { return false }
+        return cmd.contains(">") || cmd.contains("tee") || first == "cp" || first == "python" || first == "python3"
+    }
+
+    private static func citadelCommand(_ cmd: String) -> Bool {
+        cmd.contains("workspace/citadel/") || cmd.contains("workspace/wiki/")
     }
 
     // MARK: - Prompt Rendering
 
-    /// Render the tool list as markdown for injection into a heartbeat prompt.
-    /// The agent sees only the tools they're allowed to use.
+    /// Render the execution contract for injection into a heartbeat prompt.
     @MainActor
     static func renderAvailableToolsBlock(forAgentId agentId: String) -> String {
         let allowed = allowedTools(forAgentId: agentId)
-        guard !allowed.isEmpty else {
-            return "You have no execution tools available on this heartbeat. Respond with text only."
-        }
-
-        var block = "You have the following tools available:\n\n"
-        for toolId in allowed {
-            guard let t = tool(id: toolId) else { continue }
-            block += "- **\(t.id)** — \(t.description)\n"
-        }
-        block += "\nInvoke tools by wrapping commands in ```bash code fences. "
-        block += "Every command you output is matched against your allowed tools before execution. "
-        block += "Unauthorized commands are denied and logged, but do not stop the heartbeat.\n"
-        return block
+        let metadata = allowed.filter { $0 != "bash" }.joined(separator: ", ")
+        let metadataLine = metadata.isEmpty ? "" : " Console loadout metadata: \(metadata)."
+        return """
+        Full shell execution is available on this heartbeat. Invoke local work by wrapping commands in ```bash code fences```. Every command fence is sent to ExecutionService; the loadout is metadata for organization, not an execution gate.\(metadataLine)
+        """
     }
 }

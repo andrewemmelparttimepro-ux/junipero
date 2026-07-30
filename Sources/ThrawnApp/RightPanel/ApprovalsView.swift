@@ -105,8 +105,10 @@ final class ApprovalsStore: ObservableObject {
 
 struct ApprovalsView: View {
     @StateObject private var store = ApprovalsStore()
+    @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
 
     var pending: [ApprovalItem] { store.items.filter { !store.handledIds.contains($0.id) } }
+    private var totalPending: Int { pending.count + agentRuntime.pendingApprovals.count }
 
     var body: some View {
         ZStack {
@@ -123,7 +125,7 @@ struct ApprovalsView: View {
                             .tracking(3)
                             .foregroundColor(Color.chissPrimary)
                             .shadow(color: Color.chissPrimary.opacity(0.40), radius: 8)
-                        Text("\(pending.count) pending decision\(pending.count == 1 ? "" : "s")")
+                        Text("\(totalPending) pending decision\(totalPending == 1 ? "" : "s")")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(Color.white.opacity(0.40))
                     }
@@ -146,7 +148,7 @@ struct ApprovalsView: View {
                 .background(Color.obsidianMid.opacity(0.92))
                 .overlay(alignment: .bottom) { Rectangle().fill(Color.chissPrimary.opacity(0.12)).frame(height: 1) }
 
-                if pending.isEmpty {
+                if totalPending == 0 {
                     Spacer()
                     VStack(spacing: 10) {
                         Image(systemName: "checkmark.shield.fill")
@@ -155,7 +157,7 @@ struct ApprovalsView: View {
                         Text("No pending approvals")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(Color.white.opacity(0.45))
-                        Text("Items from APPROVALS_QUEUE.md will surface here.")
+                        Text("Provider-agent and operating approvals will surface here.")
                             .font(.system(size: 11))
                             .foregroundColor(Color.white.opacity(0.28))
                     }
@@ -163,6 +165,29 @@ struct ApprovalsView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 14) {
+                            ForEach(agentRuntime.pendingApprovals) { approval in
+                                RuntimeApprovalCard(
+                                    approval: approval,
+                                    onApprove: {
+                                        agentRuntime.resolveApproval(
+                                            approval,
+                                            decision: .accept
+                                        )
+                                    },
+                                    onApproveSession: {
+                                        agentRuntime.resolveApproval(
+                                            approval,
+                                            decision: .acceptForSession
+                                        )
+                                    },
+                                    onDeny: {
+                                        agentRuntime.resolveApproval(
+                                            approval,
+                                            decision: .decline
+                                        )
+                                    }
+                                )
+                            }
                             ForEach(pending) { item in
                                 ApprovalCard(item: item, onApprove: { store.approve(item) }, onDeny: { store.deny(item) })
                             }
@@ -174,6 +199,92 @@ struct ApprovalsView: View {
             }
         }
         .onAppear { store.load() }
+    }
+}
+
+private struct RuntimeApprovalCard: View {
+    let approval: AgentApprovalRequest
+    let onApprove: () -> Void
+    let onApproveSession: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("CODEX · \(approval.kind.rawValue.uppercased())")
+                        .font(.system(size: 9, weight: .heavy))
+                        .tracking(1.5)
+                        .foregroundColor(Color.chissPrimary.opacity(0.70))
+                    Text(approval.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color.white.opacity(0.92))
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Text("LIVE")
+                    .font(.system(size: 8, weight: .black))
+                    .tracking(1)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.orange.opacity(0.12)))
+            }
+
+            Text(approval.detail)
+                .font(.system(size: 11))
+                .foregroundColor(Color.white.opacity(0.58))
+                .textSelection(.enabled)
+
+            if let cwd = approval.cwd, !cwd.isEmpty {
+                Text(cwd)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundColor(Color.white.opacity(0.36))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+
+            Divider().background(Color.chissPrimary.opacity(0.15))
+
+            HStack(spacing: 9) {
+                Button("Deny", action: onDeny)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.sithGlow)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.sithRed.opacity(0.12)))
+
+                Spacer()
+
+                if approval.availableDecisions.contains("acceptForSession") {
+                    Button("Allow for Session", action: onApproveSession)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(Color.chissPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.chissPrimary.opacity(0.10)))
+                }
+
+                Button("Approve", action: onApprove)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.chissDeep))
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.obsidianMid)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                )
+        )
     }
 }
 

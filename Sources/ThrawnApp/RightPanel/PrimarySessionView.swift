@@ -19,20 +19,36 @@ final class PrimarySessionStore: ObservableObject {
     let agentId: String?
     private var ollamaClient: OllamaClient?
     private var openaiClient: OpenAIClient?
-    private var anthropicClient: AnthropicClient?
+    private var openClawClient: GatewayWSClient?
+    private weak var agentRuntime: AgentRuntimeCoordinator?
+    private weak var devOpsBrain: DevOpsBrainStore?
     private weak var rosterStore: AgentRosterStore?
     private weak var screenCaptureStore: ScreenCaptureStore?
     private weak var executionService: ExecutionService?
     let cogneeClient = CogneeClient()
     /// Conversation history for Ollama
     private var conversationHistory: [OllamaMessage] = []
+    private let conversationFileURL: URL
     /// Max tool execution rounds per user message (prevent infinite loops)
     private let maxToolRounds = 8
 
-    init(sessionKey: String = "main", agentId: String? = nil) {
+    init(
+        sessionKey: String = "main",
+        agentId: String? = nil,
+        storageRoot: URL = ThrawnPaths.appSupportDir
+            .appendingPathComponent("agent-conversations", isDirectory: true)
+    ) {
         self.sessionKey = sessionKey
         self.agentId = agentId
+        let identity = "\(agentId ?? "thrawn")-\(sessionKey)"
+        let safeIdentity = identity.map {
+            $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-"
+        }
+        self.conversationFileURL = storageRoot
+            .appendingPathComponent(String(safeIdentity).lowercased())
+            .appendingPathExtension("json")
         SystemPromptBuilder.ensureWorkspaceDirs()
+        loadConversation()
     }
 
     func bind(ollamaClient: OllamaClient) {
@@ -43,8 +59,16 @@ final class PrimarySessionStore: ObservableObject {
         self.openaiClient = client
     }
 
-    func bindAnthropic(_ client: AnthropicClient) {
-        self.anthropicClient = client
+    func bindOpenClaw(_ client: GatewayWSClient) {
+        self.openClawClient = client
+    }
+
+    func bindAgentRuntime(_ runtime: AgentRuntimeCoordinator) {
+        self.agentRuntime = runtime
+    }
+
+    func bindDevOpsBrain(_ store: DevOpsBrainStore) {
+        self.devOpsBrain = store
     }
 
     func bindRoster(_ roster: AgentRosterStore) {
@@ -60,18 +84,17 @@ final class PrimarySessionStore: ObservableObject {
     }
 
     func connect() {
-        if let client = ollamaClient, client.connected {
+        let resolvedAgentID = agentId ?? "thrawn"
+        let backend = resolveRoute().backend
+        if agentRuntime?.isReady(backend, agentID: resolvedAgentID) == true {
             isConnected = true
             return
         }
-        // Wait for Ollama to become available
-        Task {
-            for _ in 0..<40 {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                if ollamaClient?.connected == true { break }
-            }
-            isConnected = ollamaClient?.connected ?? false
+        if openaiClient?.apiKeyConfigured == true {
+            isConnected = true
+            return
         }
+        isConnected = false
     }
 
     func send(_ text: String) {
@@ -80,23 +103,38 @@ final class PrimarySessionStore: ObservableObject {
 
         let userMsg = PrimaryMessage(role: .user, text: trimmed)
         messages.append(userMsg)
+        saveConversation()
         isLoading = true
         isStreaming = false
         streamingText = ""
         errorText = nil
 
-        // Resolve which backend to use based on agent's tier
         let route = resolveRoute()
         switch route.backend {
-        case .openai:
-            guard let openai = openaiClient, openai.apiKeyConfigured else {
-                errorText = "OpenAI API key not configured. Add it in Settings."
+        case .codex, .grok, .claude:
+            guard agentRuntime?.isReady(
+                route.backend,
+                agentID: agentId ?? "thrawn"
+            ) == true else {
+                errorText = "\(route.backend.gatewayDisplayName) runtime is unavailable. Confirm its CLI is installed and signed in."
                 isLoading = false
                 return
             }
-        case .anthropic:
-            guard let anthropic = anthropicClient, anthropic.apiKeyConfigured else {
-                errorText = "Anthropic API key not configured. Add it in Settings."
+        case .xai:
+            guard let openai = openaiClient, openai.hasAPIKey(service: ProviderRouter.xaiKeychainService) else {
+                errorText = "xAI key not configured for this agent."
+                isLoading = false
+                return
+            }
+        case .openclaw:
+            guard openClawClient != nil else {
+                errorText = "OpenClaw gateway client not available."
+                isLoading = false
+                return
+            }
+        case .openai:
+            guard let openai = openaiClient, openai.apiKeyConfigured else {
+                errorText = "GLM-5.2 key not configured. Add your Z.ai key in Settings."
                 isLoading = false
                 return
             }
@@ -114,39 +152,51 @@ final class PrimarySessionStore: ObservableObject {
     // MARK: - Route Resolution
     //
     // For specialist agent chats, check their spec tier and resolve to a
-    // concrete backend. Main chat / Thrawn always goes to Ollama.
+    // concrete backend. Main chat is Thrawn, so it uses Thrawn's configured
+    // tier instead of forcing the local Ollama path.
 
     private func resolveRoute() -> RoutedProvider {
-        guard let agentId,
-              let specStore = ToolRegistry.specStore else {
-            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: false)
+        let resolvedAgentId = agentId ?? "thrawn"
+        if let override = ToolRegistry.specStore?.spec(id: resolvedAgentId)?.modelOverride {
+            return RoutedProvider(
+                backend: override.provider,
+                model: override.model,
+                isFallback: false,
+                reasoningEffort: override.reasoningEffort,
+                allowFallback: override.allowFallback
+            )
         }
-        let tier = specStore.resolvedTier(forAgentId: agentId)
-        // Build a lightweight router check
-        switch tier {
-        case .local:
-            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: false)
-        case .cheap:
-            if let a = anthropicClient, a.apiKeyConfigured {
-                return RoutedProvider(backend: .anthropic, model: ProviderRouter.cheapAnthropicModel, isFallback: false)
-            }
-            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: true)
-        case .premium:
-            if let o = openaiClient, o.apiKeyConfigured {
-                return RoutedProvider(backend: .openai, model: ProviderRouter.premiumOpenAIModel, isFallback: false)
-            }
-            if let a = anthropicClient, a.apiKeyConfigured {
-                return RoutedProvider(backend: .anthropic, model: ProviderRouter.premiumAnthropicModel, isFallback: true)
-            }
-            return RoutedProvider(backend: .ollama, model: ProviderRouter.localModel, isFallback: true)
+        if Self.isThrawnCoreAgent(resolvedAgentId) {
+            return ProviderRouter.thrawnCoreRoute(openAIConfigured: openaiClient?.apiKeyConfigured ?? false)
         }
+        if Self.usesSharedDevOpsBrain(resolvedAgentId),
+           let devOpsBrain {
+            return devOpsBrain.route(openAIConfigured: openaiClient?.apiKeyConfigured ?? false)
+        }
+        guard let specStore = ToolRegistry.specStore else {
+            return resolveConcreteRoute(for: .premium)
+        }
+        let tier = specStore.resolvedTier(forAgentId: resolvedAgentId)
+        return resolveConcreteRoute(for: tier)
+    }
+
+    private func resolveConcreteRoute(for tier: ModelTier) -> RoutedProvider {
+        ProviderRouter().resolve(tier: tier)
+    }
+
+    private static func usesSharedDevOpsBrain(_ agentId: String) -> Bool {
+        false
+    }
+
+    private static func isThrawnCoreAgent(_ agentId: String) -> Bool {
+        agentId == "thrawn"
     }
 
     // MARK: - Routed Send (with tool execution loop)
 
     private func doSendRouted(_ text: String, route: RoutedProvider) async {
-        guard ollamaClient != nil || openaiClient != nil || anthropicClient != nil else {
-            errorText = "No LLM client available."
+        guard ollamaClient != nil || openaiClient != nil || openClawClient != nil || agentRuntime != nil else {
+            errorText = "No agent runtime or API fallback is available."
             isLoading = false
             return
         }
@@ -170,12 +220,16 @@ final class PrimarySessionStore: ObservableObject {
 
         // Build system prompt — agent-specific for specialist chats,
         // Thrawn identity for the main command session.
-        let accessMode = executionService?.accessMode ?? .restricted
+        let accessMode = executionService?.accessMode ?? .fullOperation
         let modelLabel: String
         switch route.backend {
+        case .codex:   modelLabel = agentRuntime?.runtimeLabel ?? "Codex CLI"
+        case .grok:    modelLabel = "Grok CLI · \(route.model)"
+        case .claude:  modelLabel = "Claude Code · \(route.model)"
+        case .xai:     modelLabel = "xAI (\(ProviderRouter.xaiModel))"
         case .ollama:  modelLabel = "Ollama (\(ollamaClient?.selectedModel ?? ProviderRouter.localModel))"
-        case .openai:  modelLabel = "OpenAI (\(route.model))"
-        case .anthropic: modelLabel = "Anthropic (\(route.model))"
+        case .openclaw: modelLabel = "OpenClaw legacy (\(ProviderRouter.premiumOpenClawLabel))"
+        case .openai:  modelLabel = "GLM (\(ProviderRouter.premiumOpenAILabel))"
         }
         let systemPrompt: String
         if let agentId {
@@ -193,6 +247,7 @@ final class PrimarySessionStore: ObservableObject {
 
         // Track in conversation history
         conversationHistory.append(OllamaMessage(role: "user", text: finalText))
+        saveConversation()
 
         // === ReAct Loop: send → get response → extract tools → execute → feed back → repeat ===
         var currentText = finalText
@@ -205,17 +260,24 @@ final class PrimarySessionStore: ObservableObject {
             // Send to the resolved backend and wait for full response
             let response: SendResult
             switch route.backend {
-            case .openai:
+            case .codex, .grok, .claude:
+                response = await sendAndWaitAgentRuntime(
+                    text: currentText,
+                    systemPrompt: systemPrompt,
+                    route: route
+                )
+            case .openclaw:
+                let openClawResponse = await sendAndWaitOpenClaw(
+                    text: currentText,
+                    model: route.model
+                )
+                response = openClawResponse
+            case .openai, .xai:
                 response = await sendAndWaitOpenAI(
                     text: currentText,
                     history: history,
-                    systemPrompt: systemPrompt
-                )
-            case .anthropic:
-                response = await sendAndWaitAnthropic(
-                    text: currentText,
-                    history: history,
-                    systemPrompt: systemPrompt
+                    systemPrompt: systemPrompt,
+                    route: route
                 )
             case .ollama:
                 response = await sendAndWait(
@@ -223,7 +285,8 @@ final class PrimarySessionStore: ObservableObject {
                     text: currentText,
                     imageData: currentImage,
                     history: history,
-                    systemPrompt: systemPrompt
+                    systemPrompt: systemPrompt,
+                    model: route.model
                 )
             }
 
@@ -237,16 +300,35 @@ final class PrimarySessionStore: ObservableObject {
 
                 // Show the response in the UI
                 messages.append(PrimaryMessage(role: .assistant, text: text, model: model))
+                saveConversation()
 
-                // Extract bash commands from the response
-                let commands = AgentScheduler.extractBashCommands(from: text)
-
-                // If no commands or restricted mode, we're done
-                guard !commands.isEmpty, let exec = executionService, exec.accessMode.isUnleashed else {
+                // Codex and Grok are complete agent runtimes. Their own tools,
+                // permissions, and continuation semantics are authoritative;
+                // never wrap their output in the legacy fenced-bash loop.
+                if route.backend.isSubscriptionGateway {
                     isLoading = false
                     isStreaming = false
                     streamingText = ""
                     rosterStore?.markSessionComplete(sessionKey, detail: "Response received")
+                    return
+                }
+
+                // Extract bash commands from the response
+                let commands = AgentScheduler.extractBashCommands(from: text)
+
+                guard !commands.isEmpty else {
+                    isLoading = false
+                    isStreaming = false
+                    streamingText = ""
+                    rosterStore?.markSessionComplete(sessionKey, detail: "Response received")
+                    return
+                }
+                guard let exec = executionService else {
+                    errorText = "Execution service is not available."
+                    isLoading = false
+                    isStreaming = false
+                    streamingText = ""
+                    rosterStore?.markSessionComplete(sessionKey, detail: "Execution unavailable")
                     return
                 }
 
@@ -285,6 +367,7 @@ final class PrimarySessionStore: ObservableObject {
                 """
 
                 conversationHistory.append(OllamaMessage(role: "user", text: feedbackText))
+                saveConversation()
                 currentText = feedbackText
                 toolRound += 1
 
@@ -296,6 +379,7 @@ final class PrimarySessionStore: ObservableObject {
                 if conversationHistory.last?.role == "user" {
                     conversationHistory.removeLast()
                 }
+                saveConversation()
                 errorText = error
                 isLoading = false
                 isStreaming = false
@@ -311,6 +395,7 @@ final class PrimarySessionStore: ObservableObject {
             text: "[Tool execution limit reached (\(maxToolRounds) rounds). Pausing for Commander input.]",
             model: nil
         ))
+        saveConversation()
         isLoading = false
         isStreaming = false
         streamingText = ""
@@ -328,7 +413,8 @@ final class PrimarySessionStore: ObservableObject {
         text: String,
         imageData: Data?,
         history: [OllamaMessage],
-        systemPrompt: String
+        systemPrompt: String,
+        model: String? = nil
     ) async -> SendResult {
         await withCheckedContinuation { continuation in
             var resumed = false
@@ -340,6 +426,7 @@ final class PrimarySessionStore: ObservableObject {
                 history: history,
                 systemPrompt: systemPrompt,
                 sessionKey: sessionKey,
+                model: model,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
@@ -368,23 +455,123 @@ final class PrimarySessionStore: ObservableObject {
         }
     }
 
+    // MARK: - Subscription Agent Runtime Send and Wait
+
+    private func sendAndWaitAgentRuntime(
+        text: String,
+        systemPrompt: String,
+        route: RoutedProvider
+    ) async -> SendResult {
+        guard let agentRuntime else {
+            return .failure("\(route.backend.gatewayDisplayName) runtime is unavailable.")
+        }
+        self.streamingText = ""
+        do {
+            let result = try await agentRuntime.run(
+                prompt: text,
+                options: AgentSessionOptions(
+                    sessionKey: "primary:\(sessionKey)",
+                    agentID: agentId ?? "thrawn",
+                    provider: route.backend,
+                    developerInstructions: systemPrompt,
+                    model: route.model,
+                    reasoningEffort: route.reasoningEffort,
+                    approvalPolicy: .onRequest,
+                    sandbox: .fullOperation
+                )
+            ) { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case .textDelta(let delta):
+                    self.isStreaming = true
+                    self.streamingText += delta
+                case .approvalRequired(let approval):
+                    self.errorText = "Approval required: \(approval.title)"
+                case .error(let detail):
+                    self.errorText = detail
+                case .reasoningDelta, .toolCall, .fileChange, .usage, .completed:
+                    break
+                }
+            }
+            let finalText = result.text.isEmpty ? streamingText : result.text
+            isStreaming = false
+            streamingText = ""
+            return .success(finalText, result.model)
+        } catch {
+            isStreaming = false
+            streamingText = ""
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    // MARK: - OpenClaw Send and Wait
+
+    private func sendAndWaitOpenClaw(
+        text: String,
+        model: String
+    ) async -> SendResult {
+        guard let client = openClawClient else { return .failure("OpenClaw client not available.") }
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            self.streamingText = ""
+            client.send(
+                text: text,
+                sessionKey: "thrawn-primary-\(sessionKey)",
+                model: model,
+                thinking: ProviderRouter.premiumOpenClawThinkingLevel,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isStreaming = true
+                        self.streamingText += delta
+                    }
+                },
+                onComplete: { [weak self] finalText, returnedModel in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let text = finalText.isEmpty ? self.streamingText : finalText
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        if !resumed { resumed = true; continuation.resume(returning: .success(text, returnedModel ?? model)) }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.isStreaming = false
+                        self.streamingText = ""
+                        if !resumed { resumed = true; continuation.resume(returning: .failure(error)) }
+                    }
+                }
+            )
+        }
+    }
+
     // MARK: - OpenAI Send and Wait
 
     private func sendAndWaitOpenAI(
         text: String,
         history: [OllamaMessage],
-        systemPrompt: String
+        systemPrompt: String,
+        route: RoutedProvider
     ) async -> SendResult {
         guard let client = openaiClient else { return .failure("OpenAI client not available.") }
         let openaiHistory = history.map { OpenAIMessage(role: $0.role, text: $0.content) }
         return await withCheckedContinuation { continuation in
             var resumed = false
             self.streamingText = ""
+            let providerLabel = route.backend == .xai ? "xAI" : "GLM"
             client.send(
                 text: text,
                 history: openaiHistory,
                 systemPrompt: systemPrompt,
                 sessionKey: sessionKey,
+                modelOverride: route.model,
+                reasoningEffortOverride: route.reasoningEffort,
+                baseURLOverride: route.backend == .xai ? ProviderRouter.xaiBaseURL : nil,
+                apiKeyServiceOverride: route.backend == .xai ? ProviderRouter.xaiKeychainService : nil,
+                providerLabel: providerLabel,
+                includeReasoningControls: route.backend != .xai,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
@@ -413,58 +600,55 @@ final class PrimarySessionStore: ObservableObject {
         }
     }
 
-    // MARK: - Anthropic Send and Wait
-
-    private func sendAndWaitAnthropic(
-        text: String,
-        history: [OllamaMessage],
-        systemPrompt: String
-    ) async -> SendResult {
-        guard let client = anthropicClient else { return .failure("Anthropic client not available.") }
-        let anthropicHistory = history.map { msg in
-            AnthropicMessage(role: msg.role, content: [AnthropicContentBlock(type: "text", text: msg.content)])
-        }
-        return await withCheckedContinuation { continuation in
-            var resumed = false
-            self.streamingText = ""
-            client.send(
-                text: text,
-                history: anthropicHistory,
-                systemPrompt: systemPrompt,
-                sessionKey: sessionKey,
-                onDelta: { [weak self] delta in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.isStreaming = true
-                        self.streamingText += delta
-                    }
-                },
-                onComplete: { [weak self] finalText, model in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let text = finalText.isEmpty ? self.streamingText : finalText
-                        self.isStreaming = false
-                        self.streamingText = ""
-                        if !resumed { resumed = true; continuation.resume(returning: .success(text, model ?? "anthropic")) }
-                    }
-                },
-                onError: { [weak self] error in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.isStreaming = false
-                        self.streamingText = ""
-                        if !resumed { resumed = true; continuation.resume(returning: .failure(error)) }
-                    }
-                }
-            )
-        }
-    }
-
     func abort() {
+        Task { [weak agentRuntime] in
+            await agentRuntime?.cancel(sessionKey: "primary:\(sessionKey)")
+        }
         ollamaClient?.cancelAll()
         isLoading = false
         isStreaming = false
         streamingText = ""
+    }
+
+    private struct ConversationSnapshot: Codable {
+        let messages: [PrimaryMessage]
+        let history: [OllamaMessage]
+    }
+
+    private func loadConversation() {
+        guard let data = try? Data(contentsOf: conversationFileURL),
+              let snapshot = try? JSONDecoder().decode(
+                  ConversationSnapshot.self,
+                  from: data
+              ) else {
+            return
+        }
+        messages = snapshot.messages
+        conversationHistory = snapshot.history
+    }
+
+    private func saveConversation() {
+        do {
+            try FileManager.default.createDirectory(
+                at: conversationFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let snapshot = ConversationSnapshot(
+                messages: messages,
+                history: conversationHistory
+            )
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: conversationFileURL, options: .atomic)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: conversationFileURL.path
+            )
+        } catch {
+            FlightRecorder.logError(
+                source: "agent-conversation:\(agentId ?? "thrawn")",
+                message: "Could not persist local context: \(error.localizedDescription)"
+            )
+        }
     }
 
     private static func parseDate(_ timestampMs: Double?) -> Date? {
@@ -483,16 +667,60 @@ struct MessageImageBlock: Identifiable {
     var mediaType: String       // "image/png", "image/jpeg", etc.
 }
 
-struct PrimaryMessage: Identifiable {
-    let id = UUID()
+struct PrimaryMessage: Identifiable, Codable {
+    let id: UUID
     var role: MessageRole
     var text: String
     var model: String?
     var timestamp: Date?
     var images: [MessageImageBlock] = []
 
-    enum MessageRole {
-        case user, assistant
+    init(
+        id: UUID = UUID(),
+        role: MessageRole,
+        text: String,
+        model: String? = nil,
+        timestamp: Date? = nil,
+        images: [MessageImageBlock] = []
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.model = model
+        self.timestamp = timestamp
+        self.images = images
+    }
+
+    enum MessageRole: String, Codable, Equatable {
+        case user
+        case assistant
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case text
+        case model
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        role = try values.decode(MessageRole.self, forKey: .role)
+        text = try values.decode(String.self, forKey: .text)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        timestamp = try values.decodeIfPresent(Date.self, forKey: .timestamp)
+        images = []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(role, forKey: .role)
+        try values.encode(text, forKey: .text)
+        try values.encodeIfPresent(model, forKey: .model)
+        try values.encodeIfPresent(timestamp, forKey: .timestamp)
     }
 }
 
@@ -501,6 +729,9 @@ struct PrimaryMessage: Identifiable {
 struct PrimarySessionView: View {
     @EnvironmentObject var ollama: OllamaClient
     @EnvironmentObject var openai: OpenAIClient
+    @EnvironmentObject var openclaw: GatewayWSClient
+    @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
+    @EnvironmentObject var devOpsBrain: DevOpsBrainStore
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var roster: AgentRosterStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
@@ -512,11 +743,13 @@ struct PrimarySessionView: View {
 
     let agentName: String
     let agentInitial: String
+    let agentId: String?
 
     init(sessionKey: String = "main", agentName: String = "Thrawn", agentInitial: String = "T", agentId: String? = nil) {
         _store = StateObject(wrappedValue: PrimarySessionStore(sessionKey: sessionKey, agentId: agentId))
         self.agentName = agentName
         self.agentInitial = agentInitial
+        self.agentId = agentId
     }
 
     var body: some View {
@@ -525,7 +758,7 @@ struct PrimarySessionView: View {
 
             VStack(spacing: 0) {
                 // Connection status bar (only shown when not connected)
-                if !ollama.connected {
+                if !brainConnected {
                     HStack(spacing: 8) {
                         ProgressView().progressViewStyle(.circular).scaleEffect(0.6).tint(Color(red: 0.95, green: 0.70, blue: 0.20))
                         Text(connectionStatusText)
@@ -576,10 +809,10 @@ struct PrimarySessionView: View {
                             }
 
                             if store.isStreaming {
-                                PrimaryStreamingBubble(text: store.streamingText, agentInitial: agentInitial)
+                                PrimaryStreamingBubble(text: store.streamingText, agentName: agentName, agentInitial: agentInitial)
                                     .id("streaming")
                             } else if store.isLoading {
-                                PrimaryThinkingBubble(agentInitial: agentInitial)
+                                PrimaryThinkingBubble(agentName: agentName, agentInitial: agentInitial)
                                     .id("thinking")
                             }
                         }
@@ -643,7 +876,7 @@ struct PrimarySessionView: View {
                 // Input bar
                 inputBar
             }
-            .animation(.easeInOut(duration: 0.18), value: ollama.connected)
+            .animation(.easeInOut(duration: 0.18), value: brainConnected)
             .animation(.easeInOut(duration: 0.18), value: store.errorText != nil)
             .animation(.easeInOut(duration: 0.18), value: store.recallContext != nil)
             .animation(.easeInOut(duration: 0.18), value: screenCapture.pendingScreenshot != nil)
@@ -651,6 +884,9 @@ struct PrimarySessionView: View {
         .onAppear {
             store.bind(ollamaClient: ollama)
             store.bindOpenAI(openai)
+            store.bindOpenClaw(openclaw)
+            store.bindAgentRuntime(agentRuntime)
+            store.bindDevOpsBrain(devOpsBrain)
             store.bindRoster(roster)
             store.bindScreenCapture(screenCapture)
             store.bindExecution(execution)
@@ -662,16 +898,44 @@ struct PrimarySessionView: View {
     }
 
     private var connectionStatusText: String {
-        if ollama.connected {
-            return "Connected to Ollama · \(ollama.selectedModel)"
+        let backend = resolvedSessionBackend
+        let resolvedAgentID = agentId ?? "thrawn"
+        let status = agentRuntime.status(for: backend, agentID: resolvedAgentID)
+        if backend == .grok || backend == .claude {
+            return status.detail
         }
-        if ollama.authenticating {
-            return "Connecting to Ollama…"
+        if status.state == .ready {
+            let account = status.account?.displayName ?? "Codex"
+            return "\(account) · \(agentRuntime.runtimeLabel)"
         }
-        if let error = ollama.lastError {
-            return error
+        if status.state == .starting {
+            return "Starting Codex agent runtime…"
         }
-        return "Ollama not running — start Ollama on localhost:11434"
+        return status.detail
+    }
+
+    private var brainConnected: Bool {
+        agentRuntime.isReady(
+            resolvedSessionBackend,
+            agentID: agentId ?? "thrawn"
+        )
+    }
+
+    private var isThrawnCoreSession: Bool {
+        let id = agentId ?? "thrawn"
+        return id == "thrawn"
+    }
+
+    private var isStevenSession: Bool {
+        agentId == "steven"
+    }
+
+    private var resolvedSessionBackend: ProviderBackend {
+        let resolvedAgentID = agentId ?? "thrawn"
+        return ToolRegistry.specStore?
+            .spec(id: resolvedAgentID)?
+            .modelOverride?
+            .provider ?? .codex
     }
 
     private var inputBar: some View {
@@ -910,6 +1174,7 @@ struct PrimaryMessageBubble: View {
 
 private struct PrimaryStreamingBubble: View {
     let text: String
+    let agentName: String
     var agentInitial: String = "T"
 
     var body: some View {
@@ -920,6 +1185,14 @@ private struct PrimaryStreamingBubble: View {
                 Text(agentInitial).font(.system(size: 13, weight: .bold, design: .serif)).foregroundColor(Color.chissPrimary)
             }
             VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(agentName.uppercased())
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundColor(Color.chissPrimary.opacity(0.62))
+                    ThrawnActivitySpinner(active: true, diameter: 14, lineWidth: 2.0, trackOpacity: 0.18)
+                }
+
                 HStack(spacing: 6) {
                     Text(text.isEmpty ? " " : text)
                         .font(.system(size: 13))
@@ -1006,8 +1279,8 @@ struct MessageImagePreview: View {
 }
 
 private struct PrimaryThinkingBubble: View {
+    let agentName: String
     var agentInitial: String = "T"
-    @State private var dotOpacity: [Double] = [0.3, 0.3, 0.3]
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -1016,32 +1289,27 @@ private struct PrimaryThinkingBubble: View {
                     .shadow(color: Color.chissPrimary.opacity(0.40), radius: 8)
                 Text(agentInitial).font(.system(size: 13, weight: .bold, design: .serif)).foregroundColor(Color.chissPrimary)
             }
-            HStack(spacing: 5) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .fill(Color.chissPrimary)
-                        .frame(width: 6, height: 6)
-                        .opacity(dotOpacity[i])
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(agentName.uppercased())
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundColor(Color.chissPrimary.opacity(0.62))
+                    ThrawnActivitySpinner(active: true, diameter: 14, lineWidth: 2.0, trackOpacity: 0.18)
                 }
+
+                Text("\(agentName) is working...")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.82))
             }
-            .padding(.horizontal, 16).padding(.vertical, 14)
+            .padding(.horizontal, 14).padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.obsidianMid)
                     .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1))
             )
             Spacer(minLength: 60)
-        }
-        .onAppear {
-            animateDots()
-        }
-    }
-
-    private func animateDots() {
-        for i in 0..<3 {
-            withAnimation(Animation.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.18)) {
-                dotOpacity[i] = 1.0
-            }
         }
     }
 }

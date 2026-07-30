@@ -2,12 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Sandbox (required for Mac App Store) -->
-	<key>com.apple.security.app-sandbox</key>
+	<!--
+	  Thrawn is a local agent-runtime host. It intentionally does not enable
+	  App Sandbox because provider CLIs must spawn child processes and access
+	  operator-selected project workspaces. Distribute this build through the
+	  signed/notarized Developer ID path, not the Mac App Store.
+	-->
+
+	<!-- Outgoing network connections (OpenClaw, OpenAI opt-in, Ollama, Cognee HTTP) -->
+	<key>com.apple.security.network.client</key>
 	<true/>
 
-	<!-- Outgoing network connections (Anthropic API, Cognee HTTP) -->
-	<key>com.apple.security.network.client</key>
+	<!-- Microphone for Caps Lock voice sessions and speech-to-speech -->
+	<key>com.apple.security.device.audio-input</key>
 	<true/>
 
 	<!-- Read/write access to user-selected files (export support bundles) -->

@@ -2,6 +2,10 @@
 
 ## Periodic Checks
 
-- [ ] **REVIEW_QUEUE.md** — scan for items with ✅ PASS verdict not yet cleared → move to Done in TASK_BOARD.md
-- [ ] **TASK_BOARD.md** — any task in Status: Review with no active blocker → clear or escalate to Andrew
-- [ ] **agent-output/** — check for new deliverables from Qui-Gon, C-3PO, R2, Lando, Boba → process and update board
+- [ ] `workspace/product-sentinel/products.json` - exists and lists all five products; if missing/empty, restore from `state/product-sentinel-guard/` and flag loudly.
+- [ ] `workspace/ops/TASK_BOARD.md` - non-Done work has a real next action.
+- [ ] `workspace/ops/pending-updates/` - no stale malformed updates are stuck.
+- [ ] `workspace/deliverables/manifest.json` - deliverable entries point to readable HTML when work is complete.
+- [ ] `workspace/memory/facts.md` - only useful durable facts are retained.
+
+If nothing needs attention, stay quiet.

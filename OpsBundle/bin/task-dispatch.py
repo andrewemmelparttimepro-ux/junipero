@@ -11,14 +11,14 @@ agent-updates.json format:
     "task_id": "TASK-001",
     "field": "Status",       // which field to change
     "value": "In Progress",  // new value
-    "agent": "R2-D2",
+    "agent": "Thrawn",
     "timestamp": "2026-03-17T22:10:00"
   },
   {
     "action": "create",
     "task_id": "TASK-NEW",   // auto-assigned if "TASK-NEW"
     "title": "Fix the widget",
-    "owner": "R2-D2",
+    "owner": "Thrawn",
     "status": "Ready",
     "priority": "High",
     "notes": "",
@@ -35,7 +35,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-OPS = Path.home() / ".openclaw" / "workspace" / "ops"
+OPS = Path.home() / "Library" / "Application Support" / "Thrawn" / "workspace" / "ops"
 BOARD = OPS / "TASK_BOARD.md"
 UPDATES = OPS / "agent-updates.json"
 LOG = OPS / "dispatch-log.jsonl"
@@ -46,11 +46,23 @@ TASK_TEMPLATE = """### {task_id}
 - Title: {title}
 - Owner: {owner}
 - Status: {status}
-- Priority: {priority}
+- Priority: {priority}{objective_block}
 - Notes: {notes}
 - Blockers: {blockers}
 - Next step: {next_step}
 """
+
+
+def objective_block(update):
+    """Optional Objective/Phase linkage lines. Only emitted when provided so
+    cards without an objective keep the legacy title-substring matching in
+    the app's objective board scanner."""
+    lines = ""
+    if update.get("objective"):
+        lines += "\n- Objective: " + str(update["objective"])
+        if update.get("phase") is not None:
+            lines += "\n- Phase: " + str(update["phase"])
+    return lines
 
 
 def log(msg, level="info"):
@@ -115,6 +127,7 @@ def apply_create(board_text, update):
         owner=update.get("owner", "Unassigned"),
         status=update.get("status", "Inbox"),
         priority=update.get("priority", "Medium"),
+        objective_block=objective_block(update),
         notes=update.get("notes", ""),
         blockers=update.get("blockers", ""),
         next_step=update.get("next_step", ""),

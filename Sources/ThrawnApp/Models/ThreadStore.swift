@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct ThreadInputMessage {
+    let role: String
+    let text: String
+}
+
 @MainActor
 final class ThreadStore: ObservableObject {
     enum Connectivity {
@@ -28,11 +33,18 @@ final class ThreadStore: ObservableObject {
     private var maxInputHistoryMessages = 36
     private var maxTotalInputChars = 16_000
     private var maxQueuedPerThread = 6
+    private let maxThreadToolRounds = 3
     private var inFlightTasks: [UUID: Task<Void, Never>] = [:]
     /// Ollama client — local LLM, set via `bindOllamaClient(_:)` from app entry.
     private(set) var ollamaClient: OllamaClient?
     /// OpenAI client — premium tier, routes Command thread to GPT when configured.
     private weak var openaiClient: OpenAIClient?
+    /// OpenClaw gateway client — subscription-backed, model-agnostic harness route.
+    private weak var openClawClient: GatewayWSClient?
+    /// Provider-agent runtime — Codex app-server is the primary interactive route.
+    private weak var agentRuntime: AgentRuntimeCoordinator?
+    /// Shared brain selector for V2 specialist routes.
+    private weak var devOpsBrain: DevOpsBrainStore?
     /// Execution service for tool calls in threads
     private(set) var executionService: ExecutionService?
     private var threadDrafts: [UUID: String] = [:]
@@ -90,14 +102,14 @@ final class ThreadStore: ObservableObject {
         self.storageURL = storageDir.appendingPathComponent("threads.json")
         self.draftStateURL = storageDir.appendingPathComponent("drafts.json")
         self.draftEventLogURL = storageDir.appendingPathComponent("draft-events.log")
-        applyGuardrailPreset()
+        applyRuntimePreset()
         preferenceObserver = NotificationCenter.default.addObserver(
             forName: ThrawnPreferencesStore.changedNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.applyGuardrailPreset()
+                self?.applyRuntimePreset()
             }
         }
         loadThreads()
@@ -112,6 +124,18 @@ final class ThreadStore: ObservableObject {
     /// Bind the shared OpenAIClient for premium-tier thread routing.
     func bindOpenAIClient(_ client: OpenAIClient) {
         self.openaiClient = client
+    }
+
+    func bindOpenClawClient(_ client: GatewayWSClient) {
+        self.openClawClient = client
+    }
+
+    func bindAgentRuntime(_ runtime: AgentRuntimeCoordinator) {
+        self.agentRuntime = runtime
+    }
+
+    func bindDevOpsBrain(_ store: DevOpsBrainStore) {
+        self.devOpsBrain = store
     }
 
     /// Bind the shared ExecutionService for tool calls.
@@ -265,32 +289,251 @@ final class ThreadStore: ObservableObject {
         inFlightCount = inFlightTasks.count
     }
 
-    private func performRequest(threadId: UUID, messages: [AnthropicMessage]) async {
+    private func performRequest(threadId: UUID, messages: [ThreadInputMessage]) async {
         let startMs = Int(Date().timeIntervalSince1970 * 1000)
-        let userText = messages.last(where: { $0.role == "user" })?.content.compactMap(\.text).joined(separator: "\n") ?? ""
+        let userText = messages.last(where: { $0.role == "user" })?.text ?? ""
 
-        // Route to OpenAI if configured — same premium-tier logic as Thrawn's heartbeat.
-        // This means every Command thread runs on the same brain as Thrawn's autonomous work.
-        if let openai = openaiClient, openai.apiKeyConfigured {
+        let route = ProviderRouter.thrawnCoreRoute(openAIConfigured: openaiClient?.apiKeyConfigured ?? false)
+
+        if route.backend == .codex, let agentRuntime {
+            await performCodexRequest(
+                runtime: agentRuntime,
+                threadId: threadId,
+                userText: userText,
+                startMs: startMs,
+                route: route
+            )
+            return
+        }
+
+        // Explicit fallback adapters remain available when selected.
+        if route.backend == .openclaw, let openClaw = openClawClient {
+            await performOpenClawRequest(
+                client: openClaw,
+                threadId: threadId,
+                userText: userText,
+                startMs: startMs,
+                model: route.model
+            )
+            return
+        }
+
+        if route.backend == .openai, let openai = openaiClient, openai.apiKeyConfigured {
             await performOpenAIRequest(client: openai, threadId: threadId, userText: userText, startMs: startMs)
             return
         }
 
-        // Ollama fallback — used when OpenAI key is not yet set.
-        guard let client = ollamaClient, client.connected else {
-            updateThreadFailure(threadId, error: "Ollama not connected. Make sure Ollama is running on localhost:11434.")
+        if route.backend == .openclaw {
+            updateThreadFailure(threadId, error: "OpenClaw GPT route unavailable. Check the gateway and try again.")
+            connectivity = .offline
+            lastErrorText = "OpenClaw route unavailable."
             inFlightTasks[threadId] = nil
             inFlightCount = inFlightTasks.count
             return
         }
 
-        await performOllamaRequest(client: client, threadId: threadId, userText: userText, startMs: startMs)
+        if route.backend == .openai {
+            updateThreadFailure(threadId, error: "OpenAI-compatible key missing. Check setup before sending.")
+            connectivity = .offline
+            lastErrorText = "OpenAI-compatible key missing."
+            inFlightTasks[threadId] = nil
+            inFlightCount = inFlightTasks.count
+            return
+        }
+
+        if route.backend == .codex {
+            updateThreadFailure(
+                threadId,
+                error: "Codex agent runtime unavailable. Confirm Codex is installed and signed in."
+            )
+            connectivity = .offline
+            lastErrorText = "Codex agent runtime unavailable."
+            inFlightTasks[threadId] = nil
+            inFlightCount = inFlightTasks.count
+            return
+        }
+
+        updateThreadFailure(threadId, error: "Configured model route unavailable. Check setup and try again.")
+        connectivity = .offline
+        lastErrorText = "Model route unavailable."
+        inFlightTasks[threadId] = nil
+        inFlightCount = inFlightTasks.count
+    }
+
+    // MARK: - Codex Agent Runtime
+
+    private func performCodexRequest(
+        runtime: AgentRuntimeCoordinator,
+        threadId: UUID,
+        userText: String,
+        startMs: Int,
+        route: RoutedProvider
+    ) async {
+        let sessionKey = "thread:\(threadId.uuidString.lowercased())"
+        let systemPrompt = SystemPromptBuilder.buildMainPrompt(
+            accessMode: executionService?.accessMode ?? .fullOperation,
+            modelLabel: runtime.runtimeLabel
+        )
+        var accumulated = ""
+
+        do {
+            let result = try await runtime.run(
+                prompt: userText,
+                options: AgentSessionOptions(
+                    sessionKey: sessionKey,
+                    agentID: "thrawn",
+                    developerInstructions: systemPrompt,
+                    model: route.model,
+                    reasoningEffort: route.reasoningEffort,
+                    approvalPolicy: .onRequest,
+                    sandbox: .fullOperation
+                )
+            ) { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case .textDelta(let delta):
+                    accumulated += delta
+                    if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
+                        if self.threads[index].messages.last?.role == .assistant {
+                            let lastIndex = self.threads[index].messages.count - 1
+                            self.threads[index].messages[lastIndex].text = accumulated
+                        } else {
+                            self.threads[index].messages.append(
+                                ChatMessage(role: .assistant, text: accumulated)
+                            )
+                        }
+                    }
+                case .toolCall(let call):
+                    FlightRecorder.logEvent(
+                        category: "codex-tool",
+                        action: call.status,
+                        detail: call.title
+                    )
+                case .fileChange(let change):
+                    FlightRecorder.logEvent(
+                        category: "codex-file",
+                        action: change.status,
+                        detail: change.paths.joined(separator: ", ")
+                    )
+                case .approvalRequired(let approval):
+                    self.lastErrorText = "Approval required: \(approval.title)"
+                case .error(let detail):
+                    self.lastErrorText = detail
+                case .reasoningDelta, .usage, .completed:
+                    break
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+            let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+            let response = result.text.isEmpty ? accumulated : result.text
+            updateThreadSuccess(
+                threadId,
+                response: response,
+                model: result.model,
+                latencyMs: latencyMs
+            )
+            connectivity = .online
+            lastErrorText = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            let detail = normalizeError(error)
+            FlightRecorder.logEvent(
+                category: "thread",
+                action: "codex-error",
+                detail: detail
+            )
+            updateThreadFailure(threadId, error: detail)
+            connectivity = .offline
+            lastErrorText = detail
+        }
+
+        inFlightTasks[threadId] = nil
+        inFlightCount = inFlightTasks.count
+    }
+
+    // MARK: - OpenClaw Request
+
+    private func performOpenClawRequest(client: GatewayWSClient, threadId: UUID, userText: String, startMs: Int, model: String, degraded: Bool = false) async {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let index = self.threads.firstIndex(where: { $0.id == threadId }),
+                   self.threads[index].isLoading {
+                    self.updateThreadFailure(threadId, error: "OpenClaw request timed out after 10 minutes. Tap to retry.")
+                    self.inFlightTasks[threadId] = nil
+                    self.inFlightCount = self.inFlightTasks.count
+                }
+            }
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var resumed = false
+            var accumulated = ""
+
+            func safeResume() {
+                guard !resumed else { return }
+                resumed = true
+                timeoutTask.cancel()
+                continuation.resume()
+            }
+
+            client.send(
+                text: userText,
+                sessionKey: "thrawn-thread-\(threadId.uuidString.lowercased())",
+                model: model,
+                thinking: ProviderRouter.premiumOpenClawThinkingLevel,
+                onDelta: { [weak self] delta in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        accumulated += delta
+                        if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
+                            if self.threads[index].messages.last?.role == .assistant {
+                                let lastIdx = self.threads[index].messages.count - 1
+                                self.threads[index].messages[lastIdx].text = accumulated
+                            } else {
+                                self.threads[index].messages.append(ChatMessage(role: .assistant, text: accumulated))
+                            }
+                        }
+                    }
+                },
+                onComplete: { [weak self] finalText, returnedModel in
+                    Task { @MainActor [weak self] in
+                        let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+                        let responseText = finalText.isEmpty ? accumulated : finalText
+                        if let self {
+                            self.updateThreadSuccess(threadId, response: responseText, model: returnedModel ?? model, latencyMs: latencyMs)
+                            self.connectivity = .online
+                            self.lastErrorText = degraded ? ProviderRouter.thrawnDegradedLabel : nil
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor [weak self] in
+                        FlightRecorder.logEvent(category: "thread", action: "openclaw-error", detail: error)
+                        if let self {
+                            self.updateThreadFailure(threadId, error: error)
+                            self.connectivity = .offline
+                            self.lastErrorText = error
+                            self.inFlightTasks[threadId] = nil
+                            self.inFlightCount = self.inFlightTasks.count
+                        }
+                        safeResume()
+                    }
+                }
+            )
+        }
     }
 
     // MARK: - Ollama Request
 
-    private func performOllamaRequest(client: OllamaClient, threadId: UUID, userText: String, startMs: Int) async {
-        let safetyTimeout = Task { [weak self] in
+    private func performOllamaRequest(client: OllamaClient, threadId: UUID, userText: String, startMs: Int, model: String? = nil) async {
+        let timeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -322,7 +565,7 @@ final class ThreadStore: ObservableObject {
             func safeResume() {
                 guard !resumed else { return }
                 resumed = true
-                safetyTimeout.cancel()
+                timeoutTask.cancel()
                 continuation.resume()
             }
 
@@ -330,10 +573,11 @@ final class ThreadStore: ObservableObject {
                 text: userText,
                 history: ollamaHistory,
                 systemPrompt: SystemPromptBuilder.buildMainPrompt(
-                    accessMode: self.executionService?.accessMode ?? .restricted,
-                    modelLabel: "Ollama (\(client.selectedModel))"
+                    accessMode: self.executionService?.accessMode ?? .fullOperation,
+                    modelLabel: "Ollama (\(model ?? client.selectedModel))"
                 ),
                 sessionKey: "thread:\(threadId.uuidString.lowercased())",
+                model: model,
                 onDelta: { [weak self] delta in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
@@ -381,7 +625,8 @@ final class ThreadStore: ObservableObject {
     // MARK: - OpenAI Request
 
     private func performOpenAIRequest(client: OpenAIClient, threadId: UUID, userText: String, startMs: Int) async {
-        let safetyTimeout = Task { [weak self] in
+        let sessionKey = "thread:\(threadId.uuidString.lowercased())"
+        let timeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -389,6 +634,7 @@ final class ThreadStore: ObservableObject {
                 if let index = self.threads.firstIndex(where: { $0.id == threadId }),
                    self.threads[index].isLoading {
                     self.updateThreadFailure(threadId, error: "Request timed out after 10 minutes. Tap to retry.")
+                    self.openaiClient?.abort(sessionKey: sessionKey)
                     self.inFlightTasks[threadId] = nil
                     self.inFlightCount = self.inFlightTasks.count
                 }
@@ -406,68 +652,200 @@ final class ThreadStore: ObservableObject {
             }
         }
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            var accumulated = ""
+        let systemPrompt = SystemPromptBuilder.buildMainPrompt(
+            accessMode: self.executionService?.accessMode ?? .fullOperation,
+            modelLabel: "GLM (\(ProviderRouter.premiumOpenAILabel))"
+        )
 
-            func safeResume() {
+        var history = openaiHistory
+        var currentText = userText
+        var lastModel = ProviderRouter.premiumOpenAIModel
+
+        for round in 0...maxThreadToolRounds {
+            guard !Task.isCancelled else {
+                timeoutTask.cancel()
+                return
+            }
+
+            let response = await sendOpenAIAndWait(
+                client: client,
+                text: currentText,
+                history: history,
+                systemPrompt: systemPrompt,
+                sessionKey: sessionKey
+            )
+
+            switch response {
+            case .failure(let error):
+                timeoutTask.cancel()
+                FlightRecorder.logEvent(category: "thread", action: "openai-error", detail: error)
+                updateThreadFailure(threadId, error: error)
+                connectivity = .offline
+                lastErrorText = error
+                inFlightTasks[threadId] = nil
+                inFlightCount = inFlightTasks.count
+                return
+
+            case .success(let responseText, let model):
+                lastModel = model ?? lastModel
+                let commands = AgentScheduler.extractBashCommands(from: responseText)
+                guard !commands.isEmpty else {
+                    timeoutTask.cancel()
+                    let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+                    updateThreadSuccess(threadId, response: responseText, model: lastModel, latencyMs: latencyMs)
+                    connectivity = .online
+                    lastErrorText = nil
+                    inFlightTasks[threadId] = nil
+                    inFlightCount = inFlightTasks.count
+                    return
+                }
+
+                guard let exec = executionService else {
+                    timeoutTask.cancel()
+                    updateThreadFailure(threadId, error: "Execution service is not available.")
+                    inFlightTasks[threadId] = nil
+                    inFlightCount = inFlightTasks.count
+                    return
+                }
+
+                history.append(OpenAIMessage(role: "user", text: currentText))
+                history.append(OpenAIMessage(role: "assistant", text: responseText))
+
+                var toolResults: [String] = []
+                for command in commands {
+                    FlightRecorder.logEvent(
+                        category: "thread-tool",
+                        action: "invoke",
+                        detail: "round \(round + 1): \(String(command.prefix(160)))"
+                    )
+                    let result = await exec.run(command, agentId: "thrawn")
+                    toolResults.append(formatToolResult(command: command, result: result))
+                }
+
+                currentText = """
+                [TOOL EXECUTION RESULTS]
+                The app executed your bash command fence(s). Use these results to answer the commander directly. Do not repeat the commands unless explicitly asked.
+
+                \(toolResults.joined(separator: "\n\n"))
+
+                [END TOOL EXECUTION RESULTS]
+
+                Prefer a final plain-English answer now. Only output another ```bash fence``` if one more local check is essential to avoid a wrong answer.
+                """
+            }
+        }
+
+        timeoutTask.cancel()
+        let finalPrompt = """
+        [FINAL SYNTHESIS REQUIRED]
+        No more shell commands will be executed for this turn. You have enough evidence in the prior tool results and in the latest tool result block below.
+
+        \(currentText)
+
+        Answer Andrew directly in plain English now. Do not output code fences. Do not ask to continue. If the evidence is incomplete, say what is known, what is not known, and the next useful step.
+        """
+        let finalResponse = await sendOpenAIAndWait(
+            client: client,
+            text: finalPrompt,
+            history: history,
+            systemPrompt: systemPrompt,
+            sessionKey: sessionKey
+        )
+        let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
+        switch finalResponse {
+        case .success(let responseText, let model):
+            let cleaned = stripExecutableCodeFences(from: responseText)
+            updateThreadSuccess(threadId, response: cleaned, model: model ?? lastModel, latencyMs: latencyMs)
+            connectivity = .online
+            lastErrorText = nil
+        case .failure(let error):
+            updateThreadSuccess(
+                threadId,
+                response: "I gathered local context but could not complete the final synthesis because GLM returned an error: \(error)",
+                model: lastModel,
+                latencyMs: latencyMs
+            )
+            lastErrorText = error
+        }
+        inFlightTasks[threadId] = nil
+        inFlightCount = inFlightTasks.count
+    }
+
+    private enum ThreadLLMResult {
+        case success(String, String?)
+        case failure(String)
+    }
+
+    private func sendOpenAIAndWait(
+        client: OpenAIClient,
+        text: String,
+        history: [OpenAIMessage],
+        systemPrompt: String,
+        sessionKey: String
+    ) async -> ThreadLLMResult {
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            func resumeOnce(_ result: ThreadLLMResult) {
                 guard !resumed else { return }
                 resumed = true
-                safetyTimeout.cancel()
-                continuation.resume()
+                continuation.resume(returning: result)
+            }
+            var watchdog: Task<Void, Never>?
+            watchdog = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 590_000_000_000)
+                guard !Task.isCancelled else { return }
+                resumeOnce(.failure("Request timed out after 10 minutes."))
             }
 
             client.send(
-                text: userText,
-                history: openaiHistory,
-                systemPrompt: SystemPromptBuilder.buildMainPrompt(
-                    accessMode: self.executionService?.accessMode ?? .restricted,
-                    modelLabel: "OpenAI (gpt-4.1)"
-                ),
-                sessionKey: "thread:\(threadId.uuidString.lowercased())",
-                onDelta: { [weak self] delta in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        accumulated += delta
-                        if let index = self.threads.firstIndex(where: { $0.id == threadId }) {
-                            if self.threads[index].messages.last?.role == .assistant {
-                                let lastIdx = self.threads[index].messages.count - 1
-                                self.threads[index].messages[lastIdx].text = accumulated
-                            } else {
-                                self.threads[index].messages.append(ChatMessage(role: .assistant, text: accumulated))
-                            }
-                        }
-                    }
+                text: text,
+                history: history,
+                systemPrompt: systemPrompt,
+                sessionKey: sessionKey,
+                onDelta: { _ in },
+                onComplete: { finalText, model in
+                    watchdog?.cancel()
+                    resumeOnce(.success(finalText, model))
                 },
-                onComplete: { [weak self] finalText, model in
-                    Task { @MainActor [weak self] in
-                        let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
-                        let responseText = finalText.isEmpty ? accumulated : finalText
-                        if let self {
-                            self.updateThreadSuccess(threadId, response: responseText, model: model ?? "gpt-4.1", latencyMs: latencyMs)
-                            self.connectivity = .online
-                            self.lastErrorText = nil
-                            self.inFlightTasks[threadId] = nil
-                            self.inFlightCount = self.inFlightTasks.count
-                        }
-                        safeResume()
-                    }
-                },
-                onError: { [weak self] error in
-                    Task { @MainActor [weak self] in
-                        FlightRecorder.logEvent(category: "thread", action: "openai-error", detail: error)
-                        if let self {
-                            self.updateThreadFailure(threadId, error: error)
-                            self.connectivity = .offline
-                            self.lastErrorText = error
-                            self.inFlightTasks[threadId] = nil
-                            self.inFlightCount = self.inFlightTasks.count
-                        }
-                        safeResume()
-                    }
+                onError: { error in
+                    watchdog?.cancel()
+                    resumeOnce(.failure(error))
                 }
             )
         }
+    }
+
+    private func formatToolResult(command: String, result: ShellCommandResult) -> String {
+        var parts: [String] = []
+        parts.append("$ \(command)")
+        if !result.stdout.isEmpty {
+            parts.append(cappedToolText(result.stdout, label: "stdout"))
+        }
+        if !result.stderr.isEmpty {
+            parts.append("[stderr]\n\(cappedToolText(result.stderr, label: "stderr"))")
+        }
+        parts.append("[exit code: \(result.exitCode)]")
+        return parts.joined(separator: "\n")
+    }
+
+    private func cappedToolText(_ text: String, label: String, limit: Int = 12_000) -> String {
+        guard text.count > limit else { return text }
+        return "\(text.prefix(limit))\n[\(label) truncated after \(limit) characters]"
+    }
+
+    private func stripExecutableCodeFences(from text: String) -> String {
+        let pattern = "```(?:bash|shell|sh|exec)\\s*\\n[\\s\\S]*?\\n```"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        let cleaned = regex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: "[additional command omitted]"
+        )
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Legacy (removed)
@@ -536,11 +914,11 @@ final class ThreadStore: ObservableObject {
         Task { await ChatDiagnostics.shared.log("send-drain thread=\(threadId.uuidString)") }
     }
 
-    private func buildInputMessages(for threadId: UUID) -> [AnthropicMessage] {
+    private func buildInputMessages(for threadId: UUID) -> [ThreadInputMessage] {
         guard let thread = threads.first(where: { $0.id == threadId }) else { return [] }
         let history = thread.messages.suffix(maxInputHistoryMessages)
         var totalChars = 0
-        var reversedSelection: [AnthropicMessage] = []
+        var reversedSelection: [ThreadInputMessage] = []
 
         for msg in history.reversed() {
             let role = msg.role == .assistant ? "assistant" : "user"
@@ -564,7 +942,7 @@ final class ThreadStore: ObservableObject {
             }
 
             totalChars += content.count
-            reversedSelection.append(AnthropicMessage(role: role, text: content))
+            reversedSelection.append(ThreadInputMessage(role: role, text: content))
             if totalChars >= maxTotalInputChars {
                 break
             }
@@ -577,7 +955,7 @@ final class ThreadStore: ObservableObject {
         String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxMessageLength))
     }
 
-    private func applyGuardrailPreset() {
+    private func applyRuntimePreset() {
         let prefs = ThrawnPreferencesStore.load()
         switch prefs.effectiveLiabilityMode {
         case .idiot:
@@ -598,7 +976,7 @@ final class ThreadStore: ObservableObject {
         let lower = raw.lowercased()
 
         if lower.contains("overloaded") || lower.contains("rate limit") || lower.contains("cooldown") {
-            return "Provider is overloaded right now. Retry in a moment or use local fallback."
+            return "Provider is overloaded right now. Retry in a moment."
         }
 
         if lower.contains("image exceeds 5 mb") || lower.contains("exceeds 5 mb maximum") {
@@ -636,6 +1014,9 @@ final class ThreadStore: ObservableObject {
         inFlightCount = max(0, inFlightTasks.count)
         // Cancel whichever backend is currently serving this thread
         let sessionKey = "thread:\(id.uuidString.lowercased())"
+        Task { [weak agentRuntime] in
+            await agentRuntime?.cancel(sessionKey: sessionKey)
+        }
         openaiClient?.abort(sessionKey: sessionKey)
         ollamaClient?.cancelAll()
         guard updateThreadState else { return }

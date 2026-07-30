@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Setup Wizard  ·  Thrawn Console
@@ -8,15 +9,14 @@ struct SetupWizardView: View {
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var ollama: OllamaClient
     @EnvironmentObject var openaiClient: OpenAIClient
+    @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
     @State private var scanOffset: CGFloat = -1.0
     @State private var glowPulse: Double = 0.6
     @State private var hexRotation: Double = 0
     @State private var systemsRevealed = false
-    @State private var selectedProvider: AIProvider? = .gemini
+    @State private var selectedProvider: AIProvider? = .chatgpt
     @State private var openAIToken: String = ""
     @State private var openAIModel: String = AIProvider.chatgpt.defaultModel
-    @State private var geminiAPIKeyInput: String = ""
-    @State private var geminiModel: String = AIProvider.gemini.defaultModel
 
     var body: some View {
         ZStack {
@@ -30,8 +30,11 @@ struct SetupWizardView: View {
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 20) {
-                        // API credentials (always shown — this is the core setup)
+                        // Provider-owned agent runtime (the primary model path)
                         credentialsCard
+
+                        // All known subscription sign-in gateways.
+                        subscriptionGatewaysCard
 
                         // Systems status grid
                         systemsStatusCard
@@ -39,7 +42,7 @@ struct SetupWizardView: View {
                         // Memory subsystem (optional)
                         memoryCard
 
-                        // Capability & guardrails
+                        // Capability protocol
                         capabilityCard
 
                         // Action bar
@@ -57,6 +60,7 @@ struct SetupWizardView: View {
         }
         .frame(width: 580, height: 680)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .preferredColorScheme(.dark)
         .onAppear {
             withAnimation(.linear(duration: 4.0).repeatForever(autoreverses: false)) {
                 scanOffset = 2.0
@@ -288,44 +292,236 @@ struct SetupWizardView: View {
     // MARK: - Cards
 
     private var credentialsCard: some View {
-        terminalCard(label: "CONNECT AI PROVIDER", icon: "link.circle.fill") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Choose your AI provider to connect THRAWN. Gemini is recommended — sign in with your Google account for free.")
+        terminalCard(label: "PROVIDER AGENT RUNTIME", icon: "terminal.fill") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.chissPrimary.opacity(0.12))
+                            .frame(width: 34, height: 34)
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(Color.chissPrimary)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text("CODEX CLI · APP-SERVER")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white.opacity(0.92))
+                            Circle()
+                                .fill(agentRuntime.isReady ? Color.green : Color.orange)
+                                .frame(width: 6, height: 6)
+                        }
+                        Text(agentRuntime.codexStatus.detail)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundColor(.white.opacity(0.45))
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Button {
+                        Task { await agentRuntime.refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Color.chissPrimary)
+                            .padding(8)
+                            .background(Circle().fill(Color.chissPrimary.opacity(0.10)))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Text("Thrawn launches Codex as the provider-owned agent runtime. Codex keeps and refreshes the ChatGPT credentials; Thrawn stores only its thread mapping.")
                     .font(.system(size: 11))
                     .foregroundColor(Color.white.opacity(0.55))
                     .lineSpacing(2)
 
-                // Provider cards
-                VStack(spacing: 8) {
-                    // Gemini — Primary, OAuth
-                    providerCardButton(
-                        provider: .gemini,
-                        badge: "RECOMMENDED",
-                        isExpanded: selectedProvider == .gemini
-                    ) {
-                        withAnimation(.spring(response: 0.3)) { selectedProvider = .gemini }
+                if agentRuntime.isReady {
+                    HStack(spacing: 14) {
+                        runtimeField(
+                            label: "ACCOUNT",
+                            value: agentRuntime.account?.displayName ?? "Authenticated"
+                        )
+                        runtimeField(
+                            label: "MODELS",
+                            value: "\(agentRuntime.codexModels.count) live"
+                        )
                     }
 
-                    // Claude — API Key
-                    providerCardButton(
-                        provider: .claude,
-                        badge: nil,
-                        isExpanded: selectedProvider == .claude
-                    ) {
-                        withAnimation(.spring(response: 0.3)) { selectedProvider = .claude }
+                    VStack(alignment: .leading, spacing: 5) {
+                        fieldLabel("LIVE MODEL")
+                        Picker(
+                            "",
+                            selection: Binding(
+                                get: { agentRuntime.selectedCodexModelID ?? "" },
+                                set: { agentRuntime.selectedCodexModelID = $0 }
+                            )
+                        ) {
+                            ForEach(agentRuntime.codexModels) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
 
-                    // ChatGPT — API Key
-                    providerCardButton(
-                        provider: .chatgpt,
-                        badge: nil,
-                        isExpanded: selectedProvider == .chatgpt
-                    ) {
-                        withAnimation(.spring(response: 0.3)) { selectedProvider = .chatgpt }
+                    if let model = agentRuntime.selectedModel,
+                       !model.supportedReasoningEfforts.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            fieldLabel("REASONING")
+                            Picker(
+                                "",
+                                selection: Binding(
+                                    get: {
+                                        agentRuntime.selectedReasoningEffort
+                                            ?? model.defaultReasoningEffort
+                                    },
+                                    set: { agentRuntime.selectedReasoningEffort = $0 }
+                                )
+                            ) {
+                                ForEach(model.supportedReasoningEfforts) { effort in
+                                    Text(effort.reasoningEffort.capitalized)
+                                        .tag(effort.reasoningEffort)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        fieldLabel("AUTHENTICATE WITH THE PROVIDER")
+                        Text("codex login")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(Color.chissPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.black.opacity(0.35))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1)
+                                    )
+                            )
+                        Text("Complete Codex's browser login, then select refresh. No ChatGPT password or token is entered into Thrawn.")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(.white.opacity(0.38))
                     }
                 }
             }
         }
+    }
+
+    private func runtimeField(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            fieldLabel(label)
+            Text(value)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(.white.opacity(0.72))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var subscriptionGatewaysCard: some View {
+        terminalCard(label: "SUBSCRIPTION GATEWAYS", icon: "point.3.connected.trianglepath.dotted") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Each provider owns its login. Thrawn keeps agent routes and session ids, never subscription passwords or OAuth tokens.")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.white.opacity(0.52))
+                    .lineSpacing(2)
+
+                ForEach(SubscriptionGatewayCatalog.all) { gateway in
+                    subscriptionGatewayRow(gateway)
+                }
+
+                Text("The active stable is routed OpenAI for Thrawn, Samwell, Sir Davos, and Dwight. Steven is pinned to Grok.")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundColor(Color.chissPrimary.opacity(0.72))
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private func subscriptionGatewayRow(
+        _ gateway: SubscriptionGatewayDescriptor
+    ) -> some View {
+        let state = gatewayState(gateway)
+        return HStack(spacing: 10) {
+            Circle()
+                .fill(state.ready ? Color.green : (gateway.isInstalled ? Color.orange : Color.white.opacity(0.20)))
+                .frame(width: 7, height: 7)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(gateway.displayName)
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundColor(.white.opacity(0.80))
+                Text(state.detail)
+                    .font(.system(size: 9))
+                    .foregroundColor(.white.opacity(0.38))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text(state.label)
+                .font(.system(size: 7.5, weight: .black, design: .monospaced))
+                .tracking(1)
+                .foregroundColor(state.ready ? Color.green : Color.orange.opacity(0.82))
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(gateway.authCommand, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(Color.chissPrimary.opacity(0.75))
+                    .padding(6)
+                    .background(Circle().fill(Color.chissPrimary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .help("Copy sign-in command: \(gateway.authCommand)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(0.018))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.white.opacity(0.055), lineWidth: 1)
+                )
+        )
+    }
+
+    private func gatewayState(
+        _ gateway: SubscriptionGatewayDescriptor
+    ) -> (ready: Bool, label: String, detail: String) {
+        if let backend = gateway.backend {
+            let status = agentRuntime.status(for: backend)
+            switch status.state {
+            case .ready:
+                return (true, "READY", status.detail)
+            case .authenticationRequired:
+                return (false, "SIGN IN", status.detail)
+            case .starting:
+                return (false, "CHECKING", status.detail)
+            case .unavailable, .failed:
+                return (false, gateway.isInstalled ? "CHECK" : "INSTALL CLI", status.detail)
+            }
+        }
+        if gateway.isInstalled {
+            return (
+                false,
+                "SIGN IN",
+                "CLI detected · copy \(gateway.authCommand) to authenticate"
+            )
+        }
+        return (
+            false,
+            "INSTALL CLI",
+            "Not installed · gateway becomes available after its CLI is added"
+        )
     }
 
     // MARK: - Provider Card Button
@@ -420,30 +616,19 @@ struct SetupWizardView: View {
     @ViewBuilder
     private func providerAuthForm(for provider: AIProvider) -> some View {
         switch provider {
-        case .gemini:
-            geminiOAuthForm
-        case .claude:
-            apiKeyForm(
-                provider: .claude,
-                placeholder: "sk-ant-api03-...",
-                getKeyLabel: "Get API Key from Anthropic",
-                token: $bootstrap.providerToken,
-                model: $bootstrap.providerModel
-            )
         case .chatgpt:
             apiKeyForm(
                 provider: .chatgpt,
-                placeholder: "sk-proj-...",
-                getKeyLabel: "Get API Key from OpenAI",
+                placeholder: "Z.ai API key",
+                getKeyLabel: "Get API Key from Z.ai",
                 token: $openAIToken,
                 model: $openAIModel
             )
         }
     }
 
-    private var geminiOAuthForm: some View {
+    private var ollamaStatusForm: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Ollama mode — no cloud OAuth needed
             HStack(spacing: 10) {
                 ZStack {
                     Circle()
@@ -454,7 +639,7 @@ struct SetupWizardView: View {
                         .foregroundColor(Color.chissPrimary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Ollama Mode Active")
+                    Text("Ollama Local Fallback")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white.opacity(0.80))
                     Text(ollama.connected ? "Connected · \(ollama.selectedModel)" : "Not running — start Ollama")
@@ -462,30 +647,6 @@ struct SetupWizardView: View {
                         .foregroundColor(.white.opacity(0.45))
                 }
                 Spacer()
-            }
-            if false {
-                // Dead code block to keep the remaining references compiling
-
-                // Or use API key
-                HStack(spacing: 4) {
-                    Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-                    Text("or use API key")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white.opacity(0.30))
-                    Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-                }
-                .padding(.vertical, 2)
-
-                TextField("Gemini API key...", text: $geminiAPIKeyInput)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11, design: .monospaced))
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.black.opacity(0.35))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                    )
-                    .foregroundColor(Color.chissPrimary)
             }
 
             if let error = ollama.lastError {
@@ -599,8 +760,7 @@ struct SetupWizardView: View {
     // MARK: - Validation Helpers
 
     private func isProviderConnected(_ provider: AIProvider) -> Bool {
-        // Ollama mode — always connected if Ollama is running
-        return ollama.connected
+        agentRuntime.isReady
     }
 
     private func isKeyFormatValid(_ key: String, provider: AIProvider) -> Bool {
@@ -617,15 +777,8 @@ struct SetupWizardView: View {
 
     /// Save provider config. Persists API keys to the keychain for cloud providers.
     private func saveProviderKeys() {
-        switch selectedProvider {
-        case .chatgpt:
-            let trimmed = openAIToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            openaiClient.setAPIKey(trimmed)
-            openaiClient.setModel(openAIModel)
-        default:
-            break  // Gemini uses OAuth; Ollama needs no key.
-        }
+        // The primary Codex route owns its credential lifecycle. Existing API
+        // adapters remain configured independently as explicit fallbacks.
     }
 
     private var systemsStatusCard: some View {
@@ -750,27 +903,22 @@ struct SetupWizardView: View {
     }
 
     private var capabilityCard: some View {
-        terminalCard(label: "GUARDRAIL PROTOCOL", icon: "shield.lefthalf.filled") {
+        terminalCard(label: "OPERATION PROTOCOL", icon: "bolt.shield.fill") {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Capability Mode", selection: Binding(
-                    get: { bootstrap.liabilityMode },
-                    set: { bootstrap.setLiabilityMode($0) }
-                )) {
-                    Text("Standard").tag(LiabilityMode.idiot)
-                    Text("Unrestricted").tag(LiabilityMode.myFault)
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(Color.chissPrimary)
+                    Text("Full operation active")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.5)
+                        .foregroundColor(Color.chissPrimary.opacity(0.82))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(!bootstrap.canDisableGuardrails)
 
-                Text(bootstrap.probationStatusText)
+                Text("Thrawn can run commands, write files, update the Flow Board through the dispatcher, and continue work until each card has a concrete owner, next step, deliverable, or Done evidence.")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(
-                        bootstrap.canDisableGuardrails
-                            ? Color.chissPrimary.opacity(0.60)
-                            : Color.white.opacity(0.40)
-                    )
-                    .lineLimit(2)
+                    .foregroundColor(Color.white.opacity(0.45))
+                    .lineLimit(3)
             }
         }
     }

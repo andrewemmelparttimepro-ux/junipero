@@ -1,7 +1,5 @@
-// MARK: - LEGACY — DO NOT USE IN NEW CODE
-// Gateway WebSocket client for the old OpenClaw gateway server.
-// Replaced by AnthropicClient.swift for native API access.
-// Kept temporarily as a fallback path during migration.
+// MARK: - OpenClaw Gateway Client
+// Subscription-backed gateway route used by Thrawn's command and agent system.
 // Types (GatewayWSClient, GatewayActiveSession, GatewayHistoryEntry)
 // are still referenced by ThreadStore, AgentRoster, and UI files.
 
@@ -13,7 +11,7 @@ struct GatewayHistoryContent: Codable {
     var text: String?
     var thinking: String?
     var content: String?
-    // Image content blocks from Claude API responses
+    // Image content blocks from gateway responses
     var source: GatewayImageSource?
 }
 
@@ -97,6 +95,11 @@ private struct GatewaySendResponse: Codable {
     var error: String?
     var text: String?
     var content: String?
+}
+
+private struct GatewaySessionCreateResponse: Codable {
+    var ok: Bool?
+    var key: String?
 }
 
 struct GatewayActiveSession: Codable {
@@ -257,6 +260,8 @@ final class GatewayWSClient: ObservableObject {
         text: String,
         imageData: Data? = nil,
         sessionKey: String = "main",
+        model: String? = nil,
+        thinking: String? = nil,
         onDelta: @escaping (String) -> Void,
         onComplete: @escaping (String, String?) -> Void,
         onError: @escaping (String) -> Void
@@ -282,41 +287,18 @@ final class GatewayWSClient: ObservableObject {
 
             let hasImage = imageData != nil
             await ChatDiagnostics.shared.log(
-                "gateway-send start session=\(resolvedSessionKey) chars=\(text.count) hasImage=\(hasImage) connected=\(self.connected) method=HTTP"
+                "gateway-send start session=\(resolvedSessionKey) chars=\(text.count) hasImage=\(hasImage) connected=\(self.connected) method=cli-rpc model=\(model ?? "-")"
             )
 
-            // PRIMARY PATH: HTTP POST /v1/chat/completions
-            let httpResult = await self.sendViaHTTP(text: text, imageData: imageData, sessionKey: resolvedSessionKey)
-
-            guard !Task.isCancelled else {
-                await ChatDiagnostics.shared.log("gateway-send cancelled")
-                return
-            }
-
-            switch httpResult {
-            case .success(let (responseText, model)):
-                self.lastError = nil
-                await ChatDiagnostics.shared.log(
-                    "gateway-http-send complete model=\(model ?? "-") chars=\(responseText.count)"
-                )
-                onDelta(responseText)
-                onComplete(responseText, model)
-                return
-
-            case .failure(let error):
-                await ChatDiagnostics.shared.log(
-                    "gateway-http-send all-attempts-failed error=\(error.localizedDescription)"
-                )
-                // FALLBACK: CLI send + poll (no image support in CLI fallback)
-                await ChatDiagnostics.shared.log("gateway-send falling back to CLI")
-                await self.sendViaCLI(
-                    text: text,
-                    sessionKey: resolvedSessionKey,
-                    onDelta: onDelta,
-                    onComplete: onComplete,
-                    onError: onError
-                )
-            }
+            await self.sendViaCLI(
+                text: text,
+                sessionKey: resolvedSessionKey,
+                model: model,
+                thinking: thinking,
+                onDelta: onDelta,
+                onComplete: onComplete,
+                onError: onError
+            )
         }
 
         activeRuns[resolvedSessionKey]?.cancel()
@@ -344,7 +326,7 @@ final class GatewayWSClient: ObservableObject {
         imageData: Data? = nil,
         sessionKey: String,
         maxRetries: Int = 3,
-        model: String = "anthropic/claude-sonnet-4-6"
+        model: String = ProviderRouter.premiumOpenClawModel
     ) async -> Result<(String, String?), Error> {
         guard let url = URL(string: "\(config.baseURL)/v1/chat/completions") else {
             return .failure(GatewayCLIError.commandFailed("Invalid gateway URL"))
@@ -483,14 +465,29 @@ final class GatewayWSClient: ObservableObject {
     private func sendViaCLI(
         text: String,
         sessionKey: String,
+        model: String? = nil,
+        thinking: String? = nil,
         onDelta: @escaping (String) -> Void,
         onComplete: @escaping (String, String?) -> Void,
         onError: @escaping (String) -> Void
     ) async {
+        let workingSessionKey: String
+        do {
+            workingSessionKey = try await ensureSessionCLI(
+                sessionKey: sessionKey,
+                model: model,
+                thinking: thinking
+            )
+        } catch {
+            await ChatDiagnostics.shared.log("gateway-cli-ensure-session failed error=\(error.localizedDescription)")
+            onError("Could not prepare OpenClaw session. \(error.localizedDescription)")
+            return
+        }
+
         // Step 1: Capture baseline history count BEFORE sending
         let baselineCount: Int
         do {
-            let baseline = try await self.loadHistoryCLI(sessionKey: sessionKey, limit: 5)
+            let baseline = try await self.loadHistoryCLI(sessionKey: workingSessionKey, limit: 5)
             baselineCount = baseline.count
         } catch {
             baselineCount = 0
@@ -500,10 +497,11 @@ final class GatewayWSClient: ObservableObject {
 
         // Step 2: Send via CLI RPC
         let sendResult = await self.gatewayCall(
-            method: "chat.send",
+            method: "sessions.send",
             params: [
-                "sessionKey": sessionKey,
+                "key": workingSessionKey,
                 "message": text,
+                "thinking": thinking ?? ProviderRouter.premiumOpenClawThinkingLevel,
                 "idempotencyKey": UUID().uuidString
             ],
             timeoutMs: 30_000
@@ -532,7 +530,11 @@ final class GatewayWSClient: ObservableObject {
         // Step 3: Poll chat.history
         var lastResolvedText = ""
         var pollsWithNoChange = 0
-        let maxPolls = 45
+        // Long-running production heartbeats can take several minutes on
+        // the subscription-backed OpenClaw route before the assistant message
+        // appears in gateway history. The scheduler has its own 15 minute
+        // watchdog, so keep this bounded but avoid a false 120s failure.
+        let maxPolls = 120
         let pollIntervalNs: UInt64 = 4_000_000_000
 
         for _ in 0..<maxPolls {
@@ -540,7 +542,7 @@ final class GatewayWSClient: ObservableObject {
             try? await Task.sleep(nanoseconds: pollIntervalNs)
 
             do {
-                let history = try await self.loadHistoryCLI(sessionKey: sessionKey, limit: baselineCount + 10)
+                let history = try await self.loadHistoryCLI(sessionKey: workingSessionKey, limit: baselineCount + 10)
                 let newMessages = history.count > baselineCount ? Array(history.suffix(from: baselineCount)) : []
                 let latestAssistant = newMessages.last(where: { $0.role == "assistant" })
 
@@ -572,7 +574,7 @@ final class GatewayWSClient: ObservableObject {
                     pollsWithNoChange += 1
                 }
 
-                if pollsWithNoChange >= 30 {
+                if pollsWithNoChange >= 120 {
                     onError("No response from OpenClaw after \(pollsWithNoChange * 4)s.")
                     return
                 }
@@ -581,7 +583,55 @@ final class GatewayWSClient: ObservableObject {
             }
         }
 
-        onError("Timed out waiting for response (~3 minutes).")
+        onError("Timed out waiting for response (~8 minutes).")
+    }
+
+    private func ensureSessionCLI(sessionKey: String, model: String?, thinking: String?) async throws -> String {
+        var createParams: [String: Any] = [
+            "key": sessionKey,
+            "agentId": "main",
+            "label": "Thrawn \(sessionKey)"
+        ]
+        if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            createParams["model"] = model
+        }
+
+        let createResult = await gatewayCall(
+            method: "sessions.create",
+            params: createParams,
+            timeoutMs: 15_000
+        )
+        guard createResult.exitCode == 0 else {
+            throw GatewayCLIError.commandFailed(
+                commandErrorMessage(from: createResult, fallback: "sessions.create failed")
+            )
+        }
+
+        let created = try decodeJSON(GatewaySessionCreateResponse.self, from: createResult.stdout)
+        let canonicalKey = created.key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let canonicalKey, !canonicalKey.isEmpty else {
+            throw GatewayCLIError.decodeFailed("OpenClaw did not return a session key.")
+        }
+
+        if let thinking, !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let patchResult = await gatewayCall(
+                method: "sessions.patch",
+                params: [
+                    "key": canonicalKey,
+                    "thinkingLevel": thinking,
+                    "reasoningLevel": "stream",
+                    "fastMode": false
+                ],
+                timeoutMs: 15_000
+            )
+            guard patchResult.exitCode == 0 else {
+                throw GatewayCLIError.commandFailed(
+                    commandErrorMessage(from: patchResult, fallback: "sessions.patch failed")
+                )
+            }
+        }
+
+        return canonicalKey
     }
 
     // MARK: - Fetch History
@@ -725,8 +775,23 @@ final class GatewayWSClient: ObservableObject {
             return ShellCommandResult(exitCode: 1, stdout: "", stderr: "Could not encode OpenClaw params as UTF-8.")
         }
 
-        let command = "openclaw gateway call \(shellQuote(method)) --json --timeout \(timeoutMs) --params \(shellQuote(jsonString))"
+        let command = "\(shellQuote(openClawExecutablePath())) gateway call \(shellQuote(method)) --json --timeout \(timeoutMs) --params \(shellQuote(jsonString))"
         return await ShellCommand.run(command)
+    }
+
+    private func openClawExecutablePath() -> String {
+        let fm = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/.nvm/versions/node/v24.14.1/bin/openclaw",
+            "\(home)/.openclaw/browser/openclaw",
+            "/opt/homebrew/bin/openclaw",
+            "/usr/local/bin/openclaw"
+        ]
+        if let found = candidates.first(where: { fm.isExecutableFile(atPath: $0) }) {
+            return found
+        }
+        return "openclaw"
     }
 
     private func decodeJSON<T: Decodable>(_ type: T.Type, from raw: String) throws -> T {

@@ -105,12 +105,12 @@ enum ThrawnPaths {
         guard let bundle = opsBundleDir else { return }
 
         // Mapping: OpsBundle subdir → destination under app support
-        let deployments: [(src: String, dst: String)] = [
-            ("ops/heartbeats",   "workspace/ops/heartbeats"),
-            ("ops",              "workspace/ops"),       // control docs (TASK_BOARD, APPROVAL_BOUNDARIES, etc.)
-            ("agents",           "workspace/agents"),
-            ("bin",              "bin"),
-            ("workspace-meta",   "workspace"),           // USER.md, SOUL.md, etc. → workspace root
+        let deployments: [(src: String, dst: String, replaceIfDifferent: Bool)] = [
+            ("ops/heartbeats",   "workspace/ops/heartbeats", false),
+            ("ops",              "workspace/ops", false),       // control docs (TASK_BOARD, OPERATING_AUTHORITY, etc.)
+            ("agents",           "workspace/agents", false),
+            ("bin",              "bin", true),
+            ("workspace-meta",   "workspace", false),           // USER.md, SOUL.md, etc. → workspace root
         ]
 
         for mapping in deployments {
@@ -121,9 +121,22 @@ enum ThrawnPaths {
             guard let files = try? fm.contentsOfDirectory(at: srcDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
             for file in files where !file.hasDirectoryPath {
                 let name = file.lastPathComponent
-                if isRuntimeState(name) { continue }
                 let dest = dstDir.appendingPathComponent(name)
-                deployIfNewer(from: file, to: dest)
+                if name == "TASK_BOARD.md", fm.fileExists(atPath: dest.path) {
+                    continue
+                }
+                if isRuntimeState(name) { continue }
+                deployIfNewer(from: file, to: dest, replaceIfDifferent: mapping.replaceIfDifferent)
+            }
+        }
+
+        let obsoleteFiles = [
+            "workspace/ops/APPROVAL_BOUNDARIES.md",
+        ]
+        for path in obsoleteFiles {
+            let url = appSupportDir.appendingPathComponent(path)
+            if fm.fileExists(atPath: url.path) {
+                try? fm.removeItem(at: url)
             }
         }
 
@@ -152,8 +165,16 @@ enum ThrawnPaths {
     }
 
     /// Copy src → dst only if src is newer or dst doesn't exist.
-    private static func deployIfNewer(from src: URL, to dst: URL) {
+    private static func deployIfNewer(from src: URL, to dst: URL, replaceIfDifferent: Bool = false) {
         if fm.fileExists(atPath: dst.path) {
+            if replaceIfDifferent,
+               let srcData = try? Data(contentsOf: src),
+               let dstData = try? Data(contentsOf: dst),
+               srcData != dstData {
+                try? fm.removeItem(at: dst)
+                try? fm.copyItem(at: src, to: dst)
+                return
+            }
             let srcAttrs = try? fm.attributesOfItem(atPath: src.path)
             let dstAttrs = try? fm.attributesOfItem(atPath: dst.path)
             let srcMod = srcAttrs?[.modificationDate] as? Date ?? .distantPast
@@ -211,6 +232,7 @@ enum ThrawnPaths {
             appSupportDir.appendingPathComponent("workspace/handoffs"),
             appSupportDir.appendingPathComponent("workspace/logs"),
             appSupportDir.appendingPathComponent("workspace/reports"),
+            appSupportDir.appendingPathComponent("workspace/deliverables"),
         ]
     }
 

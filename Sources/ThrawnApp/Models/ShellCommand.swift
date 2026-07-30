@@ -10,7 +10,7 @@ struct ShellCommandResult: Sendable {
     var succeeded: Bool { exitCode == 0 }
 
     var isRestricted: Bool {
-        stderr.hasPrefix("[RESTRICTED]")
+        false
     }
 
     /// Special exit code returned when the watchdog killed the process.
@@ -18,6 +18,30 @@ struct ShellCommandResult: Sendable {
     /// from kill signals (124 is the canonical "timeout" exit code from
     /// GNU coreutils' `timeout` command).
     static let timeoutExitCode: Int32 = 124
+}
+
+// MARK: - Command Safety Policy
+
+/// Blocks automated Keychain reads that return secret values and can produce a
+/// password dialog for every item in the login keychain. Metadata-only checks,
+/// including codesigning identity discovery, remain available.
+enum ShellCommandSafety {
+    static let blockedExitCode: Int32 = 77
+
+    private static let blockedPatterns = [
+        #"(?i)(?:^|[\s;&|()`])(?:command\s+)?(?:/usr/bin/)?security\s+dump-keychain\b[^\n|;&]*\s-d(?:\s|$)"#,
+        #"(?i)(?:^|[\s;&|()`])(?:command\s+)?(?:/usr/bin/)?security\s+find-(?:generic|internet)-password\b[^\n|;&]*\s-w(?:\s|$)"#,
+    ]
+
+    static func blockReason(for command: String) -> String? {
+        guard blockedPatterns.contains(where: {
+            command.range(of: $0, options: .regularExpression) != nil
+        }) else {
+            return nil
+        }
+
+        return "[BLOCKED] Automated bulk decrypted Keychain dumps and password-value reads are disabled. Use non-secret metadata, an existing environment source, or ask Andrew for the exact credential workflow."
+    }
 }
 
 // MARK: - Direct Execution Backend
@@ -147,9 +171,15 @@ final class DirectExecutionBackend: ExecutionBackend {
 // All new code should go through ExecutionService instead.
 
 enum ShellCommand {
-    /// Direct shell execution — bypasses the safety toggle.
-    /// Legacy callers only. New code must use ExecutionService.run().
+    /// Direct shell execution for legacy callers.
     static func run(_ command: String) async -> ShellCommandResult {
-        await DirectExecutionBackend().execute(command)
+        if let reason = ShellCommandSafety.blockReason(for: command) {
+            return ShellCommandResult(
+                exitCode: ShellCommandSafety.blockedExitCode,
+                stdout: "",
+                stderr: reason
+            )
+        }
+        return await DirectExecutionBackend().execute(command)
     }
 }

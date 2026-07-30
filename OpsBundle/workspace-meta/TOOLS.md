@@ -1,67 +1,42 @@
-# TOOLS.md - Local Notes
+# TOOLS.md
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
+## Active Runtime
 
-## What Goes Here
+- Model route: OpenClaw subscription GPT-5.4 xhigh for Thrawn, Samwell Tarly, Sir Davos, and Dwight; xAI Grok 4.5 for Steven.
+- Board updates: write JSON arrays to `workspace/ops/pending-updates/`.
+- Deliverables: publish user-facing HTML under `workspace/deliverables/<ticket>/<date>/<slug>/index.html`.
+- Logs: inspect `workspace/logs/`.
 
-Things like:
+## Browser Routing
 
-- Camera names and locations
-- SSH hosts and aliases
-- Preferred voices for TTS
-- Speaker/room names
-- Device nicknames
-- Anything environment-specific
+The stable has its OWN browser. Use it. Syntax is
+`openclaw browser --browser-profile <name> <command>`.
 
-## Examples
+**`openclaw` — the agent's own browser. This is the default and the first choice.**
+- Persistent profile at `~/.openclaw/browser/openclaw/user-data`, CDP on port 18800.
+- Start it with `openclaw browser start` if `openclaw browser status` shows `running: false`.
+- Its logins persist across restarts. Where a service is already signed in here, authenticated work needs no human at all.
+- It is a separate identity from Andrew's personal Chrome by design. Never assume its account is his.
 
-```markdown
-### Cameras
+**`user` — attaching to Andrew's own signed-in Chrome. Conditional.**
+- Requires the Chrome MCP bridge to be connected. When it is not, `browser.status` and
+  `browser.start` fail with a missing `DevToolsActivePort`, because normal Chrome runs
+  without a remote-debugging port. That is a configuration state, not something a retry fixes.
+- Do not relaunch, quit, or add debugging flags to Andrew's personal Chrome.
 
-- living-room → Main area, 180° wide angle
-- front-door → Entrance, motion-triggered
+**When a site needs a login the `openclaw` profile does not have:**
+1. Try the `openclaw` profile first and capture the exact page it lands on.
+2. If it hits a login wall, that is a one-time human step, not a recurring blocker.
+   Raise a single approval asking Andrew to sign that service into the agent browser
+   (`openclaw browser start`, then he signs in once — the session persists).
+3. Record the blocker once with the service name and stop. **Do not re-attempt the same
+   browser attach on every heartbeat.** Re-check at most once per day, or when Andrew says
+   the sign-in is done. Repeatedly retrying an unchanged configuration blocker is waste,
+   not diligence.
 
-### SSH
+**Never** ask for, store, type, or transmit Andrew's passwords, MFA codes, or session
+cookies. Signing a service into the agent browser is always his action, performed by him.
 
-- home-server → 192.168.1.100, user: admin
+## Local Work
 
-### TTS
-
-- Preferred voice: "Nova" (warm, slightly British)
-- Default speaker: Kitchen HomePod
-```
-
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
-
----
-
-## CLI Tools
-
-### CLI-Anything
-
-- Repo: `tools/CLI-Anything`
-- Virtualenv: `.venvs/cli-anything`
-- Blender CLI command: `. .venvs/cli-anything/bin/activate && cli-anything-blender --help`
-- Native Blender binary: `/Applications/Blender.app/Contents/MacOS/Blender`
-
-### Brain Drive
-
-- Mounted at: `/Volumes/brain`
-- NDAI root: `/Volumes/brain/NDAI`
-- Organized by Andrew, Thrawn, R2-D2, C-3PO, Qui-Gon, Lando, Boba, Shared, Projects, Reports, Assets, and Archive
-
-#### Assets Folder (canonical location for all creative assets)
-- Root: `/Volumes/brain/NDAI/Assets/`
-- Profile Pictures: `/Volumes/brain/NDAI/Assets/Images/Profile Pictures/`
-- Brand Marks: `/Volumes/brain/NDAI/Assets/Images/Brand Marks/`
-- Generated (unsorted AI output): `/Volumes/brain/NDAI/Assets/Images/Generated/`
-- Logos: `/Volumes/brain/NDAI/Assets/Images/Logos/`
-- Icons: `/Volumes/brain/NDAI/Assets/Icons/`
-- Fonts: `/Volumes/brain/NDAI/Assets/Fonts/`
-- Video: `/Volumes/brain/NDAI/Assets/Video/`
-- Audio: `/Volumes/brain/NDAI/Assets/Audio/`
-- **All future AI-generated assets go here, never to Desktop or temp dirs**
-
-Add whatever helps you do your job. This is your cheat sheet.
+Thrawn may run local build, verification, repair, and file operations through the app's full-operation command loop when the work is internal and authorized by the task.

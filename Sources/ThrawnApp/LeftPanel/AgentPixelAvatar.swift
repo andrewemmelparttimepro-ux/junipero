@@ -1,237 +1,35 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Agent Pixel Avatar
 //
 // Hand-crafted 12×12 pixel-art portraits — CryptoPunk-style homages to each
-// agent's Star Wars namesake. Offline-first, fully deterministic, no network
-// required. Unknown agents fall back to a procedural pattern.
+// agent's namesake. Offline-first, fully deterministic, no network required.
+// Unknown agents fall back to a procedural pattern.
 //
 // Grid encoding: '.' = transparent background, all other chars look up a
 // per-character color palette.
 
-// MARK: - Sprite Data
-
-private struct CharacterSprite {
-    let rows: [String]             // exactly 12 characters per row, 12 rows
-    let palette: [Character: Color]
-    let background: Color
-}
-
-// MARK: - Character Library
-
-private enum CharacterSpriteLibrary {
-
-    // ── THRAWN ───────────────────────────────────────────────────────────────
-    // Grand Admiral Thrawn. Blue Chiss skin, glowing red eyes, black angular
-    // hair, Imperial gray uniform, white collar pip.
-    static let thrawn = CharacterSprite(
-        rows: [
-            "....KKKK....",   // black angular hair
-            "...KBBBBBK..",   // hair framing blue face
-            "..KBBBBBBK..",   // Chiss blue face
-            "..KBRBBRBK..",   // face — red Imperial eyes
-            "..KBBBBBBK..",   // lower face
-            "...KBBBBK...",   // chin
-            "....WWWW....",   // white collar
-            "...GGGGGG...",   // Imperial gray uniform
-            "..GGGGGGGG..",   // uniform
-            ".GGGGGGGGGG.",   // uniform
-            "GGGGGGGGGGGG",   // uniform base
-            "GGGGGGGGGGGG",   // uniform base
-        ],
-        palette: [
-            "K": Color(red: 0.07, green: 0.09, blue: 0.11),   // near-black
-            "B": Color(red: 0.11, green: 0.31, blue: 0.85),   // Chiss blue
-            "R": Color(red: 0.93, green: 0.15, blue: 0.15),   // glowing red eyes
-            "W": Color(red: 0.96, green: 0.97, blue: 0.98),   // white collar
-            "G": Color(red: 0.24, green: 0.30, blue: 0.38),   // Imperial gray
-        ],
-        background: Color(red: 0.05, green: 0.08, blue: 0.16)
-    )
-
-    // ── R2-D2 ────────────────────────────────────────────────────────────────
-    // Astromech droid. White dome with blue panel decorations, matching body,
-    // stubby outer legs.
-    static let r2d2 = CharacterSprite(
-        rows: [
-            "....WWWW....",   // dome top
-            "..WBWWWWBW..",   // dome — blue panel hints
-            "..BBWWWWBB..",   // blue panel band
-            "..WWWWWWWW..",   // dome lower
-            ".WWWWWWWWWW.",   // body top
-            ".WBBWWWWBBW.",   // body — blue panels
-            ".WWWWWWWWWW.",   // body middle
-            ".WBBWBBWBBW.",   // body — blue detail grid
-            "..WWWWWWWW..",   // body bottom
-            "..WWWWWWWW..",   // leg area
-            "..WW....WW..",   // outer legs
-            "..WW....WW..",   // feet
-        ],
-        palette: [
-            "W": Color(red: 0.90, green: 0.92, blue: 0.94),   // white/silver
-            "B": Color(red: 0.14, green: 0.39, blue: 0.92),   // R2 blue
-        ],
-        background: Color(red: 0.06, green: 0.07, blue: 0.10)
-    )
-
-    // ── C-3PO ────────────────────────────────────────────────────────────────
-    // Protocol droid. All-gold plating, round head, dark eye sockets,
-    // humanoid silhouette.
-    static let c3po = CharacterSprite(
-        rows: [
-            "....gggg....",   // gold head top
-            "..gggggggg..",   // head
-            "..ggKggKgg..",   // face — dark eye sockets
-            "..ggKggKgg..",   // eye sockets continued
-            "..gggggggg..",   // lower face
-            "....gggg....",   // chin / neck
-            "..gggggggg..",   // chest
-            ".gggggggggg.",   // torso
-            ".gggggggggg.",   // torso
-            "..gg....gg..",   // waist gap
-            "..gg....gg..",   // legs
-            "..gg....gg..",   // feet
-        ],
-        palette: [
-            "g": Color(red: 0.85, green: 0.58, blue: 0.10),   // warm amber gold
-            "K": Color(red: 0.07, green: 0.06, blue: 0.04),   // dark eye sockets
-        ],
-        background: Color(red: 0.08, green: 0.06, blue: 0.02)
-    )
-
-    // ── QUI-GON JINN ─────────────────────────────────────────────────────────
-    // Jedi Master. Long dark hair, tan skin, medium-brown beard, earthy brown
-    // Jedi robes.
-    static let quigon = CharacterSprite(
-        rows: [
-            "..nnnnnnnn..",   // long dark brown hair
-            ".nTTTTTTTTn.",   // hair framing tan face
-            ".nTTTTTTTTn.",   // tan face
-            ".nTTwTTwTTn.",   // face — dark eyes
-            ".nTTTTTTTTn.",   // lower face
-            "..bbTTTTbb..",   // beard edges (medium brown)
-            "..bbbbbbbb..",   // beard
-            "...tttttt...",   // Jedi robes
-            "..tttttttt..",   // robes
-            ".tttttttttt.",   // robes wide
-            "tttttttttttt",   // robes base
-            "tttttttttttt",   // robes base
-        ],
-        palette: [
-            "n": Color(red: 0.20, green: 0.14, blue: 0.09),   // dark brown hair
-            "T": Color(red: 0.84, green: 0.70, blue: 0.54),   // tan/warm skin
-            "w": Color(red: 0.10, green: 0.08, blue: 0.06),   // dark eyes
-            "b": Color(red: 0.45, green: 0.31, blue: 0.18),   // medium brown beard
-            "t": Color(red: 0.36, green: 0.22, blue: 0.08),   // Jedi brown robes
-        ],
-        background: Color(red: 0.04, green: 0.08, blue: 0.05)
-    )
-
-    // ── LANDO CALRISSIAN ─────────────────────────────────────────────────────
-    // Smuggler-Baron Administrator. Warm dark skin, bold purple cape,
-    // gold/yellow shirt underneath. Confidence personified.
-    static let lando = CharacterSprite(
-        rows: [
-            "....KKKK....",   // stylish black hair
-            "...KDDDDDK..",   // hair framing dark face
-            "..KDDDDDDDK.",   // warm dark face
-            "..KDwDDwDDK.",   // face — dark eyes
-            "..KDDDDDDDK.",   // lower face / smile
-            "...KDDDDDK..",   // chin
-            "...cccccccc.",   // purple cape begins
-            ".ccccYYYccc.",   // cape + gold shirt
-            ".ccYYYYYYcc.",   // shirt visible
-            ".ccYYYYYYcc.",   // shirt
-            "ccccYYYccccc",   // cape flowing wide
-            "cccccccccccc",   // cape base
-        ],
-        palette: [
-            "K": Color(red: 0.07, green: 0.07, blue: 0.09),   // black hair
-            "D": Color(red: 0.38, green: 0.22, blue: 0.14),   // warm dark skin
-            "w": Color(red: 0.07, green: 0.07, blue: 0.09),   // eyes
-            "c": Color(red: 0.44, green: 0.18, blue: 0.86),   // vivid purple cape
-            "Y": Color(red: 0.97, green: 0.82, blue: 0.22),   // gold shirt
-        ],
-        background: Color(red: 0.06, green: 0.04, blue: 0.12)
-    )
-
-    // ── BOBA FETT ────────────────────────────────────────────────────────────
-    // Mandalorian bounty hunter. Beskar green armor, black T-visor (the
-    // signature horizontal slit), dark red trim, jetpack orange detail.
-    static let boba = CharacterSprite(
-        rows: [
-            "....EEEE....",   // green helmet top
-            "...EEEEEEEE.",   // helmet
-            "..EEEEEEEEEE",   // helmet wide
-            "..EKKKKKKKKE",   // ████ T-visor ████ — the iconic Mandalorian slit
-            "..EEEEEEEEEE",   // lower helmet
-            "...EEEEEEEE.",   // chin guard
-            "..EErrrrrrEE",   // body armor — dark red trim
-            "..EErrEErrEE",   // armor detail
-            "..EEEEEEEEEo",   // lower armor — jetpack flare (orange)
-            "...EEEEEEEE.",   // lower body
-            "....EE..EE..",   // legs
-            "....EE..EE..",   // boots
-        ],
-        palette: [
-            "E": Color(red: 0.04, green: 0.56, blue: 0.38),   // Mandalorian green
-            "K": Color(red: 0.05, green: 0.06, blue: 0.07),   // visor black
-            "r": Color(red: 0.50, green: 0.09, blue: 0.09),   // dark red trim
-            "o": Color(red: 0.92, green: 0.45, blue: 0.08),   // jetpack orange
-        ],
-        background: Color(red: 0.04, green: 0.07, blue: 0.05)
-    )
-
-    // KORBIS-SPAWN: V2 sprites (Bart, Hunter, Al Borland) live on the master
-    // branch only. The spawn ships only the dev-ops six.
-
-    static func sprite(for agentId: String) -> CharacterSprite? {
-        switch agentId.lowercased() {
-        case "thrawn":                          return thrawn
-        case "r2d2", "r2-d2":                  return r2d2
-        case "c3po", "c-3po":                  return c3po
-        case "quigon", "qui-gon":              return quigon
-        case "lando":                           return lando
-        case "boba", "bobafett":               return boba
-        default:                                return nil
-        }
-    }
-}
-
-// MARK: - Sprite Renderer
-
-private struct SpritePixelAvatar: View {
-    let sprite: CharacterSprite
+private struct ResourceImageAvatar: View {
+    let resourceName: String
     let size: CGFloat
 
+    private var nsImage: NSImage? {
+        guard let url = Bundle.module.url(forResource: resourceName, withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
     var body: some View {
-        Canvas { ctx, canvasSize in
-            let cols = 12
-            let rowCount = sprite.rows.count
-            let cellW = canvasSize.width / CGFloat(cols)
-            let cellH = canvasSize.height / CGFloat(rowCount)
-
-            // Background
-            ctx.fill(
-                Path(CGRect(origin: .zero, size: canvasSize)),
-                with: .color(sprite.background)
-            )
-
-            // Pixel grid — transparent pixels ('.' or unmapped) are skipped
-            for (rowIdx, rowStr) in sprite.rows.enumerated() {
-                for (colIdx, char) in rowStr.enumerated() {
-                    guard char != ".", let color = sprite.palette[char] else { continue }
-                    let rect = CGRect(
-                        x: CGFloat(colIdx) * cellW,
-                        y: CGFloat(rowIdx) * cellH,
-                        width: cellW,
-                        height: cellH
-                    )
-                    ctx.fill(Path(rect), with: .color(color))
-                }
-            }
+        if let nsImage {
+            Image(nsImage: nsImage)
+                .resizable()
+                .interpolation(.high)
+                .antialiased(true)
+                .scaledToFill()
+                .frame(width: size, height: size)
+        } else {
+            EmptyView()
         }
-        .frame(width: size, height: size)
     }
 }
 
@@ -299,10 +97,25 @@ struct AgentPixelAvatar: View {
 
     @ViewBuilder
     private var avatarCanvas: some View {
-        if let sprite = CharacterSpriteLibrary.sprite(for: agentId) {
-            SpritePixelAvatar(sprite: sprite, size: size)
+        if let resourceName = resourceAvatarName {
+            ResourceImageAvatar(resourceName: resourceName, size: size)
         } else {
             FallbackPixelAvatar(agentId: agentId, size: size)
+        }
+    }
+
+    private var resourceAvatarName: String? {
+        switch agentId.lowercased() {
+        case "thrawn":
+            return "thrawn-agent-avatar"
+        case "archivist":
+            return "samwell-agent-avatar"
+        case "sentinel":
+            return "sir-davos-agent-avatar"
+        case "dwight":
+            return "dwight-agent-avatar"
+        default:
+            return nil
         }
     }
 }

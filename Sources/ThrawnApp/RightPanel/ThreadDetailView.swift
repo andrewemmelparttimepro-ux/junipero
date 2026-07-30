@@ -79,19 +79,7 @@ struct ThreadDetailView: View {
                             }
 
                             if thread.isLoading {
-                                HStack {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                    Text("Thrawn is thinking...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(Color.black.opacity(0.72))
-                                    Spacer()
-                                }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.white.opacity(0.9))
-                                )
+                                ThreadThinkingBubble(agentName: "Thrawn", agentInitial: "T")
                                 .id("loading-\(thread.id.uuidString)")
                             } else if thread.state == .failed {
                                 HStack {
@@ -294,6 +282,55 @@ private struct ThreadAttachmentStrip: View {
             }
         }
         .frame(height: 30)
+    }
+}
+
+private struct ThreadThinkingBubble: View {
+    let agentName: String
+    let agentInitial: String
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            avatar
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(agentName.uppercased())
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundColor(Color(red: 0.16, green: 0.36, blue: 0.62).opacity(0.78))
+                    ThrawnActivitySpinner(active: true, diameter: 14, lineWidth: 2.0, trackOpacity: 0.18)
+                }
+
+                Text("\(agentName) is working...")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.78))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.white.opacity(0.95))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(red: 0.20, green: 0.45, blue: 0.74).opacity(0.12), lineWidth: 1)
+            )
+
+            Spacer(minLength: 20)
+        }
+    }
+
+    private var avatar: some View {
+        ZStack {
+            Circle()
+                .fill(Color(red: 0.15, green: 0.29, blue: 0.42))
+                .frame(width: 28, height: 28)
+            Text(agentInitial)
+                .font(.system(size: 13, weight: .bold, design: .serif))
+                .foregroundColor(Color(red: 0.42, green: 0.68, blue: 0.82))
+        }
+        .shadow(color: Color(red: 0.20, green: 0.45, blue: 0.74).opacity(0.28), radius: 6)
     }
 }
 

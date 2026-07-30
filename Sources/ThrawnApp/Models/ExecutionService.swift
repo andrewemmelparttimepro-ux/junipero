@@ -10,9 +10,8 @@ import SwiftUI
 //   • DirectExecutionBackend  — uses Process() (notarized DMG builds)
 //   • XPCExecutionBackend     — talks to embedded helper (App Store builds)
 //
-// The safety toggle (AccessMode) gates everything at this layer.
-// When restricted, all execution requests return a clear error.
-// When unleashed, commands flow to the active backend.
+// Thrawn runs in full-operation mode by default. AccessMode remains only for
+// legacy preference decoding and stable call sites.
 
 // MARK: - Protocol
 
@@ -26,9 +25,8 @@ protocol ExecutionBackend: Sendable {
 
 @MainActor
 final class ExecutionService: ObservableObject {
-    @Published var accessMode: AccessMode = .restricted
+    @Published var accessMode: AccessMode = .fullOperation
     @Published var backendAvailable: Bool = false
-    @Published var showUnleashConfirmation: Bool = false
     @Published var commandHistory: [ExecutedCommand] = []
 
     private let backend: ExecutionBackend
@@ -38,7 +36,7 @@ final class ExecutionService: ObservableObject {
         let timestamp: Date
         let command: String
         let result: ShellCommandResult
-        let agentId: String?  // nil = user session, "r2d2" = agent heartbeat, etc.
+        let agentId: String?  // nil = user session, otherwise the V2 agent ID.
         var durationMs: Int
     }
 
@@ -49,26 +47,25 @@ final class ExecutionService: ObservableObject {
         self.backend = backend ?? DirectExecutionBackend()
         #endif
 
-        // Load persisted access mode
-        let prefs = ThrawnPreferencesStore.load()
-        self.accessMode = prefs.effectiveAccessMode
+        ThrawnPreferencesStore.setAccessMode(.fullOperation)
+        self.accessMode = .fullOperation
     }
 
     // MARK: - Central Execution Gate
 
-    /// Execute a shell command. Returns restricted error if safety is ON.
-    /// This is the ONLY way to run commands in the app.
+    /// Execute a shell command. This is the normal tool path for Thrawn and agents.
     func run(_ command: String, agentId: String? = nil) async -> ShellCommandResult {
-        guard accessMode == .unleashed else {
-            return ShellCommandResult(
-                exitCode: 1,
-                stdout: "",
-                stderr: "[RESTRICTED] Computer access is disabled. Toggle safety OFF in the console to enable full OpenClaw access."
-            )
-        }
-
         let startTime = Date()
-        let result = await backend.execute(command)
+        let result: ShellCommandResult
+        if let reason = ShellCommandSafety.blockReason(for: command) {
+            result = ShellCommandResult(
+                exitCode: ShellCommandSafety.blockedExitCode,
+                stdout: "",
+                stderr: reason
+            )
+        } else {
+            result = await backend.execute(command)
+        }
         let duration = Int(Date().timeIntervalSince(startTime) * 1000)
 
         let entry = ExecutedCommand(
@@ -107,41 +104,6 @@ final class ExecutionService: ObservableObject {
         return result
     }
 
-    // MARK: - Access Mode Control
-
-    /// Request to toggle to unleashed mode. Shows confirmation dialog.
-    func requestUnleash() {
-        guard ThrawnPreferencesStore.load().canToggleAccess else { return }
-        showUnleashConfirmation = true
-    }
-
-    /// Confirm unleash after user accepts the dialog.
-    func confirmUnleash() {
-        ThrawnPreferencesStore.setAccessMode(.unleashed)
-        accessMode = .unleashed
-        showUnleashConfirmation = false
-
-        Task {
-            backendAvailable = await backend.isAvailable()
-        }
-    }
-
-    /// Return to restricted mode (immediate, no confirmation needed).
-    func restrict() {
-        ThrawnPreferencesStore.setAccessMode(.restricted)
-        accessMode = .restricted
-        showUnleashConfirmation = false
-    }
-
-    /// Toggle access mode. If going to unleashed, shows confirmation first.
-    func toggleAccess() {
-        if accessMode == .unleashed {
-            restrict()
-        } else {
-            requestUnleash()
-        }
-    }
-
     // MARK: - Backend Health
 
     func checkBackendHealth() async {
@@ -151,7 +113,6 @@ final class ExecutionService: ObservableObject {
     // MARK: - Sync from Preferences
 
     func syncFromPreferences() {
-        let prefs = ThrawnPreferencesStore.load()
-        accessMode = prefs.effectiveAccessMode
+        accessMode = .fullOperation
     }
 }
