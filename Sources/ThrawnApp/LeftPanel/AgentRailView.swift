@@ -277,7 +277,7 @@ private struct AgentRailCard: View {
                         }
                         Spacer(minLength: 4)
                         VStack(alignment: .trailing, spacing: 4) {
-                            AgentModelBadge(route: AgentModelBadge.route(for: spec), isProminent: isCommandCard)
+                            AgentGatewayPicker(agentID: agent.id, style: .rail)
                             Text(agent.role)
                                 .font(.system(size: isCommandCard ? 9.8 : 9.5, weight: .bold))
                                 .foregroundColor(agent.state.chissColor.opacity(isCommandCard ? 0.96 : 0.85))

@@ -121,6 +121,7 @@ struct ThrawnApp: App {
                     // 4. Agent specs + standard loadout → tool registry
                     specStore.bind(loadout: loadoutStore)
                     ToolRegistry.specStore = specStore
+                    threadStore.bindAgentSpecs(specStore)
                     AgentSpecStore.ensureKnowledgeDirs(for: specStore.specs)
                     rankEvaluator.bind(specs: specStore)
 

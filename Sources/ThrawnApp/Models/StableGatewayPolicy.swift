@@ -10,6 +10,7 @@ enum StableGatewayPolicy {
     static let currentVersion = 1
     static let stableAgentIDs = ["thrawn", "archivist", "sentinel", "dwight", "steven"]
     static let openAIAgentIDs: Set<String> = ["thrawn", "archivist", "sentinel", "dwight"]
+    static let selectableGateways: [ProviderBackend] = [.codex, .grok, .claude]
 
     static func defaultOverride(for agentID: String) -> AgentModelOverride? {
         if openAIAgentIDs.contains(agentID) {

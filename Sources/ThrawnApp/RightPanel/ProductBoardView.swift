@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - Product Board Switcher
 //
@@ -330,7 +331,7 @@ struct ProductBoardFullScreen: View {
     @ViewBuilder
     private var overlayFooter: some View {
         HStack {
-            Text("DOUBLE-CLICK ANYWHERE TO ADD A NOTE  ·  DRAG TO PAN  ·  PINCH OR ± TO ZOOM  ·  ⌫ TO DELETE SELECTED")
+            Text("DOUBLE-CLICK TO ADD A NOTE  ·  DROP FILES TO PIN THEM  ·  DRAG TO PAN  ·  PINCH OR ± TO ZOOM  ·  ⌫ TO DELETE SELECTED")
                 .font(.system(size: 9, weight: .heavy, design: .monospaced))
                 .tracking(1.2)
                 .foregroundColor(Color.white.opacity(0.30))
@@ -413,6 +414,7 @@ struct ProductBoardCanvas: View {
     @State private var draggedTranslation: CGSize = .zero
     @State private var editingNodeID: String?
     @State private var selectedNodeID: String?
+    @State private var isDropTargeted = false
 
     private var effectiveScale: CGFloat {
         min(max(zoom * pinchScale, 0.30), 2.20)
@@ -464,6 +466,12 @@ struct ProductBoardCanvas: View {
                         isEditing: editingNodeID == node.id,
                         isSelected: selectedNodeID == node.id,
                         onCommit: { newTitle, newBody in
+                            // File cards never enter text-edit mode; guard so
+                            // the empty-note discard can't touch them.
+                            guard node.filePath == nil else {
+                                editingNodeID = nil
+                                return
+                            }
                             let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                             let body = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
                             if title.isEmpty && body.isEmpty {
@@ -526,6 +534,20 @@ struct ProductBoardCanvas: View {
                 guard editingNodeID == nil, let selected = selectedNodeID else { return }
                 store.deleteNode(selected, on: board)
                 selectedNodeID = nil
+            }
+            // Drag files from Finder onto the board — they pin as document
+            // cards at the drop location. Link, not copy: double-click opens
+            // the live original.
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers, location in
+                handleFileDrop(providers, at: location, in: proxy.size)
+            }
+            .overlay {
+                if isDropTargeted {
+                    Rectangle()
+                        .stroke(board.accentColor.opacity(0.70), lineWidth: 3)
+                        .background(board.accentColor.opacity(0.05))
+                        .allowsHitTesting(false)
+                }
             }
         }
         .onChange(of: board) { _ in
@@ -652,6 +674,53 @@ struct ProductBoardCanvas: View {
     private func beginEditing(_ node: ProductBoardNode) {
         selectedNodeID = node.id
         editingNodeID = node.id
+    }
+
+    /// Resolve dropped file URLs and pin each as a card at the drop point.
+    /// Multiple files cascade slightly so they don't stack invisibly.
+    private func handleFileDrop(
+        _ providers: [NSItemProvider],
+        at location: CGPoint,
+        in size: CGSize
+    ) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+
+        for (index, provider) in fileProviders.enumerated() {
+            provider.loadItem(
+                forTypeIdentifier: UTType.fileURL.identifier,
+                options: nil
+            ) { item, error in
+                let url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else if let direct = item as? URL {
+                    url = direct
+                } else {
+                    url = nil
+                }
+                guard let url else {
+                    FlightRecorder.logError(
+                        source: "board:drop",
+                        message: "Could not read dropped item: \(error?.localizedDescription ?? "unknown provider payload")"
+                    )
+                    return
+                }
+                Task { @MainActor in
+                    let cascade = CGFloat(index) * 26
+                    let scale = max(effectiveScale, 0.30)
+                    let boardPoint = ProductBoardPoint(
+                        Double((location.x + cascade - size.width / 2 - viewportOffset.width) / scale),
+                        Double((location.y + cascade - size.height / 2 - viewportOffset.height) / scale)
+                    )
+                    let node = store.addFile(to: board, url: url, at: boardPoint)
+                    selectedNodeID = node.id
+                }
+            }
+        }
+        return true
     }
 
     private func recenter() {
@@ -790,9 +859,13 @@ private struct FreeformNoteCard: View {
         return palette[node.colorSlot % palette.count]
     }
 
+    private var isFile: Bool { node.filePath != nil }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if isEditing {
+            if let filePath = node.filePath {
+                fileContent(filePath)
+            } else if isEditing {
                 TextField("Note title", text: $titleDraft, onCommit: commit)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .bold))
@@ -823,7 +896,10 @@ private struct FreeformNoteCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [noteTint, noteTint.opacity(0.88)],
+                        colors: isFile
+                            // Documents read as white paper pinned to the board
+                            ? [Color.white, Color(red: 0.97, green: 0.96, blue: 0.93)]
+                            : [noteTint, noteTint.opacity(0.88)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -852,11 +928,16 @@ private struct FreeformNoteCard: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture(count: 2) {
-            onBeginEdit()
+            if let filePath = node.filePath {
+                NSWorkspace.shared.open(URL(fileURLWithPath: filePath))
+            } else {
+                onBeginEdit()
+            }
         }
         .onTapGesture(count: 1) {
             onSelect()
         }
+        .help(isFile ? "Double-click to open · drag to move" : "Double-click to edit · drag to move")
         .onChange(of: isEditing) { editing in
             if editing {
                 titleDraft = node.title
@@ -875,6 +956,41 @@ private struct FreeformNoteCard: View {
 
     private func commit() {
         onCommit(titleDraft, bodyDraft)
+    }
+
+    @ViewBuilder
+    private func fileContent(_ filePath: String) -> some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: filePath))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(node.title)
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundColor(Self.ink)
+                    .lineLimit(2)
+                Text(fileSubtitle(filePath))
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundColor(Self.ink.opacity(0.55))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func fileSubtitle(_ path: String) -> String {
+        let ext = (path as NSString).pathExtension.uppercased()
+        let kind = ext.isEmpty ? "FILE" : ext
+        guard FileManager.default.fileExists(atPath: path) else {
+            return "\(kind) · MISSING"
+        }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let bytes = (attrs?[.size] as? Int64) ?? 0
+        guard bytes > 0 else { return kind }
+        let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return "\(kind) · \(size.uppercased())"
     }
 }
 

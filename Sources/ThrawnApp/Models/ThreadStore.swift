@@ -43,6 +43,8 @@ final class ThreadStore: ObservableObject {
     private weak var openClawClient: GatewayWSClient?
     /// Provider-agent runtime — Codex app-server is the primary interactive route.
     private weak var agentRuntime: AgentRuntimeCoordinator?
+    /// Canonical per-agent route store shared with every gateway picker.
+    private weak var specStore: AgentSpecStore?
     /// Shared brain selector for V2 specialist routes.
     private weak var devOpsBrain: DevOpsBrainStore?
     /// Execution service for tool calls in threads
@@ -132,6 +134,10 @@ final class ThreadStore: ObservableObject {
 
     func bindAgentRuntime(_ runtime: AgentRuntimeCoordinator) {
         self.agentRuntime = runtime
+    }
+
+    func bindAgentSpecs(_ store: AgentSpecStore) {
+        self.specStore = store
     }
 
     func bindDevOpsBrain(_ store: DevOpsBrainStore) {
@@ -293,13 +299,23 @@ final class ThreadStore: ObservableObject {
         let startMs = Int(Date().timeIntervalSince1970 * 1000)
         let userText = messages.last(where: { $0.role == "user" })?.text ?? ""
 
-        let route = ProviderRouter.thrawnCoreRoute(openAIConfigured: openaiClient?.apiKeyConfigured ?? false)
+        let route = specStore?.routedProvider(forAgentId: "thrawn")
+            ?? ToolRegistry.specStore?.routedProvider(forAgentId: "thrawn")
+            ?? ProviderRouter.thrawnCoreRoute(
+                openAIConfigured: openaiClient?.apiKeyConfigured ?? false
+            )
 
-        if route.backend == .codex, let agentRuntime {
-            await performCodexRequest(
+        if route.backend.isSubscriptionGateway, let agentRuntime {
+            let routedUserText = continuityHandoff(
+                threadId: threadId,
+                currentText: userText,
+                messages: messages,
+                destination: route.backend
+            )
+            await performAgentRuntimeRequest(
                 runtime: agentRuntime,
                 threadId: threadId,
-                userText: userText,
+                userText: routedUserText,
                 startMs: startMs,
                 route: route
             )
@@ -341,13 +357,13 @@ final class ThreadStore: ObservableObject {
             return
         }
 
-        if route.backend == .codex {
+        if route.backend.isSubscriptionGateway {
             updateThreadFailure(
                 threadId,
-                error: "Codex agent runtime unavailable. Confirm Codex is installed and signed in."
+                error: "\(route.backend.gatewayDisplayName) agent runtime unavailable. Check this agent's existing account connection."
             )
             connectivity = .offline
-            lastErrorText = "Codex agent runtime unavailable."
+            lastErrorText = "\(route.backend.gatewayDisplayName) runtime unavailable."
             inFlightTasks[threadId] = nil
             inFlightCount = inFlightTasks.count
             return
@@ -360,9 +376,9 @@ final class ThreadStore: ObservableObject {
         inFlightCount = inFlightTasks.count
     }
 
-    // MARK: - Codex Agent Runtime
+    // MARK: - Subscription Agent Runtime
 
-    private func performCodexRequest(
+    private func performAgentRuntimeRequest(
         runtime: AgentRuntimeCoordinator,
         threadId: UUID,
         userText: String,
@@ -370,9 +386,20 @@ final class ThreadStore: ObservableObject {
         route: RoutedProvider
     ) async {
         let sessionKey = "thread:\(threadId.uuidString.lowercased())"
+        let modelLabel: String
+        switch route.backend {
+        case .codex:
+            modelLabel = runtime.runtimeLabel
+        case .grok:
+            modelLabel = "Grok CLI · \(route.model)"
+        case .claude:
+            modelLabel = "Claude Code · \(route.model)"
+        case .ollama, .openai, .openclaw, .xai:
+            modelLabel = route.backend.gatewayDisplayName
+        }
         let systemPrompt = SystemPromptBuilder.buildMainPrompt(
             accessMode: executionService?.accessMode ?? .fullOperation,
-            modelLabel: runtime.runtimeLabel
+            modelLabel: modelLabel
         )
         var accumulated = ""
 
@@ -382,6 +409,7 @@ final class ThreadStore: ObservableObject {
                 options: AgentSessionOptions(
                     sessionKey: sessionKey,
                     agentID: "thrawn",
+                    provider: route.backend,
                     developerInstructions: systemPrompt,
                     model: route.model,
                     reasoningEffort: route.reasoningEffort,
@@ -405,13 +433,13 @@ final class ThreadStore: ObservableObject {
                     }
                 case .toolCall(let call):
                     FlightRecorder.logEvent(
-                        category: "codex-tool",
+                        category: "\(route.backend.rawValue)-tool",
                         action: call.status,
                         detail: call.title
                     )
                 case .fileChange(let change):
                     FlightRecorder.logEvent(
-                        category: "codex-file",
+                        category: "\(route.backend.rawValue)-file",
                         action: change.status,
                         detail: change.paths.joined(separator: ", ")
                     )
@@ -427,6 +455,9 @@ final class ThreadStore: ObservableObject {
             guard !Task.isCancelled else { return }
             let latencyMs = Int(Date().timeIntervalSince1970 * 1000) - startMs
             let response = result.text.isEmpty ? accumulated : result.text
+            if let index = threads.firstIndex(where: { $0.id == threadId }) {
+                threads[index].lastProvider = route.backend
+            }
             updateThreadSuccess(
                 threadId,
                 response: response,
@@ -440,7 +471,7 @@ final class ThreadStore: ObservableObject {
             let detail = normalizeError(error)
             FlightRecorder.logEvent(
                 category: "thread",
-                action: "codex-error",
+                action: "\(route.backend.rawValue)-error",
                 detail: detail
             )
             updateThreadFailure(threadId, error: detail)
@@ -450,6 +481,42 @@ final class ThreadStore: ObservableObject {
 
         inFlightTasks[threadId] = nil
         inFlightCount = inFlightTasks.count
+    }
+
+    private func continuityHandoff(
+        threadId: UUID,
+        currentText: String,
+        messages: [ThreadInputMessage],
+        destination: ProviderBackend
+    ) -> String {
+        guard let thread = threads.first(where: { $0.id == threadId }),
+              thread.lastProvider != destination else {
+            return currentText
+        }
+
+        let prior = messages.dropLast().suffix(18)
+        guard !prior.isEmpty else { return currentText }
+
+        var remaining = 12_000
+        var lines: [String] = []
+        for message in prior.reversed() {
+            guard remaining > 0 else { break }
+            let clipped = String(message.text.suffix(min(message.text.count, remaining)))
+            lines.append("\(message.role == "user" ? "Andrew" : "Thrawn"): \(clipped)")
+            remaining -= clipped.count
+        }
+
+        return """
+        [AGENT IDENTITY CONTINUITY HANDOFF]
+        You are still Thrawn. Only the provider brain changed to \(destination.gatewayDisplayName). \
+        Preserve Thrawn's identity, role, commitments, and conversational continuity. The local thread transcript below is canonical context; do not announce or dwell on the provider swap unless Andrew asks.
+
+        \(lines.reversed().joined(separator: "\n\n"))
+        [END CONTINUITY HANDOFF]
+
+        [CURRENT USER MESSAGE]
+        \(currentText)
+        """
     }
 
     // MARK: - OpenClaw Request

@@ -29,6 +29,7 @@ final class PrimarySessionStore: ObservableObject {
     /// Conversation history for Ollama
     private var conversationHistory: [OllamaMessage] = []
     private let conversationFileURL: URL
+    private var lastRoutedBackend: ProviderBackend?
     /// Max tool execution rounds per user message (prevent infinite loops)
     private let maxToolRounds = 8
 
@@ -112,11 +113,8 @@ final class PrimarySessionStore: ObservableObject {
         let route = resolveRoute()
         switch route.backend {
         case .codex, .grok, .claude:
-            guard agentRuntime?.isReady(
-                route.backend,
-                agentID: agentId ?? "thrawn"
-            ) == true else {
-                errorText = "\(route.backend.gatewayDisplayName) runtime is unavailable. Confirm its CLI is installed and signed in."
+            guard agentRuntime != nil else {
+                errorText = "\(route.backend.gatewayDisplayName) runtime is unavailable."
                 isLoading = false
                 return
             }
@@ -209,6 +207,13 @@ final class PrimarySessionStore: ObservableObject {
                 recallContext = context
                 finalText = "[Memory Recall — the following context was retrieved from Cognee knowledge graph]\n\(context)\n\n[User Message]\n\(text)"
             }
+        }
+        if route.backend.isSubscriptionGateway,
+           route.backend != lastRoutedBackend {
+            finalText = continuityHandoff(
+                currentText: finalText,
+                destination: route.backend
+            )
         }
 
         // Screenshot attachment
@@ -306,6 +311,8 @@ final class PrimarySessionStore: ObservableObject {
                 // permissions, and continuation semantics are authoritative;
                 // never wrap their output in the legacy fenced-bash loop.
                 if route.backend.isSubscriptionGateway {
+                    lastRoutedBackend = route.backend
+                    saveConversation()
                     isLoading = false
                     isStreaming = false
                     streamingText = ""
@@ -613,6 +620,7 @@ final class PrimarySessionStore: ObservableObject {
     private struct ConversationSnapshot: Codable {
         let messages: [PrimaryMessage]
         let history: [OllamaMessage]
+        let lastProvider: ProviderBackend?
     }
 
     private func loadConversation() {
@@ -625,6 +633,7 @@ final class PrimarySessionStore: ObservableObject {
         }
         messages = snapshot.messages
         conversationHistory = snapshot.history
+        lastRoutedBackend = snapshot.lastProvider
     }
 
     private func saveConversation() {
@@ -635,7 +644,8 @@ final class PrimarySessionStore: ObservableObject {
             )
             let snapshot = ConversationSnapshot(
                 messages: messages,
-                history: conversationHistory
+                history: conversationHistory,
+                lastProvider: lastRoutedBackend
             )
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: conversationFileURL, options: .atomic)
@@ -649,6 +659,40 @@ final class PrimarySessionStore: ObservableObject {
                 message: "Could not persist local context: \(error.localizedDescription)"
             )
         }
+    }
+
+    /// A provider can change, but the named agent and its local transcript do
+    /// not. On the first turn after a brain swap, give the destination runtime
+    /// a bounded canonical handoff so it continues the same conversation.
+    private func continuityHandoff(
+        currentText: String,
+        destination: ProviderBackend
+    ) -> String {
+        let prior = messages.dropLast().suffix(18)
+        guard !prior.isEmpty else { return currentText }
+
+        var remaining = 12_000
+        var lines: [String] = []
+        for message in prior.reversed() {
+            guard remaining > 0 else { break }
+            let role = message.role == .user ? "Andrew" : (agentId ?? "thrawn")
+            let clipped = String(message.text.suffix(min(message.text.count, remaining)))
+            lines.append("\(role): \(clipped)")
+            remaining -= clipped.count
+        }
+
+        let transcript = lines.reversed().joined(separator: "\n\n")
+        return """
+        [AGENT IDENTITY CONTINUITY HANDOFF]
+        You are the same named agent as before. Only the provider brain changed to \(destination.gatewayDisplayName). \
+        Preserve the agent's established role, commitments, and conversational continuity. The local transcript below is canonical context; do not announce or dwell on the provider swap unless Andrew asks.
+
+        \(transcript)
+        [END CONTINUITY HANDOFF]
+
+        [CURRENT USER MESSAGE]
+        \(currentText)
+        """
     }
 
     private static func parseDate(_ timestampMs: Double?) -> Date? {
@@ -736,6 +780,7 @@ struct PrimarySessionView: View {
     @EnvironmentObject var roster: AgentRosterStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
     @EnvironmentObject var execution: ExecutionService
+    @EnvironmentObject var specStore: AgentSpecStore
     @StateObject private var store: PrimarySessionStore
     @State private var inputText = ""
     @FocusState private var inputFocused: Bool
@@ -891,9 +936,16 @@ struct PrimarySessionView: View {
             store.bindScreenCapture(screenCapture)
             store.bindExecution(execution)
             store.connect()
+            refreshSelectedRuntime()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 inputFocused = true
             }
+        }
+        .onChange(of: resolvedSessionBackend) { _ in
+            // Re-evaluate readiness in place. The transcript and local agent
+            // identity remain mounted while the provider brain changes.
+            store.connect()
+            refreshSelectedRuntime()
         }
     }
 
@@ -932,10 +984,19 @@ struct PrimarySessionView: View {
 
     private var resolvedSessionBackend: ProviderBackend {
         let resolvedAgentID = agentId ?? "thrawn"
-        return ToolRegistry.specStore?
-            .spec(id: resolvedAgentID)?
-            .modelOverride?
-            .provider ?? .codex
+        return specStore.subscriptionGateway(forAgentId: resolvedAgentID)
+    }
+
+    private func refreshSelectedRuntime() {
+        let backend = resolvedSessionBackend
+        let resolvedAgentID = agentId ?? "thrawn"
+        Task {
+            await agentRuntime.refresh(
+                agentID: resolvedAgentID,
+                backend: backend
+            )
+            store.connect()
+        }
     }
 
     private var inputBar: some View {

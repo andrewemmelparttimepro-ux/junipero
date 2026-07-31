@@ -68,9 +68,6 @@ struct AgentsConsoleView: View {
                             score: rankEvaluator.scores[selectedAgent.id],
                             resolvedTools: specStore.resolvedTools(forAgentId: selectedAgent.id),
                             isPinned: nav.pinnedLeftPanelAgents.contains(selectedAgent.id),
-                            gatewayBackend: gatewayBackend(for: selectedAgent.id),
-                            isGatewayLocked: selectedAgent.id == "steven",
-                            onGatewaySelect: { setGateway($0, for: selectedAgent.id) },
                             onOpen: { openAgent(selectedAgent) },
                             onPinToggle: { togglePin(selectedAgent) },
                             onAutonomy: { showAutonomy = true }
@@ -169,44 +166,7 @@ struct AgentsConsoleView: View {
 
                 Spacer()
 
-                if isSteven {
-                    gatewayLabel(backend, showsChevron: false)
-                        .accessibilityLabel("Grok provider, locked")
-                } else {
-                    Menu {
-                        Button {
-                            setGateway(.codex, for: agent.id)
-                        } label: {
-                            if backend == .codex {
-                                Label(ProviderBackend.codex.gatewayDisplayName, systemImage: "checkmark")
-                            } else {
-                                Text(ProviderBackend.codex.gatewayDisplayName)
-                            }
-                        }
-                        Button {
-                            setGateway(.grok, for: agent.id)
-                        } label: {
-                            if backend == .grok {
-                                Label(ProviderBackend.grok.gatewayDisplayName, systemImage: "checkmark")
-                            } else {
-                                Text(ProviderBackend.grok.gatewayDisplayName)
-                            }
-                        }
-                        Button {
-                            setGateway(.claude, for: agent.id)
-                        } label: {
-                            if backend == .claude {
-                                Label(ProviderBackend.claude.gatewayDisplayName, systemImage: "checkmark")
-                            } else {
-                                Text(ProviderBackend.claude.gatewayDisplayName)
-                            }
-                        }
-                    } label: {
-                        gatewayLabel(backend, showsChevron: true)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                }
+                AgentGatewayPicker(agentID: agent.id, style: .account)
 
                 if isSteven {
                     Text("LOCKED")
@@ -314,32 +274,6 @@ struct AgentsConsoleView: View {
         return account.displayName
     }
 
-    private func gatewayLabel(
-        _ backend: ProviderBackend,
-        showsChevron: Bool
-    ) -> some View {
-        HStack(spacing: 6) {
-            Text(backend.gatewayDisplayName)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundColor(.white.opacity(0.86))
-            if showsChevron {
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(Color.chissPrimary.opacity(0.78))
-            }
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(Color.white.opacity(0.055))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
-    }
-
     private func refreshSelectedAgentAccount() {
         guard let agent = selectedAgent else { return }
         refreshAccount(agentID: agent.id, backend: gatewayBackend(for: agent.id))
@@ -373,24 +307,7 @@ struct AgentsConsoleView: View {
     }
 
     private func gatewayBackend(for agentID: String) -> ProviderBackend {
-        let backend = specStore.spec(id: agentID)?.modelOverride?.provider ?? .codex
-        return backend.isSubscriptionGateway ? backend : .codex
-    }
-
-    private func setGateway(_ backend: ProviderBackend, for agentID: String) {
-        guard backend.isSubscriptionGateway,
-              agentID != "steven",
-              var spec = specStore.spec(id: agentID) else {
-            return
-        }
-        spec.modelOverride = StableGatewayPolicy.route(for: backend)
-        specStore.upsert(spec)
-        refreshAccount(agentID: agentID, backend: backend)
-        FlightRecorder.logEvent(
-            category: "gateway",
-            action: "route_changed",
-            detail: "\(agentID) -> \(backend.rawValue)"
-        )
+        specStore.subscriptionGateway(forAgentId: agentID)
     }
 
     // MARK: Fleet Header
@@ -551,9 +468,6 @@ private struct AgentDossierCard: View {
     let score: AgentScore?
     let resolvedTools: [String]
     let isPinned: Bool
-    let gatewayBackend: ProviderBackend
-    let isGatewayLocked: Bool
-    let onGatewaySelect: (ProviderBackend) -> Void
     let onOpen: () -> Void
     let onPinToggle: () -> Void
     let onAutonomy: () -> Void
@@ -603,7 +517,21 @@ private struct AgentDossierCard: View {
                         dossierStat("RANK", spec?.rank.displayName ?? "-", color: accentColor)
                         dossierStat("SCORE", score.map { "\($0.score)" } ?? "--", color: scoreColor(score?.score))
                         dossierStat("TASKS", "\(spec?.tasksCompleted ?? 0)", color: .white.opacity(0.80))
-                        gatewayDossierStat
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Text("GATEWAY")
+                                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                                    .tracking(1.4)
+                                    .foregroundColor(.white.opacity(0.34))
+                                if agent.id == "steven" {
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 7, weight: .bold))
+                                        .foregroundColor(Color.orange.opacity(0.75))
+                                }
+                            }
+                            AgentGatewayPicker(agentID: agent.id, style: .dossier)
+                        }
+                        .frame(minWidth: 78, alignment: .leading)
                     }
 
                     HStack(spacing: 8) {
@@ -727,80 +655,6 @@ private struct AgentDossierCard: View {
         }
     }
 
-    private func gatewayShortName(_ backend: ProviderBackend) -> String {
-        switch backend {
-        case .codex: return "OPENAI"
-        case .grok: return "GROK"
-        case .claude: return "CLAUDE"
-        case .xai: return "XAI API"
-        case .openai: return "API"
-        case .openclaw: return "OPENCLAW"
-        case .ollama: return "OLLAMA"
-        }
-    }
-
-    /// The GATEWAY stat, upgraded from static text to an in-place dropdown.
-    /// The System Configuration panel remains the system-wide default; this
-    /// menu sets a per-agent override, using the same setGateway path as the
-    /// Agent Account Profile panel. Locked agents (Steven → Grok) show a
-    /// lock instead of a menu.
-    private static let selectableGateways: [ProviderBackend] = [.codex, .grok, .claude]
-
-    private var gatewayDossierStat: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text("GATEWAY")
-                    .font(.system(size: 8, weight: .black, design: .monospaced))
-                    .tracking(1.4)
-                    .foregroundColor(.white.opacity(0.34))
-                if isGatewayLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundColor(Color.orange.opacity(0.75))
-                }
-            }
-            if isGatewayLocked {
-                Text(gatewayShortName(gatewayBackend))
-                    .font(.system(size: 17, weight: .black, design: .rounded))
-                    .foregroundColor(.white.opacity(0.80))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            } else {
-                Menu {
-                    ForEach(Self.selectableGateways, id: \.self) { backend in
-                        Button {
-                            onGatewaySelect(backend)
-                        } label: {
-                            if backend == gatewayBackend {
-                                Label(backend.gatewayDisplayName, systemImage: "checkmark")
-                            } else {
-                                Text(backend.gatewayDisplayName)
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(gatewayShortName(gatewayBackend))
-                            .font(.system(size: 17, weight: .black, design: .rounded))
-                            .foregroundColor(.white.opacity(0.80))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(Color.chissPrimary.opacity(0.80))
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-        }
-        .frame(minWidth: 78, alignment: .leading)
-        .help(isGatewayLocked
-              ? "Gateway locked for this agent"
-              : "Choose which subscription gateway this agent runs through")
-    }
-
     private func scoreColor(_ score: Int?) -> Color {
         guard let score else { return .white.opacity(0.45) }
         if score >= 90 { return .green }
@@ -868,6 +722,7 @@ private struct AgentRosterTile: View {
                         .tracking(1.2)
                         .foregroundColor(accentColor.opacity(0.72))
                         .lineLimit(1)
+                    AgentGatewayPicker(agentID: agent.id, style: .rail)
                     Text(agent.detail)
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundColor(Color.white.opacity(0.46))

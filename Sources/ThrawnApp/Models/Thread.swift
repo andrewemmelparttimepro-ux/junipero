@@ -88,6 +88,7 @@ struct ChatThread: Identifiable, Codable {
     var state: ChatDeliveryState
     var errorMessage: String?
     var modelUsed: String?
+    var lastProvider: ProviderBackend?
     var latencyMs: Int?
     var unreadCount: Int
 
@@ -100,6 +101,7 @@ struct ChatThread: Identifiable, Codable {
         state: ChatDeliveryState = .success,
         errorMessage: String? = nil,
         modelUsed: String? = nil,
+        lastProvider: ProviderBackend? = nil,
         latencyMs: Int? = nil,
         unreadCount: Int = 0
     ) {
@@ -111,6 +113,7 @@ struct ChatThread: Identifiable, Codable {
         self.state = state
         self.errorMessage = errorMessage
         self.modelUsed = modelUsed
+        self.lastProvider = lastProvider
         self.latencyMs = latencyMs
         self.unreadCount = unreadCount
     }
@@ -124,6 +127,7 @@ struct ChatThread: Identifiable, Codable {
         case state
         case errorMessage
         case modelUsed
+        case lastProvider
         case latencyMs
         case unreadCount
         // Legacy keys (single-turn schema)
@@ -140,6 +144,7 @@ struct ChatThread: Identifiable, Codable {
         self.state = try container.decodeIfPresent(ChatDeliveryState.self, forKey: .state) ?? (isLoading ? .pending : .success)
         self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
         self.modelUsed = try container.decodeIfPresent(String.self, forKey: .modelUsed)
+        self.lastProvider = try container.decodeIfPresent(ProviderBackend.self, forKey: .lastProvider)
         self.latencyMs = try container.decodeIfPresent(Int.self, forKey: .latencyMs)
         self.unreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
 
@@ -176,6 +181,7 @@ struct ChatThread: Identifiable, Codable {
         try container.encode(state, forKey: .state)
         try container.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try container.encodeIfPresent(modelUsed, forKey: .modelUsed)
+        try container.encodeIfPresent(lastProvider, forKey: .lastProvider)
         try container.encodeIfPresent(latencyMs, forKey: .latencyMs)
         try container.encode(unreadCount, forKey: .unreadCount)
     }

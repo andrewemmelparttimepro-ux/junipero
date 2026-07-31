@@ -85,6 +85,8 @@ struct SpecialistChatView: View {
 
                 Spacer()
 
+                AgentGatewayPicker(agentID: agent.id, style: .header)
+
                 // Agent state badge
                 Text(agent.state.label.uppercased())
                     .font(.system(size: 9, weight: .heavy))

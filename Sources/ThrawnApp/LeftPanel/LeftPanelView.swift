@@ -46,11 +46,20 @@ struct ProviderStatusCard: View {
     @EnvironmentObject var agentRuntime: AgentRuntimeCoordinator
     @EnvironmentObject var bootstrap: ThrawnBootstrap
     @EnvironmentObject var devOpsBrain: DevOpsBrainStore
+    @EnvironmentObject var specStore: AgentSpecStore
     @State private var hovered = false
     @State private var glowPulse: CGFloat = 0.6
 
     private var isConnected: Bool {
-        agentRuntime.isReady || openclaw.connected || openai.apiKeyConfigured || ollama.connected
+        selectedStatus.state == .ready
+    }
+
+    private var selectedBackend: ProviderBackend {
+        specStore.subscriptionGateway(forAgentId: "thrawn")
+    }
+
+    private var selectedStatus: ProviderStatus {
+        agentRuntime.status(for: selectedBackend, agentID: "thrawn")
     }
 
     var body: some View {
@@ -88,7 +97,7 @@ struct ProviderStatusCard: View {
                         Text("·")
                             .foregroundColor(.white.opacity(0.25))
 
-                        Text("SENTINEL")
+                        Text("THRAWN")
                             .font(.system(size: 10, weight: .bold))
                             .tracking(1)
                             .foregroundColor(Color.chissPrimary)
@@ -104,7 +113,12 @@ struct ProviderStatusCard: View {
 
                 // Refresh models
                 Button {
-                    Task { await agentRuntime.refresh() }
+                    Task {
+                        await agentRuntime.refresh(
+                            agentID: "thrawn",
+                            backend: selectedBackend
+                        )
+                    }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 12, weight: .semibold))
@@ -115,45 +129,52 @@ struct ProviderStatusCard: View {
                 .help("Refresh model list")
             }
 
-            // Live model catalog returned by the authenticated Codex runtime.
-            Menu {
-                ForEach(agentRuntime.codexModels) { model in
-                    Button {
-                        agentRuntime.selectedCodexModelID = model.id
-                        agentRuntime.selectedReasoningEffort = model.defaultReasoningEffort
-                    } label: {
-                        HStack {
-                            Text(model.displayName)
-                            if agentRuntime.selectedModel?.id == model.id {
-                                Image(systemName: "checkmark")
+            HStack(spacing: 8) {
+                AgentGatewayPicker(agentID: "thrawn", style: .rail)
+
+                if selectedBackend == .codex {
+                    // The model stays a sub-selection of the OpenAI brain.
+                    Menu {
+                        ForEach(agentRuntime.codexModels) { model in
+                            Button {
+                                agentRuntime.selectedCodexModelID = model.id
+                                agentRuntime.selectedReasoningEffort = model.defaultReasoningEffort
+                            } label: {
+                                HStack {
+                                    Text(model.displayName)
+                                    if agentRuntime.selectedModel?.id == model.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
                             }
                         }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 10, weight: .bold))
-                    Text(agentRuntime.selectedModel?.displayName ?? "Codex live model")
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                }
-                .foregroundColor(Color.chissPrimary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.chissPrimary.opacity(0.06))
-                        .overlay(
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "cpu")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(agentRuntime.selectedModel?.displayName ?? "Live model")
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundColor(Color.chissPrimary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1)
+                                .fill(Color.chissPrimary.opacity(0.06))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.chissPrimary.opacity(0.18), lineWidth: 1)
+                                )
                         )
-                )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -173,20 +194,25 @@ struct ProviderStatusCard: View {
     }
 
     private var statusSubtitle: String {
-        if agentRuntime.isReady {
-            return agentRuntime.account?.displayName ?? "Codex subscription"
+        if selectedStatus.state == .ready {
+            return selectedStatus.account?.displayName ?? selectedBackend.gatewayDisplayName
         }
-        if agentRuntime.codexStatus.state == .starting {
-            return "Starting Codex app-server"
+        if selectedStatus.state == .starting {
+            return "Checking \(selectedBackend.gatewayDisplayName)"
         }
-        return agentRuntime.codexStatus.detail
+        return selectedStatus.detail
     }
 
     // MARK: - Disconnected State (Big CTA)
 
     private var disconnectedView: some View {
         Button {
-            Task { await agentRuntime.refresh() }
+            Task {
+                await agentRuntime.refresh(
+                    agentID: "thrawn",
+                    backend: selectedBackend
+                )
+            }
         } label: {
             VStack(spacing: 14) {
                 // Large icon with animated pulse
@@ -217,14 +243,15 @@ struct ProviderStatusCard: View {
                 }
 
                 VStack(spacing: 4) {
-                    Text("OLLAMA NOT RUNNING")
+                    Text("THRAWN BRAIN OFFLINE")
                         .font(.system(size: 11, weight: .black))
                         .tracking(2)
                         .foregroundColor(Color.chissPrimary)
 
-                    Text("Start Ollama on localhost:11434")
+                    Text(selectedStatus.detail)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.50))
+                        .lineLimit(2)
                 }
 
                 // Retry button

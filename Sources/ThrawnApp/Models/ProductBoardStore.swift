@@ -85,6 +85,10 @@ struct ProductBoardNode: Codable, Identifiable, Equatable {
     /// blanket of notes doesn't read as a wall of grey.
     var colorSlot: Int
     var updatedAt: Date
+    /// When set, this node is a file pinned to the board — the path points
+    /// at the original on disk (link, not copy, so double-click always opens
+    /// the live version). Optional so pre-existing v3 boards still decode.
+    var filePath: String?
 
     init(
         id: String = UUID().uuidString,
@@ -92,7 +96,8 @@ struct ProductBoardNode: Codable, Identifiable, Equatable {
         body: String = "",
         position: ProductBoardPoint,
         colorSlot: Int = 0,
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        filePath: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -100,6 +105,7 @@ struct ProductBoardNode: Codable, Identifiable, Equatable {
         self.position = position
         self.colorSlot = colorSlot
         self.updatedAt = updatedAt
+        self.filePath = filePath
     }
 }
 
@@ -187,6 +193,26 @@ final class ProductBoardStore: ObservableObject {
             // Cycle through accent slots so back-to-back notes don't clump
             // into the same color.
             colorSlot: existing.count % 5
+        )
+        nodesByBoard[board.rawValue, default: []].append(node)
+        persist()
+        return node
+    }
+
+    /// Pin a file to the board at a board-space point. Stores a link to the
+    /// original file; deleting the card never touches the file on disk.
+    @discardableResult
+    func addFile(
+        to board: ProductBoardID,
+        url: URL,
+        at point: ProductBoardPoint
+    ) -> ProductBoardNode {
+        let existing = nodesByBoard[board.rawValue] ?? []
+        let node = ProductBoardNode(
+            title: url.lastPathComponent,
+            position: point,
+            colorSlot: existing.count % 5,
+            filePath: url.path
         )
         nodesByBoard[board.rawValue, default: []].append(node)
         persist()

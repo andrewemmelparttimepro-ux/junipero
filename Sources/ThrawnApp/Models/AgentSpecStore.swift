@@ -77,6 +77,40 @@ final class AgentSpecStore: ObservableObject {
         }
     }
 
+    /// The one persisted brain selection for an agent. Every agent
+    /// representation and every interactive send path resolves through this
+    /// value so changing a gateway never creates a second "copy" of the agent.
+    func subscriptionGateway(forAgentId id: String) -> ProviderBackend {
+        if id == "steven" {
+            return .grok
+        }
+        let backend = spec(id: id)?.modelOverride?.provider ?? .codex
+        return backend.isSubscriptionGateway ? backend : .codex
+    }
+
+    func routedProvider(forAgentId id: String) -> RoutedProvider {
+        if let override = spec(id: id)?.modelOverride,
+           override.provider.isSubscriptionGateway {
+            return RoutedProvider(
+                backend: override.provider,
+                model: override.model,
+                isFallback: false,
+                reasoningEffort: override.reasoningEffort,
+                allowFallback: override.allowFallback
+            )
+        }
+        let override = StableGatewayPolicy.route(
+            for: subscriptionGateway(forAgentId: id)
+        )
+        return RoutedProvider(
+            backend: override.provider,
+            model: override.model,
+            isFallback: false,
+            reasoningEffort: override.reasoningEffort,
+            allowFallback: override.allowFallback
+        )
+    }
+
     // MARK: Mutations
 
     func upsert(_ spec: AgentSpec) {
@@ -86,6 +120,31 @@ final class AgentSpecStore: ObservableObject {
             specs.append(spec)
         }
         save()
+    }
+
+    /// Update the canonical gateway without touching the agent's identity,
+    /// transcript, tool loadout, provider session history, or account profiles.
+    @discardableResult
+    func setSubscriptionGateway(
+        _ backend: ProviderBackend,
+        forAgentId id: String
+    ) -> Bool {
+        guard backend.isSubscriptionGateway,
+              id != "steven",
+              var spec = spec(id: id) else {
+            return false
+        }
+        guard spec.modelOverride != StableGatewayPolicy.route(for: backend) else {
+            return true
+        }
+        spec.modelOverride = StableGatewayPolicy.route(for: backend)
+        upsert(spec)
+        FlightRecorder.logEvent(
+            category: "gateway",
+            action: "route_changed",
+            detail: "\(id) -> \(backend.rawValue)"
+        )
+        return true
     }
 
     func remove(id: String) {

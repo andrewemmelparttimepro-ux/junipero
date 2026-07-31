@@ -193,6 +193,7 @@ struct ThrawnHeaderBar: View {
     @EnvironmentObject var flowTab: FlowTabStore
     @EnvironmentObject var screenCapture: ScreenCaptureStore
     @EnvironmentObject var nav: ConsoleNavigationStore
+    @EnvironmentObject var specStore: AgentSpecStore
     @EnvironmentObject var voiceService: VoiceService
     @EnvironmentObject var voiceConversation: VoiceConversationService
     @State private var showVoicePanel = false
@@ -227,20 +228,7 @@ struct ThrawnHeaderBar: View {
                 }
             }
 
-            // Runtime badge — Thrawn's intended core brain is stable identity.
-            // Fallback/degraded state is shown in the status line under the name,
-            // not as the brain label itself.
-            HStack(spacing: 6) {
-                Text(runtimeText)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(Color.chissPrimary.opacity(0.70))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Circle()
-                    .fill(runtimeDotColor)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: runtimeDotColor.opacity(0.80), radius: 4)
-            }
+            AgentGatewayPicker(agentID: "thrawn", style: .header)
 
             Spacer()
 
@@ -354,31 +342,32 @@ struct ThrawnHeaderBar: View {
     }
 
     private var statusLabel: String {
+        let status = thrawnStatus
         if thrawnCoreAvailable {
-            return "Online · \(agentRuntime.selectedModel?.displayName ?? "Codex")"
+            return "Online · \(status.account?.displayName ?? thrawnBackend.gatewayDisplayName)"
         }
-        if agentRuntime.codexStatus.state == .starting { return "Starting Codex" }
-        return "Codex runtime unavailable"
+        if status.state == .starting {
+            return "Checking \(thrawnBackend.gatewayDisplayName)"
+        }
+        return status.detail
     }
 
     private var statusColor: Color {
         if thrawnCoreAvailable { return Color(red: 0.30, green: 0.85, blue: 0.40) }
-        if agentRuntime.codexStatus.state == .starting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
+        if thrawnStatus.state == .starting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
         return Color(red: 0.85, green: 0.25, blue: 0.20)
     }
 
-    private var runtimeText: String {
-        "\(agentRuntime.account?.displayName ?? "Codex") · \(agentRuntime.runtimeLabel)"
+    private var thrawnBackend: ProviderBackend {
+        specStore.subscriptionGateway(forAgentId: "thrawn")
     }
 
-    private var runtimeDotColor: Color {
-        if thrawnCoreAvailable { return Color(red: 0.30, green: 0.85, blue: 0.40) }
-        if agentRuntime.codexStatus.state == .starting { return Color(red: 0.95, green: 0.70, blue: 0.20) }
-        return Color(red: 0.85, green: 0.25, blue: 0.20)
+    private var thrawnStatus: ProviderStatus {
+        agentRuntime.status(for: thrawnBackend, agentID: "thrawn")
     }
 
     private var thrawnCoreAvailable: Bool {
-        agentRuntime.isReady
+        thrawnStatus.state == .ready
     }
 
     private func iconBtn(_ icon: String, help: String, action: @escaping () -> Void) -> some View {

@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct ThreadDetailView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var specStore: AgentSpecStore
     let threadId: UUID
     @FocusState private var isReplyFocused: Bool
     @State private var isDropTargeted = false
@@ -20,6 +21,7 @@ struct ThreadDetailView: View {
                 Text("Thread")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.white.opacity(0.92))
+                AgentGatewayPicker(agentID: "thrawn", style: .thread)
                 Spacer()
                 if queuedCount > 0 {
                     HStack(spacing: 6) {
