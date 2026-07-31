@@ -920,6 +920,7 @@ private struct FreeformNoteCard: View {
     @State private var titleDraft: String
     @State private var bodyDraft: String
     @FocusState private var titleFocused: Bool
+    @ObservedObject private var thumbnails = BoardThumbnailStore.shared
 
     init(
         node: ProductBoardNode,
@@ -1057,25 +1058,89 @@ private struct FreeformNoteCard: View {
         onCommit(titleDraft, bodyDraft)
     }
 
+    /// Rendered size of the preview area on the card. Requested from
+    /// QuickLook at this size so the generated bitmap matches its frame.
+    private static let previewSize = CGSize(width: 194, height: 132)
+
     @ViewBuilder
     private func fileContent(_ filePath: String) -> some View {
-        HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: filePath))
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 40, height: 40)
+        let exists = FileManager.default.fileExists(atPath: filePath)
+        VStack(alignment: .leading, spacing: 8) {
+            previewArea(filePath, exists: exists)
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(node.title)
-                    .font(.system(size: 12.5, weight: .bold))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundColor(Self.ink)
                     .lineLimit(2)
                 Text(fileSubtitle(filePath))
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .tracking(0.6)
-                    .foregroundColor(Self.ink.opacity(0.55))
+                    .foregroundColor(exists ? Self.ink.opacity(0.55)
+                                            : Color(red: 0.72, green: 0.20, blue: 0.20))
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func previewArea(_ filePath: String, exists: Bool) -> some View {
+        ZStack {
+            // Page backing so a preview with transparency or letterboxing
+            // still reads as a sheet of paper.
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                )
+
+            if !exists {
+                VStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(Color(red: 0.80, green: 0.35, blue: 0.20).opacity(0.75))
+                    Text("File moved or deleted")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Self.ink.opacity(0.50))
+                }
+            } else if let preview = thumbnails.thumbnail(for: filePath, size: Self.previewSize) {
+                // Real document preview — anchored to the top so the first
+                // page's title area is what you see on the board.
+                Image(nsImage: preview)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(
+                        width: Self.previewSize.width,
+                        height: Self.previewSize.height,
+                        alignment: .top
+                    )
+                    .clipped()
+            } else if thumbnails.hasNoPreview(for: filePath, size: Self.previewSize) {
+                // No QuickLook generator for this type — Finder icon.
+                Image(nsImage: NSWorkspace.shared.icon(forFile: filePath))
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 46, height: 46)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.5)
+                    .tint(Self.ink.opacity(0.35))
+            }
+        }
+        .frame(width: Self.previewSize.width, height: Self.previewSize.height)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .shadow(color: Color.black.opacity(0.10), radius: 3, x: 0, y: 2)
+        .onAppear {
+            guard exists else { return }
+            thumbnails.requestThumbnail(
+                for: filePath,
+                size: Self.previewSize,
+                scale: NSScreen.main?.backingScaleFactor ?? 2
+            )
         }
     }
 
