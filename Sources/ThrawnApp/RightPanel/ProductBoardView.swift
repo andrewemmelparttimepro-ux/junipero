@@ -929,7 +929,7 @@ private struct FreeformNoteCard: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture(count: 2) {
             if let filePath = node.filePath {
-                NSWorkspace.shared.open(URL(fileURLWithPath: filePath))
+                openFile(filePath)
             } else {
                 onBeginEdit()
             }
@@ -991,6 +991,25 @@ private struct FreeformNoteCard: View {
         guard bytes > 0 else { return kind }
         let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         return "\(kind) · \(size.uppercased())"
+    }
+
+    /// PDFs route to mRk — NDAI's own markup app — when the desktop build is
+    /// installed. Everything else (and PDFs when mRk is absent) opens in the
+    /// system default app, so double-click never silently does nothing.
+    private func openFile(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        if url.pathExtension.lowercased() == "pdf",
+           let mrk = NSWorkspace.shared.urlForApplication(
+               withBundleIdentifier: "pro.ndai.mrk"
+           ) {
+            NSWorkspace.shared.open(
+                [url],
+                withApplicationAt: mrk,
+                configuration: NSWorkspace.OpenConfiguration()
+            )
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 }
 
