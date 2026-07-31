@@ -331,7 +331,7 @@ struct ProductBoardFullScreen: View {
     @ViewBuilder
     private var overlayFooter: some View {
         HStack {
-            Text("DOUBLE-CLICK TO ADD A NOTE  ·  DROP FILES TO PIN THEM  ·  DRAG TO PAN  ·  PINCH OR ± TO ZOOM  ·  ⌫ TO DELETE SELECTED")
+            Text("DOUBLE-CLICK TO ADD A NOTE  ·  DROP FILES TO PIN THEM  ·  DRAG TO PAN  ·  ⌘ SCROLL, PINCH OR ± TO ZOOM  ·  ⌫ TO DELETE SELECTED")
                 .font(.system(size: 9, weight: .heavy, design: .monospaced))
                 .tracking(1.2)
                 .foregroundColor(Color.white.opacity(0.30))
@@ -432,6 +432,13 @@ struct ProductBoardCanvas: View {
             let nodes = store.nodes(for: board)
 
             ZStack {
+                // ⌘ + scroll wheel zooms, anchored at the cursor. The catcher
+                // is click-transparent — it only consumes scroll events with
+                // Command held while the cursor is over the canvas.
+                ScrollWheelZoomCatcher { deltaY, location in
+                    zoomBy(deltaY: deltaY, at: location, in: proxy.size)
+                }
+
                 // Infinite dot grid background — the visual cue that the
                 // canvas has no edges
                 ZStack {
@@ -726,6 +733,98 @@ struct ProductBoardCanvas: View {
     private func recenter() {
         viewportOffset = .zero
         zoom = 1
+    }
+
+    /// Cursor-anchored zoom: the board point under the pointer stays put
+    /// while everything scales around it — standard whiteboard mechanics.
+    private func zoomBy(deltaY: CGFloat, at location: CGPoint, in size: CGSize) {
+        let old = zoom
+        // Exponential feel: small wheel ticks nudge, fast trackpad swipes fly.
+        let next = min(max(old * pow(1.004, deltaY), 0.30), 2.20)
+        guard abs(next - old) > 0.0001 else { return }
+
+        let cursorFromCenter = CGPoint(
+            x: location.x - size.width / 2,
+            y: location.y - size.height / 2
+        )
+        // boardPoint = (cursor - offset) / oldScale; keep it stationary:
+        let boardX = (cursorFromCenter.x - viewportOffset.width) / old
+        let boardY = (cursorFromCenter.y - viewportOffset.height) / old
+        viewportOffset.width = cursorFromCenter.x - boardX * next
+        viewportOffset.height = cursorFromCenter.y - boardY * next
+        zoom = next
+    }
+}
+
+// MARK: - ⌘ + scroll wheel zoom catcher
+//
+// SwiftUI exposes no scroll-wheel events on macOS, so this representable
+// anchors an NSView in the canvas purely for geometry + lifecycle and
+// installs a local event monitor. The view is click-transparent (hitTest
+// returns nil) so every SwiftUI gesture — pan, tap, drag, drop — is
+// untouched. The monitor consumes a scroll event only when Command is held
+// AND the cursor is inside the canvas bounds; everything else passes through.
+
+private struct ScrollWheelZoomCatcher: NSViewRepresentable {
+    let onZoom: (_ deltaY: CGFloat, _ location: CGPoint) -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.onZoom = onZoom
+        return view
+    }
+
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.onZoom = onZoom
+    }
+
+    final class CatcherView: NSView {
+        var onZoom: ((CGFloat, CGPoint) -> Void)?
+        private var monitor: Any?
+
+        // Top-left origin so converted coordinates match SwiftUI's space.
+        override var isFlipped: Bool { true }
+
+        // Never participate in hit testing — clicks, drags, and drops all
+        // belong to the SwiftUI layers.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                installMonitorIfNeeded()
+            } else {
+                removeMonitorIfNeeded()
+            }
+        }
+
+        private func installMonitorIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self,
+                      let window = self.window,
+                      event.window === window,
+                      event.modifierFlags.contains(.command)
+                else { return event }
+                let local = self.convert(event.locationInWindow, from: nil)
+                guard self.bounds.contains(local) else { return event }
+                self.onZoom?(event.scrollingDeltaY, local)
+                return nil   // consumed — don't let anything scroll underneath
+            }
+        }
+
+        private func removeMonitorIfNeeded() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
     }
 }
 
