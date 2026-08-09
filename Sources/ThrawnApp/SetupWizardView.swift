@@ -607,10 +607,12 @@ struct SetupWizardView: View {
             }
         }
         if gateway.isInstalled {
+            // No backend = the app cannot drive this login. Say so instead of
+            // rendering a label that masquerades as a sign-in button.
             return (
                 false,
-                "SIGN IN",
-                "CLI detected · copy \(gateway.authCommand) to authenticate"
+                "CLI AUTH",
+                "CLI detected · copy \(gateway.authCommand) and run it in Terminal"
             )
         }
         return (

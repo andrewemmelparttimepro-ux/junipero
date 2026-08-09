@@ -29,13 +29,24 @@ enum AutonomyPolicy {
                       "records": "prepare", "signals": "prepare", "external": "prepare"],
     ]
 
-    private static var overrides: [String: [String: String]] = {
-        guard let data = try? Data(contentsOf: configPath),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]] else {
-            return [:]
+    // Re-read when the file changes: a lazy static meant edits from the
+    // autonomy gear sheet did not reach the execution path until relaunch.
+    private static var cachedOverrides: [String: [String: String]] = [:]
+    private static var cachedMTime: Date = .distantPast
+
+    private static var overrides: [String: [String: String]] {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: configPath.path)[.modificationDate] as? Date) ?? .distantPast
+        if mtime != cachedMTime {
+            cachedMTime = mtime
+            if let data = try? Data(contentsOf: configPath),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]] {
+                cachedOverrides = object
+            } else {
+                cachedOverrides = [:]
+            }
         }
-        return object
-    }()
+        return cachedOverrides
+    }
 
     static func ceiling(agentID: String, domain: String) -> String {
         let slug = agentID.lowercased()

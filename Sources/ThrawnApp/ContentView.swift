@@ -90,6 +90,9 @@ struct ContentView: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity)
+            // Same traffic-light clearance the two main branches get — the
+            // voice banner was landing inside the 30pt chrome-free strip.
+            .padding(.top, trafficLightInset)
         }
         .animation(.easeInOut(duration: 0.22), value: flowTab.showFlow)
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: productBoardFullScreenActive)

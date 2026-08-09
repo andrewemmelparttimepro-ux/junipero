@@ -388,6 +388,10 @@ final class CodexAppServerProvider: AgentProvider {
             candidates.append(override)
         }
         candidates.append(contentsOf: [
+            // The user's own CLI first: a GUI-launched app gets launchd's
+            // minimal PATH, and silently running ChatGPT.app's bundled codex
+            // (a different build) was a masked dependency for weeks.
+            NSString(string: "~/.local/bin/codex").expandingTildeInPath,
             "/Applications/ChatGPT.app/Contents/Resources/codex",
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex"

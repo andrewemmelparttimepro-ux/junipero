@@ -20,13 +20,18 @@ struct LeftPanelView: View {
             }
             .frame(maxHeight: .infinity)
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 12)
-
-                AnalogClockView()
-                    .frame(width: 340, height: 340)
-
-                Spacer()
+            // The analog clock is a permanent fixture. It sizes to the room
+            // it actually has (up to its full 340pt) instead of clipping at
+            // every supported window width.
+            GeometryReader { geo in
+                let side = max(180, min(340, min(geo.size.width, geo.size.height - 24)))
+                VStack(spacing: 0) {
+                    Spacer(minLength: 12)
+                    AnalogClockView()
+                        .frame(width: side, height: side)
+                        .frame(maxWidth: .infinity)
+                    Spacer()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -207,11 +212,20 @@ struct ProviderStatusCard: View {
 
     private var disconnectedView: some View {
         Button {
+            // The most prominent signed-out surface in the app must actually
+            // sign the user in — a bare status refresh strands them offline.
             Task {
-                await agentRuntime.refresh(
-                    agentID: "thrawn",
-                    backend: selectedBackend
-                )
+                do {
+                    try await agentRuntime.beginSignIn(
+                        agentID: "thrawn",
+                        backend: selectedBackend
+                    )
+                } catch {
+                    await agentRuntime.refresh(
+                        agentID: "thrawn",
+                        backend: selectedBackend
+                    )
+                }
             }
         } label: {
             VStack(spacing: 14) {

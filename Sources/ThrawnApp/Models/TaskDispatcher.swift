@@ -296,17 +296,31 @@ final class TaskDispatcher: ObservableObject {
                 }
 
             case "create":
-                if let title = update["title"] as? String {
+                // Agents send create metadata both as top-level keys and as a
+                // `fields` dict (the same shape `update` uses). Ignoring the
+                // dict silently downgraded Blocked/High cards to Ready/P2.
+                let createFields = (update["fields"] as? [String: String]) ?? [:]
+                func createValue(_ keys: [String]) -> String? {
+                    for key in keys {
+                        if let v = update[key] as? String, !v.isEmpty { return v }
+                        if let v = createFields.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame })?.value,
+                           !v.isEmpty { return v }
+                    }
+                    return nil
+                }
+                if let title = createValue(["title", "Title"]) {
                     let resolvedId: String
                     if let taskId, taskId != "TASK-NEW" {
                         resolvedId = taskId
                     } else {
                         resolvedId = nextTaskId(in: boardContent)
                     }
-                    let owner = update["owner"] as? String ?? "Thrawn"
-                    let status = update["status"] as? String ?? "Ready"
-                    let priority = update["priority"] as? String ?? "P2"
-                    let notes = update["notes"] as? String ?? ""
+                    let owner = createValue(["owner", "Owner"]) ?? "Thrawn"
+                    let status = createValue(["status", "Status"]) ?? "Ready"
+                    let priority = createValue(["priority", "Priority"]) ?? "P2"
+                    let notes = createValue(["notes", "Notes"]) ?? ""
+                    let blockers = createValue(["blockers", "Blockers"])
+                    let nextStep = createValue(["next_step", "Next step", "nextStep"])
                     let agent = update["agent"] as? String ?? "Thrawn"
                     let deliverable = evidenceCandidate(from: update)
                         ?? (TaskCompletionPolicy.isDoneStatus(status) ? TaskCompletionPolicy.discoverDeliverable(for: resolvedId) : nil)
@@ -340,6 +354,12 @@ final class TaskDispatcher: ObservableObject {
                     newTask += "- Status: \(status)\n"
                     newTask += "- Priority: \(priority)\n"
                     newTask += "- Created: \(ISO8601DateFormatter().string(from: Date()).prefix(10))\n"
+                    if let blockers, !blockers.isEmpty {
+                        newTask += "- Blockers: \(blockers)\n"
+                    }
+                    if let nextStep, !nextStep.isEmpty {
+                        newTask += "- Next step: \(nextStep)\n"
+                    }
                     if let deliverable {
                         newTask += "- Deliverable: \(deliverable)\n"
                     }
@@ -545,7 +565,13 @@ final class TaskDispatcher: ObservableObject {
             "project",
             "requested by",
             "objective",
-            "phase"
+            "phase",
+            // Core card fields upsert too: a move against a card missing the
+            // line used to fail "field not found" instead of writing it.
+            "owner",
+            "status",
+            "priority",
+            "title"
         ].contains(normalized)
     }
 

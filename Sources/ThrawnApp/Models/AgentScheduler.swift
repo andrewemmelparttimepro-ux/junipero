@@ -204,12 +204,10 @@ final class AgentScheduler: ObservableObject {
 
         reapStaleRuns(now: now)
 
-        // Reset blocked agents back to idle so they can retry on next heartbeat
-        if let roster {
-            for agent in roster.agents where agent.state == .blocked {
-                roster.setState(id: agent.id, state: .idle, detail: "Standing by")
-            }
-        }
+        // .blocked stays visible until a run actually succeeds. The fire
+        // decision below never consults roster state, so blocked agents
+        // still retry on their next slot — erasing the state every tick
+        // only hid five hours of total fleet failure behind "Standing by".
 
         autoDelegateNamedSpecialistTasks()
 
@@ -1370,12 +1368,35 @@ final class AgentScheduler: ObservableObject {
             return
         }
 
+        // The full response is the record; the summary is the glance. Every
+        // run's complete transcript lands under workspace/transcripts/ so the
+        // reasoning behind a board move is never unrecoverable again.
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        var transcriptPath = ""
+        let transcriptsDir = ThrawnPaths.appSupportDir
+            .appendingPathComponent("workspace/transcripts", isDirectory: true)
+            .appendingPathComponent(agent.id, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: transcriptsDir, withIntermediateDirectories: true)
+            let fileName = stamp.replacingOccurrences(of: ":", with: "-") + ".md"
+            let file = transcriptsDir.appendingPathComponent(fileName)
+            let header = "# \(agent.name) heartbeat — \(stamp)\n- duration_ms: \(durationMs)\n\n"
+            try (header + response).write(to: file, atomically: true, encoding: .utf8)
+            transcriptPath = file.path
+        } catch {
+            FlightRecorder.logError(
+                source: "scheduler:writeTranscript",
+                message: "transcript write failed for \(agent.id): \(error.localizedDescription)"
+            )
+        }
+
         let output: [String: Any] = [
             "agent": agent.id,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": stamp,
             "durationMs": durationMs,
             "status": "ok",
-            "summary": String(response.prefix(500))
+            "summary": String(response.prefix(500)),
+            "transcript": transcriptPath
         ]
 
         let data: Data

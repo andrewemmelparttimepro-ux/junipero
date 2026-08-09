@@ -472,7 +472,7 @@ private struct ThreadAttachmentPreview: View {
             }
             Text(attachment.fileName)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.65))
+                .foregroundColor(Color.black.opacity(0.55))
                 .lineLimit(1)
         }
         .onAppear { loadThumbnail() }

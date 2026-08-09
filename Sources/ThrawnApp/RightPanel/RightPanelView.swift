@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 struct RightPanelView: View {
     @EnvironmentObject var nav: ConsoleNavigationStore
+    // Shared with ConsoleUtilityRail: the expanded rail pushes content aside
+    // instead of overlaying 128pt of it.
+    @AppStorage("thrawn.consoleUtilityRailExpanded") private var railExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,7 +26,8 @@ struct RightPanelView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity)
                 }
-                .padding(.trailing, 48)
+                .padding(.trailing, railExpanded ? 176 : 48)
+                .animation(.easeInOut(duration: 0.18), value: railExpanded)
 
                 ConsoleUtilityRail()
             }
@@ -115,7 +119,15 @@ struct GlobalCommandOverlay: View {
         let text = threadStore.popupDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = threadStore.popupAttachments
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        threadStore.sendMessage(text, attachments: attachments)
+        // Continue the active conversation when one exists; the floating
+        // Command button forking a fresh thread on every send buried the
+        // conversation it was answering.
+        if let selectedId = threadStore.selectedThreadId,
+           threadStore.threads.contains(where: { $0.id == selectedId }) {
+            threadStore.sendMessage(in: selectedId, text: text, attachments: attachments)
+        } else {
+            threadStore.sendMessage(text, attachments: attachments)
+        }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
             showPopupChat = false
         }
@@ -243,6 +255,26 @@ struct ThrawnHeaderBar: View {
             }
             .buttonStyle(.plain)
             .help("The Citadel — open rolling memory and product pages")
+
+            // 3D memory graph — 1,300 lines of SceneKit that shipped with no
+            // way to open it. Now it has one.
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    nav.showCitadel = false
+                    nav.showMemoryGraph.toggle()
+                }
+            } label: {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(nav.showMemoryGraph ? Color.ndaiGreen : Color.chissPrimary.opacity(0.75))
+                    .padding(6)
+                    .background(
+                        Circle().fill(Color.chissPrimary.opacity(nav.showMemoryGraph ? 0.18 : 0.08))
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Memory graph — 3D view of the operating memory")
 
             // Action buttons — icon-only, tooltips on hover
             HStack(spacing: 4) {

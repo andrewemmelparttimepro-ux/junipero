@@ -63,9 +63,12 @@ final class AgentProviderProfileStore {
         let directory = profileDirectory(agentID: agentID, backend: backend)
         prepareProfile(agentID: agentID, backend: backend)
 
-        let marker = directory.appendingPathComponent(".seeded-current-account-v1")
-        guard !fileManager.fileExists(atPath: marker.path) else { return }
-
+        // Vacuum-fill only. A copied token is a shared grant — two copies
+        // refreshing the same grant rotate each other dead (the Aug 2026
+        // fleet outage). So: never overwrite an existing auth.json (a real
+        // per-profile login always wins), but do fill an empty profile so a
+        // fresh install boots. The old once-ever marker made a deleted or
+        // dead credential unhealable; it is intentionally ignored now.
         let destination = directory.appendingPathComponent("auth.json")
         let source = sourceAuthFile(for: backend)
         do {
@@ -76,12 +79,12 @@ final class AgentProviderProfileStore {
                     [.posixPermissions: 0o600],
                     ofItemAtPath: destination.path
                 )
+                FlightRecorder.logEvent(
+                    category: "auth",
+                    action: "seed-shared-grant",
+                    detail: "\(agentID)/\(backend.rawValue) seeded from the shared CLI login — run a real per-profile sign-in to make this agent independent."
+                )
             }
-            try Data().write(to: marker, options: .atomic)
-            try fileManager.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: marker.path
-            )
         } catch {
             FlightRecorder.logError(
                 source: "provider-profile:\(agentID)",

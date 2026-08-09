@@ -90,9 +90,24 @@ final class GrokCLIProvider: AgentProvider {
         process.arguments = ["login", "--oauth"]
         process.standardOutput = output
         process.standardError = output
+        // An unread pipe can deadlock the CLI past ~64KB and hides every
+        // failure. Drain continuously, log on termination.
+        let loginOutput = LockedBuffer()
+        output.fileHandleForReading.readabilityHandler = { handle in
+            loginOutput.append(handle.availableData)
+        }
         process.environment = providerEnvironment()
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] finished in
+            output.fileHandleForReading.readabilityHandler = nil
+            let text = loginOutput.tailText(4_000)
             Task { @MainActor [weak self] in
+                if finished.terminationStatus != 0 || !text.isEmpty {
+                    FlightRecorder.logEvent(
+                        category: "auth",
+                        action: "grok-login-\(finished.terminationStatus == 0 ? "done" : "failed")",
+                        detail: String(text.prefix(300))
+                    )
+                }
                 self?.authProcess = nil
                 self?.accountUpdatedHandler?()
             }

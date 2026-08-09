@@ -41,11 +41,9 @@ final class ExecutionService: ObservableObject {
     }
 
     init(backend: ExecutionBackend? = nil) {
-        #if APPSTORE_BUILD
-        self.backend = backend ?? XPCExecutionBackend()
-        #else
+        // APPSTORE_BUILD was never defined in any build configuration; the
+        // XPC backend it selected was unreachable dead code and is removed.
         self.backend = backend ?? DirectExecutionBackend()
-        #endif
 
         ThrawnPreferencesStore.setAccessMode(.fullOperation)
         self.accessMode = .fullOperation

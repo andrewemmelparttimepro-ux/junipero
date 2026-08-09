@@ -86,11 +86,28 @@ final class ClaudeCLIProvider: AgentProvider {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["auth", "login", "--claudeai"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        // Login output is diagnostic gold — a failed or device-code login is
+        // invisible when stdout goes to the null device. Drain both streams
+        // and record them on termination.
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        let loginOutput = LockedBuffer()
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            loginOutput.append(handle.availableData)
+        }
         process.environment = providerEnvironment()
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] finished in
+            outputPipe.fileHandleForReading.readabilityHandler = nil
+            let text = loginOutput.tailText(4_000)
             Task { @MainActor [weak self] in
+                if finished.terminationStatus != 0 || !text.isEmpty {
+                    FlightRecorder.logEvent(
+                        category: "auth",
+                        action: "claude-login-\(finished.terminationStatus == 0 ? "done" : "failed")",
+                        detail: String(text.prefix(300))
+                    )
+                }
                 self?.authProcess = nil
                 self?.accountUpdatedHandler?()
             }

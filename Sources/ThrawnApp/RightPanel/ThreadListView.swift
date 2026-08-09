@@ -19,6 +19,7 @@ private enum ThreadSort: String, CaseIterable, Identifiable {
 
 struct ThreadListView: View {
     @EnvironmentObject var threadStore: ThreadStore
+    @EnvironmentObject var nav: ConsoleNavigationStore
     @State private var searchText: String = ""
     @State private var filter: ThreadFilter = .all
     @State private var sort: ThreadSort = .newest
@@ -92,6 +93,10 @@ struct ThreadListView: View {
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         threadStore.selectedThreadId = thread.id
                                         threadStore.markThreadRead(thread.id)
+                                        // Selection without navigation is a
+                                        // dead end — only Command renders the
+                                        // selected thread.
+                                        nav.selectSection(.command)
                                     }
                                 }
                                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -152,7 +157,7 @@ struct ThreadListView: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                         .font(.system(size: 16))
-                        .foregroundColor(Color.black.opacity(0.7))
+                        .foregroundColor(Color.white.opacity(0.70))
                 }
                 .buttonStyle(.plain)
             }
@@ -160,7 +165,7 @@ struct ThreadListView: View {
             HStack {
                 Text("Showing \(displayedThreads.count) of \(threadStore.threads.count)")
                     .font(.system(size: 11))
-                    .foregroundColor(Color.black.opacity(0.6))
+                    .foregroundColor(Color.white.opacity(0.55))
                 Spacer()
                 if queuedTotal > 0 {
                     Text("\(queuedTotal) queued")
@@ -173,7 +178,7 @@ struct ThreadListView: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color.black.opacity(0.65))
+                    .foregroundColor(Color.white.opacity(0.70))
                 }
             }
         }
