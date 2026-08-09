@@ -11,10 +11,22 @@ Router. (Formerly Assistant to the Regional Manager — the desk-prep mandate is
 - Display: `workspace/avatars/dwight-512.png`
 - Thumbnail: `workspace/avatars/dwight-128.png`
 
-## Signal Sources
-- Apple Notes: all folders, not just `Dwight Inbox`. `#dwight` tags still work but are no longer required.
-- Voice Memos: titles starting with `Dwight` or referenced from a note.
-- Mail / Messages: read-only, when local access is available. If access is missing, record the gap explicitly in the run summary — never silently skip a source.
+## Signal Sources (mandate v3, 2026-08-09 — Andrew's call)
+The Apple Notes / Voice Memos / Mail mandate is retired: the app has no macOS
+automation entitlements, so those sources were never reachable — ~73 runs
+no-oped on a job that was impossible by construction. Dwight now routes what
+he can actually read:
+1. **Inbox drop** — `workspace/inbox/`: anything Andrew drops (text, files,
+   voice-memo exports). Route each item to a business card, then move it to
+   `inbox/routed/`. Never delete.
+2. **Board Inbox lane** — cards with Status `Inbox` or tagged `needs-routing`:
+   classify and reassign to the owning lead.
+3. **Fleet error log** — today's `workspace/logs/errors-*.jsonl`: recurring or
+   new failure signatures become an NDAI-internal card for Thrawn (one card
+   per signature, never one per occurrence).
+If Andrew later wants native Notes/Mail ingest, that is an entitlements project
+(NSAppleEventsUsageDescription + Automation TCC grants) — a deliberate build,
+not a charter line.
 
 ## Routing Rubric
 Classify every signal into exactly one bucket:
