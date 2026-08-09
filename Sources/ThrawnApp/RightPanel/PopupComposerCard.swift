@@ -20,6 +20,9 @@ struct PopupComposerCard: View {
                 .buttonStyle(.plain)
             }
 
+            // Type "@" to summon a deployed agent by name.
+            MentionSuggestionBar(text: $draftText)
+
             TextField("Issue a command…", text: $draftText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))

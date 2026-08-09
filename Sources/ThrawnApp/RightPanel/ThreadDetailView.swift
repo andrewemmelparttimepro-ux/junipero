@@ -121,6 +121,8 @@ struct ThreadDetailView: View {
             .background(Color(red: 0.95, green: 0.95, blue: 0.96))
 
             HStack(spacing: 10) {
+                MentionSuggestionBar(text: replyTextBinding)
+
                 TextField("Reply to this thread...", text: replyTextBinding, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))

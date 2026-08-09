@@ -15,7 +15,7 @@ private struct ResourceImageAvatar: View {
     let size: CGFloat
 
     private var nsImage: NSImage? {
-        guard let url = Bundle.module.url(forResource: resourceName, withExtension: "png") else { return nil }
+        guard let url = ThrawnResources.url(forResource: resourceName, withExtension: "png") else { return nil }
         return NSImage(contentsOf: url)
     }
 
@@ -114,6 +114,11 @@ struct AgentPixelAvatar: View {
             return "sir-davos-agent-avatar"
         case "dwight":
             return "dwight-agent-avatar"
+        case "ari-spas360":
+            // The same duck the SPAS 360 floor and Agent OS see. One
+            // colleague, one face, every room — the whole point of the
+            // deployed wing is that ARI is recognizably HIM here.
+            return "ari-agent-avatar"
         default:
             return nil
         }

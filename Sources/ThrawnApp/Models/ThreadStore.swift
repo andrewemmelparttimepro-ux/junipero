@@ -24,6 +24,15 @@ final class ThreadStore: ObservableObject {
     @Published var popupDraftText: String = ""
     @Published var popupAttachments: [ChatAttachment] = []
 
+    /// The project board on screen, mirrored here by the navigation store.
+    ///
+    /// A new thread is stamped with this so the board can show its own
+    /// conversations later. Kept as plain state rather than reaching into
+    /// navigation, because the store has no business knowing what a view
+    /// hierarchy looks like — it only needs the answer to "which project is
+    /// this about", and the only moment that answer is reliable is now.
+    var activeBoardID: ProductBoardID?
+
     private let storageURL: URL
     private let draftStateURL: URL
     private let draftEventLogURL: URL
@@ -181,7 +190,8 @@ final class ThreadStore: ObservableObject {
         var thread = ChatThread(
             messages: [ChatMessage(role: .user, text: trimmed, attachments: cleanAttachments)],
             isLoading: true,
-            state: .pending
+            state: .pending,
+            boardID: activeBoardID
         )
         let now = Date()
         thread.updatedAt = now
@@ -189,7 +199,11 @@ final class ThreadStore: ObservableObject {
         threads = Array(threads.prefix(maxStoredThreads))
         selectedThreadId = thread.id
         saveThreads()
-        runRequest(for: thread.id)
+        if DeployedAgentHub.shared.mentionedAgent(in: trimmed) != nil {
+            routeToDeployedAri(threadId: thread.id, text: trimmed)
+        } else {
+            runRequest(for: thread.id)
+        }
         updatePopupDraft("")
         clearPopupAttachments()
         Task { await ChatDiagnostics.shared.log("new-thread send thread=\(thread.id.uuidString) chars=\(trimmed.count)") }
@@ -229,7 +243,11 @@ final class ThreadStore: ObservableObject {
         moveThreadToTop(threadId)
         selectedThreadId = threadId
         saveThreads()
-        runRequest(for: threadId)
+        if DeployedAgentHub.shared.mentionedAgent(in: trimmed) != nil {
+            routeToDeployedAri(threadId: threadId, text: trimmed)
+        } else {
+            runRequest(for: threadId)
+        }
         updateThreadDraft(threadId: threadId, text: "")
         clearAttachments(for: threadId)
         Task { await ChatDiagnostics.shared.log("thread send thread=\(threadId.uuidString) chars=\(trimmed.count)") }
@@ -275,6 +293,36 @@ final class ThreadStore: ObservableObject {
     func cancelRequest(for id: UUID) {
         cancelTask(for: id, updateThreadState: true)
         Task { await ChatDiagnostics.shared.log("cancel thread=\(id.uuidString)") }
+    }
+
+    // MARK: - Deployed agent routing
+    //
+    // "@ari" in a message calls the REAL deployed agent living in SPAS 360 —
+    // his tools, his org data, his memory — via the app's own agent runtime.
+    // The reply lands in this thread like any assistant turn, footered with
+    // where it actually came from. No local provider is involved: this turn
+    // belongs to him. See docs/DEPLOYED-INTELLIGENCE.md.
+    private func routeToDeployedAri(threadId: UUID, text: String) {
+        guard let agent = DeployedAgentHub.shared.mentionedAgent(in: text) else { return }
+        inFlightTasks[threadId]?.cancel()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let start = Date()
+            await ChatDiagnostics.shared.log("deployed-route start agent=\(agent.id) thread=\(threadId.uuidString)")
+            do {
+                let result = try await DeployedAgentHub.shared.runMention(agent: agent, threadID: threadId, text: text)
+                let latency = Int(Date().timeIntervalSince(start) * 1000)
+                self.updateThreadSuccess(threadId, response: result.reply, model: result.modelLabel, latencyMs: latency)
+                await ChatDiagnostics.shared.log("ari-route ok thread=\(threadId.uuidString) ms=\(latency)")
+            } catch {
+                self.updateThreadFailure(threadId, error: "\(agent.name) (\(agent.appName)) could not be reached: \(error.localizedDescription)")
+                await ChatDiagnostics.shared.log("ari-route fail thread=\(threadId.uuidString) err=\(error.localizedDescription)")
+            }
+            self.inFlightTasks[threadId] = nil
+            self.inFlightCount = self.inFlightTasks.count
+        }
+        inFlightTasks[threadId] = task
+        inFlightCount = inFlightTasks.count
     }
 
     private func runRequest(for threadId: UUID) {
@@ -1209,6 +1257,12 @@ final class ThreadStore: ObservableObject {
                     return recovered
                 }
                 return thread
+            }
+            // Resume where Andrew left off: a launch that lands on a blank
+            // pane reads as lost history even though every thread is intact
+            // on disk. Select the most recently updated thread.
+            if selectedThreadId == nil {
+                selectedThreadId = self.threads.max(by: { $0.updatedAt < $1.updatedAt })?.id
             }
         } catch {
             // Corruption recovery — try to move the broken file aside.

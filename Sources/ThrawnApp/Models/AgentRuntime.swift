@@ -760,6 +760,26 @@ final class AgentRuntimeCoordinator: ObservableObject {
         if backend == .grok, agentID == "steven" {
             grokStatus = status
         }
+
+        // Credential health is Brain state, not just UI state. A dead token
+        // becomes a scoped escalation within minutes instead of silent fleet
+        // death (the Aug 2026 failure mode).
+        let brainState: String
+        switch status.state {
+        case .ready: brainState = "ready"
+        case .authenticationRequired: brainState = "auth_required"
+        case .failed: brainState = "failed"
+        case .starting, .unavailable: brainState = "unknown"
+        }
+        let brainProvider = ["codex", "claude", "grok"].contains(backend.rawValue)
+            ? backend.rawValue : "other"
+        BrainClient.shared.postCredentialStatus(
+            agentSlug: agentID.lowercased(),
+            provider: brainProvider,
+            state: brainState,
+            detail: status.detail,
+            account: status.account?.displayName
+        )
     }
 
     private func profileKey(agentID: String, backend: ProviderBackend) -> String {

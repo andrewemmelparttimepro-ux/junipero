@@ -14,6 +14,11 @@ enum ThrawnV2ResetService {
         "provider-state.json",
         "openai-config.json",
         ProviderRouter.glmConfigFileName,
+        // Conversation data survives every migration. Losing chat history to
+        // a version bump is never acceptable.
+        "threads.json",
+        "drafts.json",
+        "brain.json",
     ]
 
     static func performIfNeeded() -> Bool {
@@ -25,6 +30,10 @@ enum ThrawnV2ResetService {
         }
 
         do {
+            // A version-bump migration never destroys state it did not copy
+            // first. The full App Support tree is archived before anything
+            // is cleared — recovery from a bad migration is a directory move.
+            let archiveRoot = try archiveAppSupport(reason: "v2-reset-v\(version)")
             let preserved = preserveSettings()
             try clearAppSupport()
             try restoreSettings(preserved)
@@ -32,7 +41,7 @@ enum ThrawnV2ResetService {
             FlightRecorder.logEvent(
                 category: "v2-reset",
                 action: "complete",
-                detail: "Purged active runtime and seeded Thrawn 2.0 clean slate."
+                detail: "Migrated to v\(version); prior state archived at \(archiveRoot.path)"
             )
             return true
         } catch {
@@ -45,7 +54,9 @@ enum ThrawnV2ResetService {
     }
 
     static func removeLegacyV1Residue() {
-        let activeIds: Set<String> = ["thrawn", "archivist", "sentinel", "dwight", "steven"]
+        // README.md documents the sentinel/archivist alias mapping — the file
+        // whose absence caused the TASK-219 false alarm. It is load-bearing.
+        let activeIds: Set<String> = ["thrawn", "archivist", "sentinel", "dwight", "steven", "readme"]
 
         let oldTaskBoard = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/ops/task-board.md")
         if fm.fileExists(atPath: oldTaskBoard.path) {
@@ -57,18 +68,62 @@ enum ThrawnV2ResetService {
         removeStatusFiles(in: ThrawnPaths.appSupportDir.appendingPathComponent("workspace/ops"))
 
         let historicalPackets = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/handoffs")
-        if fm.fileExists(atPath: historicalPackets.path) {
-            try? fm.removeItem(at: historicalPackets)
+        if fm.fileExists(atPath: historicalPackets.path),
+           let contents = try? fm.contentsOfDirectory(atPath: historicalPackets.path),
+           !contents.isEmpty {
+            quarantine(historicalPackets)
         }
         let historicalIndex = ThrawnPaths.appSupportDir.appendingPathComponent("workspace/handoffs-index.json")
         if fm.fileExists(atPath: historicalIndex.path) {
-            try? fm.removeItem(at: historicalIndex)
+            quarantine(historicalIndex)
         }
 
         // workspace/product-sentinel, workspace/citadel, and workspace/proofs are
         // LIVE roots used by the business-agent heartbeats and the LaunchAgent proof
         // crons. They must never be purged at launch — doing so was the root cause of
         // the recurring registry/proof disappearance (TASK-013/014, 2026-07-13/18).
+    }
+
+    /// Launch-time cleanup quarantines instead of deleting. A file this code
+    /// judges "unknown" has been a live agent contract before (the Aug 2026
+    /// davos.md/samwell.md incident) — deletion at launch leaves no recovery
+    /// path and no provable author. Quarantined files land under
+    /// Thrawn Archives/launch-quarantine-<date>/.
+    private static func quarantine(_ item: URL) {
+        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let dir = ThrawnPaths.appSupportDir
+            .deletingLastPathComponent()
+            .appendingPathComponent("Thrawn Archives/launch-quarantine-\(stamp)", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let destination = dir.appendingPathComponent(item.lastPathComponent)
+        try? fm.removeItem(at: destination)
+        do {
+            try fm.moveItem(at: item, to: destination)
+            FlightRecorder.logEvent(
+                category: "v2-reset",
+                action: "quarantine",
+                detail: "Moved \(item.lastPathComponent) to \(destination.path)"
+            )
+        } catch {
+            FlightRecorder.logError(
+                source: "v2-reset",
+                message: "Quarantine failed for \(item.path): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private static func archiveAppSupport(reason: String) throws -> URL {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let destination = ThrawnPaths.appSupportDir
+            .deletingLastPathComponent()
+            .appendingPathComponent("Thrawn Archives/\(reason)-\(stamp)", isDirectory: true)
+        try fm.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try fm.copyItem(at: ThrawnPaths.appSupportDir, to: destination)
+        return destination
     }
 
     private static func removeUnknownAgentFiles(in dir: URL, activeIds: Set<String>) {
@@ -78,10 +133,10 @@ enum ThrawnV2ResetService {
             let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             if isDir {
                 if !activeIds.contains(item.lastPathComponent.lowercased()) {
-                    try? fm.removeItem(at: item)
+                    quarantine(item)
                 }
             } else if !activeIds.contains(name) {
-                try? fm.removeItem(at: item)
+                quarantine(item)
             }
         }
     }
@@ -90,14 +145,14 @@ enum ThrawnV2ResetService {
         guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         let expected = Set(activeIds.map { "\($0).HEARTBEAT.md" })
         for item in items where item.pathExtension == "md" && !expected.contains(item.lastPathComponent) {
-            try? fm.removeItem(at: item)
+            quarantine(item)
         }
     }
 
     private static func removeStatusFiles(in dir: URL) {
         guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
         for item in items where item.lastPathComponent.hasSuffix("-status.md") {
-            try? fm.removeItem(at: item)
+            quarantine(item)
         }
     }
 

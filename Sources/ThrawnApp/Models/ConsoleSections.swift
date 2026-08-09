@@ -3,6 +3,7 @@ import SwiftUI
 
 enum ConsoleSection: String, CaseIterable, Identifiable {
     case command = "Command"
+    case feed = "Feed"
     case objectives = "Objectives"
     case briefings = "Briefings"
     case agents = "Agents"
@@ -15,6 +16,7 @@ enum ConsoleSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .command: return "message.badge.fill"
+        case .feed: return "dot.radiowaves.up.forward"
         case .objectives: return "target"
         case .briefings: return "waveform.circle.fill"
         case .agents: return "person.3.sequence.fill"
@@ -30,7 +32,10 @@ final class ConsoleNavigationStore: ObservableObject {
     @Published var selectedSection: ConsoleSection = .command
     /// The project board occupying the primary console surface. Setting this
     /// to nil reveals the selected utility section from the collapsible rail.
-    @Published var selectedProjectBoard: ProductBoardID? = .spas360
+    // nil at launch: the console opens on the resumed chat, not a board —
+    // a non-nil default outranks .command in ConsoleSectionBody and reads
+    // as "my chat disappeared".
+    @Published var selectedProjectBoard: ProductBoardID? = nil
     /// When true, the currently-selected project board takes over the entire
     /// window as a full-screen freeform canvas. Toggled by the logo buttons
     /// in ProductBoardSwitcher and the oversized X exit in the overlay.

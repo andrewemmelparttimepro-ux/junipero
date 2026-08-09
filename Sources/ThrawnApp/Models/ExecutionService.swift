@@ -63,6 +63,12 @@ final class ExecutionService: ObservableObject {
                 stdout: "",
                 stderr: reason
             )
+        } else if !AutonomyPolicy.allowsShellExecution(agentID: agentId) {
+            result = ShellCommandResult(
+                exitCode: ShellCommandSafety.blockedExitCode,
+                stdout: "",
+                stderr: AutonomyPolicy.blockMessage(agentID: agentId ?? "unknown", command: command)
+            )
         } else {
             result = await backend.execute(command)
         }

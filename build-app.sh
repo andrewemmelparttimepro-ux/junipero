@@ -101,6 +101,9 @@ done
 if [ -n "$RESOURCE_BUNDLE" ]; then
     ditto --norsrc --noextattr "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
     echo "  ✓ Resources bundle copied"
+else
+    echo "Missing SwiftPM resource bundle for ThrawnApp" >&2
+    exit 1
 fi
 
 # ── Step 6b: Bundle OpsBundle into the .app's Resources ──

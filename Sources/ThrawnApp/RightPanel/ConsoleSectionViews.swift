@@ -12,6 +12,12 @@ struct ConsoleSectionBody: View {
         // 3D memory graph remains available as an internal diagnostics surface
         } else if nav.showMemoryGraph {
             MemoryGraphView()
+        // A deployed agent is selected — the chat backed by the agent's own
+        // app runtime, not a local gateway session.
+        } else if let selected = nav.selectedAgentId,
+                  let deployed = DeployedAgentHub.shared.agent(withID: selected) {
+            DeployedAgentChatView(agent: deployed)
+                .id(deployed.id)
         // If a specialist agent is selected, show their dedicated chat session
         } else if let agentId = nav.selectedAgentId,
            let agent = roster.agents.first(where: { $0.id == agentId }) {
@@ -23,6 +29,8 @@ struct ConsoleSectionBody: View {
             switch nav.selectedSection {
             case .command:
                 CommandTabView()
+            case .feed:
+                UnifiedFeedView()
             case .objectives:
                 ObjectivesView()
             case .briefings:
@@ -163,29 +171,7 @@ struct CommandTabView: View {
                         .foregroundColor(Color.white.opacity(0.40))
                 }
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(recentThreads) { thread in
-                            ThreadCard(thread: thread)
-                                .onTapGesture {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        threadStore.selectedThreadId = thread.id
-                                        threadStore.markThreadRead(thread.id)
-                                    }
-                                }
-                                .contextMenu {
-                                    if thread.state == .failed {
-                                        Button("Retry") { threadStore.retryThread(thread.id) }
-                                    }
-                                    if thread.isLoading {
-                                        Button("Cancel") { threadStore.cancelRequest(for: thread.id) }
-                                    }
-                                    Button("Delete") { threadStore.deleteThread(thread.id) }
-                                }
-                        }
-                    }
-                    .padding(12)
-                }
+                ThreadCardFeed(threads: recentThreads)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: threadStore.selectedThreadId)

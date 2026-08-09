@@ -212,6 +212,16 @@ final class TaskDispatcher: ObservableObject {
                     if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                         appliedCount += 1
                         logDispatch(action: "move", taskId: taskId, detail: "\(field) → \(value)")
+                        let actor = update["agent"] as? String ?? "unknown"
+                        if isCompletionStatusMutation(field: field, value: value) {
+                            BrainClient.shared.mirrorDone(
+                                taskId: taskId,
+                                deliverablePath: fieldValue(in: boardContent, taskId: taskId, field: "Deliverable"),
+                                actor: actor
+                            )
+                        } else {
+                            BrainClient.shared.mirrorFieldChange(taskId: taskId, field: field, value: value, actor: actor)
+                        }
                     } else {
                         logError(source: "dispatcher", message: "move failed — \(taskId) or field '\(field)' not found on board")
                         skippedCount += 1
@@ -238,6 +248,16 @@ final class TaskDispatcher: ObservableObject {
                     if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                         appliedCount += 1
                         logDispatch(action: "update", taskId: taskId, detail: "\(field)")
+                        let actor = update["agent"] as? String ?? "unknown"
+                        if isCompletionStatusMutation(field: field, value: value) {
+                            BrainClient.shared.mirrorDone(
+                                taskId: taskId,
+                                deliverablePath: fieldValue(in: boardContent, taskId: taskId, field: "Deliverable"),
+                                actor: actor
+                            )
+                        } else {
+                            BrainClient.shared.mirrorFieldChange(taskId: taskId, field: field, value: value, actor: actor)
+                        }
                     } else {
                         logError(source: "dispatcher", message: "update failed — \(taskId) or field '\(field)' not found on board")
                         skippedCount += 1
@@ -252,9 +272,19 @@ final class TaskDispatcher: ObservableObject {
                         logError(source: "dispatcher", message: "fields update to Done blocked — \(taskId) has no Deliverable/evidence pointer")
                         skippedCount += 1
                     }
+                    let fieldsActor = update["agent"] as? String ?? "unknown"
                     for (field, value) in fieldsToApply {
                         if applyFieldMutation(in: &boardContent, taskId: taskId, field: field, value: value) {
                             appliedCount += 1
+                            if isCompletionStatusMutation(field: field, value: value) {
+                                BrainClient.shared.mirrorDone(
+                                    taskId: taskId,
+                                    deliverablePath: fieldValue(in: boardContent, taskId: taskId, field: "Deliverable"),
+                                    actor: fieldsActor
+                                )
+                            } else {
+                                BrainClient.shared.mirrorFieldChange(taskId: taskId, field: field, value: value, actor: fieldsActor)
+                            }
                         } else {
                             skippedCount += 1
                         }
@@ -333,6 +363,10 @@ final class TaskDispatcher: ObservableObject {
                         return ""
                     }()
                     logDispatch(action: "create", taskId: resolvedId, detail: "\(title)\(linkDetail)")
+                    BrainClient.shared.mirrorCreate(
+                        taskId: resolvedId, title: title, owner: owner, status: status,
+                        priority: priority, notes: notes, actor: agent, deliverable: deliverable
+                    )
                 } else {
                     logError(source: "dispatcher", message: "create missing 'title': \(describeUpdate(update))")
                     skippedCount += 1
@@ -344,6 +378,10 @@ final class TaskDispatcher: ObservableObject {
                     if appendNote(in: &boardContent, taskId: taskId, note: note) {
                         appliedCount += 1
                         logDispatch(action: "note", taskId: taskId, detail: String(note.prefix(50)))
+                        BrainClient.shared.mirrorNote(
+                            taskId: taskId, note: note,
+                            actor: update["agent"] as? String ?? "unknown"
+                        )
                     } else {
                         logError(source: "dispatcher", message: "note failed — \(taskId) not found on board")
                         skippedCount += 1

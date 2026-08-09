@@ -91,6 +91,14 @@ struct ChatThread: Identifiable, Codable {
     var lastProvider: ProviderBackend?
     var latencyMs: Int?
     var unreadCount: Int
+    /// Which project board this conversation belongs to.
+    ///
+    /// Stamped when the thread is started while a board is selected, because
+    /// that is the only moment the answer is known for certain. Threads from
+    /// before this existed decode as nil and fall back to the keyword guess in
+    /// `ProductBoardView.affiliation(for:)` — a guess is worth having, but it
+    /// is not worth writing down as if it were a fact.
+    var boardID: ProductBoardID?
 
     init(
         id: UUID = UUID(),
@@ -103,7 +111,8 @@ struct ChatThread: Identifiable, Codable {
         modelUsed: String? = nil,
         lastProvider: ProviderBackend? = nil,
         latencyMs: Int? = nil,
-        unreadCount: Int = 0
+        unreadCount: Int = 0,
+        boardID: ProductBoardID? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -116,6 +125,7 @@ struct ChatThread: Identifiable, Codable {
         self.lastProvider = lastProvider
         self.latencyMs = latencyMs
         self.unreadCount = unreadCount
+        self.boardID = boardID
     }
 
     enum CodingKeys: String, CodingKey {
@@ -130,6 +140,7 @@ struct ChatThread: Identifiable, Codable {
         case lastProvider
         case latencyMs
         case unreadCount
+        case boardID
         // Legacy keys (single-turn schema)
         case timestamp
         case userMessage
@@ -147,6 +158,8 @@ struct ChatThread: Identifiable, Codable {
         self.lastProvider = try container.decodeIfPresent(ProviderBackend.self, forKey: .lastProvider)
         self.latencyMs = try container.decodeIfPresent(Int.self, forKey: .latencyMs)
         self.unreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
+        // Read before the modern path returns, so it survives both routes.
+        self.boardID = try container.decodeIfPresent(ProductBoardID.self, forKey: .boardID)
 
         if let decodedMessages = try container.decodeIfPresent([ChatMessage].self, forKey: .messages), !decodedMessages.isEmpty {
             self.messages = decodedMessages
@@ -184,6 +197,7 @@ struct ChatThread: Identifiable, Codable {
         try container.encodeIfPresent(lastProvider, forKey: .lastProvider)
         try container.encodeIfPresent(latencyMs, forKey: .latencyMs)
         try container.encode(unreadCount, forKey: .unreadCount)
+        try container.encodeIfPresent(boardID, forKey: .boardID)
     }
 
     var latestUserText: String {

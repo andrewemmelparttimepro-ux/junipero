@@ -174,3 +174,45 @@ struct ThreadCard: View {
         threadStore.queuedCount(for: thread.id)
     }
 }
+
+// MARK: - Thread card feed
+//
+// The scrolling list of thread cards, in one place.
+//
+// It is shown by the command console and by a project board's panel, and the
+// two must stay identical — the same card, the same tap behaviour, the same
+// context menu. Two copies of this drifted apart the moment one of them was
+// touched, which is how a board panel ends up with no Retry on a failed
+// thread while the console has one.
+
+struct ThreadCardFeed: View {
+    @EnvironmentObject var threadStore: ThreadStore
+
+    let threads: [ChatThread]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(threads) { thread in
+                    ThreadCard(thread: thread)
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                threadStore.selectedThreadId = thread.id
+                                threadStore.markThreadRead(thread.id)
+                            }
+                        }
+                        .contextMenu {
+                            if thread.state == .failed {
+                                Button("Retry") { threadStore.retryThread(thread.id) }
+                            }
+                            if thread.isLoading {
+                                Button("Cancel") { threadStore.cancelRequest(for: thread.id) }
+                            }
+                            Button("Delete") { threadStore.deleteThread(thread.id) }
+                        }
+                }
+            }
+            .padding(12)
+        }
+    }
+}

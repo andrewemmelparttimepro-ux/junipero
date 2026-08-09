@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "_comment": "Deployed NDAI intelligence reachable from Thrawn's stable. Adding an agent here (plus its Keychain credential) is the WHOLE integration \u2014 no code. Each app must serve the three-piece contract: /api/agent/status, /api/agent/run, and an agent_config row. See docs/DEPLOYED-INTELLIGENCE.md.",
+  "agents": [
+    {
+      "id": "ari-spas360",
+      "name": "ARI",
+      "appName": "SPAS 360",
+      "mention": "ari",
+      "baseURL": "https://spas360solo.vercel.app",
+      "supabaseURL": "https://kxyqgkimcdxvfkceoixs.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4eXFna2ltY2R4dmZrY2VvaXhzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyNjc2NjAsImV4cCI6MjA5Nzg0MzY2MH0.8eebai7kVHLPTw5IHrHEvxeLpeY89GCJnAlemvYEFR0",
+      "email": "thrawn@ndai.pro",
+      "keychainService": "thrawn-deployed-ari-spas360"
+    },
+    {
+      "id": "otto-omp",
+      "name": "OTTO",
+      "appName": "SandPro OMP",
+      "mention": "otto",
+      "baseURL": "https://objectivetracker.net",
+      "supabaseURL": "https://whgrkfhuzgwmbelocnhq.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoZ3JrZmh1emd3bWJlbG9jbmhxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzEyNjQsImV4cCI6MjA5MDc0NzI2NH0.j3AiTzEAbEHXo0UQqcqRfEN7iz9p5K4xXu7qfUAKAyI",
+      "email": "thrawn@ndai.pro",
+      "keychainService": "thrawn-deployed-otto-omp"
+    },
+    {
+      "id": "spot-hitzero",
+      "name": "SPOT",
+      "appName": "Hit Zero",
+      "mention": "spot",
+      "baseURL": "https://thehitzero.net",
+      "supabaseURL": "https://ldhzkdqznccfgpdvqyfk.supabase.co",
+      "supabaseAnonKey": "sb_publishable_P2e2aHrrMYP85xBfncIilA_2435TVII",
+      "email": "thrawn@ndai.pro",
+      "keychainService": "thrawn-deployed-spot-hitzero"
+    }
+  ]
+}

@@ -104,6 +104,32 @@ struct AgentRailView: View {
                         }
                     }
 
+                    // ── Deployed Wing ─────────────────────────────────────────
+                    // Field operators living inside NDAI's shipped apps. These
+                    // are not Thrawn personas: @ARI reaches the actual agent
+                    // the SPAS 360 floor uses, with his data and his memory.
+                    HStack(spacing: 8) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.07))
+                            .frame(height: 1)
+                        Text("DEPLOYED")
+                            .font(.system(size: 8, weight: .black))
+                            .tracking(2.5)
+                            .foregroundColor(Color.ndaiGreen.opacity(0.55))
+                        Rectangle()
+                            .fill(Color.white.opacity(0.07))
+                            .frame(height: 1)
+                    }
+                    .padding(.vertical, 4)
+
+                    ForEach(DeployedAgentHub.shared.agents) { agent in
+                        DeployedAgentRailRow(
+                            agent: agent,
+                            isSelected: nav.selectedAgentId == agent.id,
+                            onTap: { selectDeployed(agent) }
+                        )
+                    }
+
                     // ── Extra Pinned Slots ────────────────────────────────────
                     // Drop zone: drag agents from the right-panel roster to pin
                     // additional agents here beyond the standard roster.
@@ -186,6 +212,106 @@ struct AgentRailView: View {
                 nav.selectedAgentId = agent.id
             }
         }
+    }
+
+    private func selectDeployed(_ agent: DeployedAgentConfig) {
+        withAnimation(.spring(response: 0.28)) {
+            if nav.selectedAgentId == agent.id {
+                nav.dismissAgent()
+            } else {
+                nav.selectedAgentId = agent.id
+            }
+        }
+    }
+}
+
+// MARK: - Deployed Agent Row
+//
+// Same geometry as a V2 `AgentRailCard` (3pt stripe, 14pt corners, 40pt
+// avatar, identical type sizes) so the rail reads as one column — the
+// differences are informational: a green DEPLOYED accent, a presence line fed
+// by the agent's live status card, and the app he lives in where the gateway
+// picker would be. No gateway picker, because Thrawn does not choose a
+// deployed agent's model — his own app does (until the control plane lands).
+
+private struct DeployedAgentRailRow: View {
+    let agent: DeployedAgentConfig
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    @ObservedObject private var hub = DeployedAgentHub.shared
+    @State private var isHovering = false
+
+    private var presence: DeployedAgentPresence { hub.presence(for: agent) }
+    private var accentColor: Color { Color.ndaiGreen }
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.obsidianMid.opacity(isSelected ? 0.98 : (isHovering ? 0.92 : 0.80)))
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(accentColor.opacity(isSelected ? 0.85 : 0.50))
+                        .frame(width: 3)
+                    Spacer()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        isSelected ? accentColor.opacity(0.55) : Color.white.opacity(0.08),
+                        lineWidth: 1
+                    )
+
+                HStack(alignment: .top, spacing: 10) {
+                    AgentPixelAvatar(
+                        agentId: agent.id,
+                        agentName: agent.name,
+                        state: presence.activityState,
+                        size: 40
+                    )
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(agent.name)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundColor(Color.white.opacity(0.92))
+                                .lineLimit(1)
+                            Text(presence.isUp ? "LIVE" : presence == .unknown ? "CHECKING" : "DOWN")
+                                .font(.system(size: 8.5, weight: .heavy))
+                                .tracking(1.6)
+                                .foregroundColor(presence.activityState.chissColor.opacity(0.75))
+                            Text(presence.detailLine)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Color.white.opacity(0.50))
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 4)
+                        Text(agent.appName)
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundColor(accentColor.opacity(0.85))
+                            .frame(width: 96, alignment: .trailing)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                }
+                .padding(.leading, 13)
+                .padding(.trailing, 10)
+                .padding(.vertical, 10)
+            }
+            .shadow(
+                color: isSelected ? accentColor.opacity(0.30) : .clear,
+                radius: isSelected ? 8 : 0
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.16)) {
+                isHovering = hovering
+            }
+        }
+        .help("The real \(agent.name) — deployed inside \(agent.appName). Live data, his memory, his audit trail.")
     }
 }
 

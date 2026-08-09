@@ -17,6 +17,9 @@ struct SetupWizardView: View {
     @State private var selectedProvider: AIProvider? = .chatgpt
     @State private var openAIToken: String = ""
     @State private var openAIModel: String = AIProvider.chatgpt.defaultModel
+    @State private var signingInGateways: Set<String> = []
+    @State private var signInError: String?
+    @State private var copiedGatewayID: String?
 
     var body: some View {
         ZStack {
@@ -45,14 +48,18 @@ struct SetupWizardView: View {
                         // Capability protocol
                         capabilityCard
 
-                        // Action bar
-                        actionBar
-                            .padding(.top, 4)
                     }
                     .padding(.horizontal, 28)
                     .padding(.top, 16)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 16)
                 }
+
+                // Action bar lives OUTSIDE the scroll area: Defer and
+                // INITIALIZE must never sit below an invisible fold.
+                actionBar
+                    .padding(.horizontal, 28)
+                    .padding(.top, 8)
+                    .padding(.bottom, 20)
             }
 
             // Scan-line sweep
@@ -406,6 +413,51 @@ struct SetupWizardView: View {
                         Text("Complete Codex's browser login, then select refresh. No ChatGPT password or token is entered into Thrawn.")
                             .font(.system(size: 9.5))
                             .foregroundColor(.white.opacity(0.38))
+
+                        Button {
+                            signInError = nil
+                            signingInGateways.insert("codex-runtime")
+                            Task {
+                                do {
+                                    try await agentRuntime.beginSignIn(agentID: "thrawn", backend: .codex)
+                                } catch {
+                                    signInError = "Codex: \(error.localizedDescription)"
+                                }
+                                signingInGateways.remove("codex-runtime")
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if signingInGateways.contains("codex-runtime") {
+                                    ProgressView().controlSize(.mini).tint(.white)
+                                } else {
+                                    Image(systemName: "person.badge.key.fill")
+                                        .font(.system(size: 10, weight: .bold))
+                                }
+                                Text(signingInGateways.contains("codex-runtime")
+                                     ? "OPENING BROWSER…" : "SIGN IN WITH BROWSER")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .tracking(1.5)
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                Capsule()
+                                    .fill(Color.chissPrimary.opacity(0.30))
+                                    .overlay(Capsule().stroke(Color.chissPrimary.opacity(0.50), lineWidth: 1))
+                            )
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(signingInGateways.contains("codex-runtime"))
+
+                        if let signInError {
+                            Text(signInError)
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundColor(Color.sithGlow)
+                                .lineLimit(3)
+                        }
                     }
                 }
             }
@@ -464,20 +516,64 @@ struct SetupWizardView: View {
 
             Spacer()
 
-            Text(state.label)
-                .font(.system(size: 7.5, weight: .black, design: .monospaced))
-                .tracking(1)
-                .foregroundColor(state.ready ? Color.green : Color.orange.opacity(0.82))
+            if state.label == "SIGN IN", let backend = gateway.backend {
+                // A live control, not a status caption: opens the provider's
+                // own browser login for the primary profile on this route.
+                Button {
+                    let agentID = backend == .grok ? "steven" : "thrawn"
+                    signingInGateways.insert(gateway.id)
+                    signInError = nil
+                    Task {
+                        do {
+                            try await agentRuntime.beginSignIn(agentID: agentID, backend: backend)
+                        } catch {
+                            signInError = "\(gateway.displayName): \(error.localizedDescription)"
+                        }
+                        signingInGateways.remove(gateway.id)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        if signingInGateways.contains(gateway.id) {
+                            ProgressView().controlSize(.mini).tint(Color.orange)
+                        }
+                        Text(signingInGateways.contains(gateway.id) ? "OPENING…" : "SIGN IN")
+                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .foregroundColor(Color.orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(Color.orange.opacity(0.10))
+                            .overlay(Capsule().stroke(Color.orange.opacity(0.45), lineWidth: 1))
+                    )
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(signingInGateways.contains(gateway.id))
+                .help("Open \(gateway.displayName)'s browser sign-in")
+            } else {
+                Text(state.label)
+                    .font(.system(size: 7.5, weight: .black, design: .monospaced))
+                    .tracking(1)
+                    .foregroundColor(state.ready ? Color.green : Color.orange.opacity(0.82))
+            }
 
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(gateway.authCommand, forType: .string)
+                copiedGatewayID = gateway.id
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                    if copiedGatewayID == gateway.id { copiedGatewayID = nil }
+                }
             } label: {
-                Image(systemName: "doc.on.doc")
+                Image(systemName: copiedGatewayID == gateway.id ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(Color.chissPrimary.opacity(0.75))
+                    .foregroundColor(copiedGatewayID == gateway.id ? Color.green : Color.chissPrimary.opacity(0.75))
                     .padding(6)
                     .background(Circle().fill(Color.chissPrimary.opacity(0.08)))
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Copy sign-in command: \(gateway.authCommand)")

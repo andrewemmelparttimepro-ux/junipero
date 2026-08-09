@@ -41,6 +41,34 @@ echo "==> Assembling app bundle"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$UNIVERSAL_DIR/$APP_EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/$APP_EXECUTABLE"
 
+# Package SwiftPM resources in the conventional signed .app location. Runtime
+# lookup uses ThrawnResources so it never relies on SwiftPM's build-machine
+# fallback path.
+RESOURCE_BUNDLE=""
+for candidate in \
+  "$ROOT_DIR/.build/arm64-apple-macosx/release/ThrawnConsole_ThrawnApp.bundle" \
+  "$ROOT_DIR/.build/x86_64-apple-macosx/release/ThrawnConsole_ThrawnApp.bundle"
+do
+  if [[ -d "$candidate" ]]; then
+    RESOURCE_BUNDLE="$candidate"
+    break
+  fi
+done
+if [[ -n "$RESOURCE_BUNDLE" ]]; then
+  ditto --norsrc --noextattr "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
+else
+  echo "Missing SwiftPM resource bundle for $SWIFT_PRODUCT" >&2
+  exit 1
+fi
+
+OPSBUNDLE_SRC="$ROOT_DIR/OpsBundle"
+if [[ -d "$OPSBUNDLE_SRC" ]]; then
+  ditto --norsrc --noextattr "$OPSBUNDLE_SRC" "$APP_BUNDLE/Contents/Resources/OpsBundle"
+else
+  echo "Missing OpsBundle at $OPSBUNDLE_SRC" >&2
+  exit 1
+fi
+
 # Bundle default clock art for fresh installs.
 DEFAULT_CLOCK_ASSET="$ROOT_DIR/Sources/ThrawnApp/Resources/clock-reference-default.png"
 if [[ -f "$DEFAULT_CLOCK_ASSET" ]]; then

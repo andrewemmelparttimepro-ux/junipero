@@ -213,7 +213,7 @@ final class GrokCLIProvider: AgentProvider {
 
         var arguments = [
             "--output-format", "streaming-json",
-            "--permission-mode", "dontAsk",
+            "--permission-mode", AutonomyPolicy.grokPermissionMode(agentID: options.agentID),
             "--no-subagents",
             "--cwd", options.cwd.path,
         ]

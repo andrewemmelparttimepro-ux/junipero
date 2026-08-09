@@ -28,9 +28,11 @@ let package = Package(
                 .copy("Resources/samwell-agent-avatar.png"),
                 .copy("Resources/sir-davos-agent-avatar.png"),
                 .copy("Resources/dwight-agent-avatar.png"),
+                .copy("Resources/ari-agent-avatar.png"),
                 .copy("Resources/spas360-logo.png"),
                 .copy("Resources/hitzero-logo.png"),
                 .copy("Resources/sandpro-omp-logo.png"),
+                .copy("Resources/ndai-logo.png"),
                 .copy("Resources/Assets.xcassets")
             ]
         ),

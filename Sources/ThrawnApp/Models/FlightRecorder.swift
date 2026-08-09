@@ -131,6 +131,22 @@ enum FlightRecorder {
         ]
         if let d = detail { entry["detail"] = String(d.prefix(300)) }
         append(entry, to: heartbeatLogPath)
+
+        // Mirror upward: heartbeat lifecycle is part of the Brain's ledger.
+        let kind: String
+        switch event {
+        case "start": kind = "run_start"
+        case "complete": kind = "run_end"
+        case "error": kind = "error"
+        default: kind = "heartbeat"
+        }
+        BrainClient.shared.postEvent(
+            agentSlug: agent,
+            kind: kind,
+            status: event == "error" ? "failed" : "ok",
+            summary: detail,
+            detail: ["duration_ms": durationMs, "commands_executed": commandsExecuted]
+        )
     }
 
     // MARK: - Errors
@@ -148,6 +164,18 @@ enum FlightRecorder {
         ]
         for (k, v) in context { entry[k] = v }
         append(entry, to: errorLogPath)
+
+        // Errors always reach the Brain: source is "subsystem:agent" or a
+        // bare subsystem — attribute to the agent segment when present.
+        let agentSlug = source.contains(":") ? String(source.split(separator: ":").last!) : source
+        BrainClient.shared.postEvent(
+            agentSlug: agentSlug,
+            actor: source,
+            kind: "error",
+            status: "failed",
+            summary: message,
+            detail: context
+        )
     }
 
     // MARK: - General Events

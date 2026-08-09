@@ -36,7 +36,7 @@ struct ProductLogoButton: View {
     @State private var isHovered = false
 
     private var logoImage: NSImage? {
-        guard let url = Bundle.module.url(forResource: board.logoResource, withExtension: "png") else {
+        guard let url = ThrawnResources.url(forResource: board.logoResource, withExtension: "png") else {
             return nil
         }
         return NSImage(contentsOf: url)
@@ -220,7 +220,7 @@ struct ProductBoardFullScreen: View {
     @EnvironmentObject private var nav: ConsoleNavigationStore
 
     private var logoImage: NSImage? {
-        guard let url = Bundle.module.url(forResource: board.logoResource, withExtension: "png") else {
+        guard let url = ThrawnResources.url(forResource: board.logoResource, withExtension: "png") else {
             return nil
         }
         return NSImage(contentsOf: url)
@@ -281,6 +281,30 @@ struct ProductBoardFullScreen: View {
                     )
             )
             .shadow(color: board.accentColor.opacity(0.30), radius: 12)
+
+            // The same board, full-fat: this whiteboard is a real .board
+            // package on disk, and boRD is its native editor (ink, shapes,
+            // connectors, history). One file, two rooms.
+            Button {
+                NSWorkspace.shared.open(store.packageURL(for: board))
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 11, weight: .heavy))
+                    Text("Open in boRD")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Open this board in boRD — same file, full canvas")
 
             Spacer()
 
@@ -432,12 +456,18 @@ struct ProductBoardCanvas: View {
             let nodes = store.nodes(for: board)
 
             ZStack {
-                // ⌘ + scroll wheel zooms, anchored at the cursor. The catcher
-                // is click-transparent — it only consumes scroll events with
-                // Command held while the cursor is over the canvas.
-                ScrollWheelZoomCatcher { deltaY, location in
-                    zoomBy(deltaY: deltaY, at: location, in: proxy.size)
-                }
+                // Two-finger scroll pans; ⌘ + scroll zooms, anchored at the
+                // cursor. The catcher is click-transparent, so dragging empty
+                // space still pans as well.
+                ScrollWheelCatcher(
+                    onPan: { delta in
+                        viewportOffset.width += delta.width
+                        viewportOffset.height += delta.height
+                    },
+                    onZoom: { deltaY, location in
+                        zoomBy(deltaY: deltaY, at: location, in: proxy.size)
+                    }
+                )
 
                 // Infinite dot grid background — the visual cue that the
                 // canvas has no edges
@@ -756,29 +786,46 @@ struct ProductBoardCanvas: View {
     }
 }
 
-// MARK: - ⌘ + scroll wheel zoom catcher
+// MARK: - Scroll wheel catcher — two-finger pan, ⌘ + scroll zoom
 //
 // SwiftUI exposes no scroll-wheel events on macOS, so this representable
 // anchors an NSView in the canvas purely for geometry + lifecycle and
 // installs a local event monitor. The view is click-transparent (hitTest
 // returns nil) so every SwiftUI gesture — pan, tap, drag, drop — is
-// untouched. The monitor consumes a scroll event only when Command is held
-// AND the cursor is inside the canvas bounds; everything else passes through.
+// untouched. The monitor consumes a scroll event only while the cursor is
+// inside the canvas bounds; everything else passes through.
+//
+// Two-finger scroll pans and Command-scroll zooms, which is how every other
+// canvas on the Mac behaves. Dragging empty space still pans as well — the
+// drag gesture is untouched, so both work and neither is the only way.
+// Panning only by dragging is the thing that made this board feel stiff:
+// it means letting go of whatever you were doing in order to move.
 
-private struct ScrollWheelZoomCatcher: NSViewRepresentable {
+private struct ScrollWheelCatcher: NSViewRepresentable {
+    let onPan: (_ delta: CGSize) -> Void
     let onZoom: (_ deltaY: CGFloat, _ location: CGPoint) -> Void
 
     func makeNSView(context: Context) -> CatcherView {
         let view = CatcherView()
+        view.onPan = onPan
         view.onZoom = onZoom
         return view
     }
 
+    /// SwiftUI hands over fresh closures on every re-render. Replacing both is
+    /// what stops the monitor calling into a stale binding and the board
+    /// quietly going dead after the first state change.
     func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.onPan = onPan
         nsView.onZoom = onZoom
     }
 
     final class CatcherView: NSView {
+        /// A mouse wheel reports lines; a trackpad reports points. Without
+        /// this, a wheel click would nudge the board by one pixel.
+        private static let pointsPerLine: CGFloat = 16
+
+        var onPan: ((CGSize) -> Void)?
         var onZoom: ((CGFloat, CGPoint) -> Void)?
         private var monitor: Any?
 
@@ -801,14 +848,33 @@ private struct ScrollWheelZoomCatcher: NSViewRepresentable {
         private func installMonitorIfNeeded() {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                // Passthrough is the default: this consumes only a scroll that
+                // unambiguously belongs to this canvas, in this window, under
+                // this cursor. Another window, a hidden board, a sidebar, a
+                // popover — somebody else's event.
                 guard let self,
                       let window = self.window,
                       event.window === window,
-                      event.modifierFlags.contains(.command)
+                      !self.isHiddenOrHasHiddenAncestor,
+                      self.bounds.width > 0, self.bounds.height > 0
                 else { return event }
+
                 let local = self.convert(event.locationInWindow, from: nil)
                 guard self.bounds.contains(local) else { return event }
-                self.onZoom?(event.scrollingDeltaY, local)
+
+                let deltaX = event.scrollingDeltaX
+                let deltaY = event.scrollingDeltaY
+                guard deltaX != 0 || deltaY != 0 else { return event }
+
+                if event.modifierFlags.contains(.command) {
+                    self.onZoom?(deltaY, local)
+                } else {
+                    // Sign passes through unchanged: with natural scrolling, a
+                    // positive delta means the board should follow the fingers,
+                    // which is exactly `offset += delta`.
+                    let scale = event.hasPreciseScrollingDeltas ? 1 : Self.pointsPerLine
+                    self.onPan?(CGSize(width: deltaX * scale, height: deltaY * scale))
+                }
                 return nil   // consumed — don't let anything scroll underneath
             }
         }
@@ -988,6 +1054,21 @@ private struct FreeformNoteCard: View {
                         .lineLimit(6)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            // Attribution — the .board format records who wrote every node,
+            // and an agent's work should read as an agent's work. Humans get
+            // no badge; the board is Andrew's by default.
+            if let author = node.author, author.hasPrefix("agent:") {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color(red: 0.80, green: 0.36, blue: 0.16))
+                        .frame(width: 5, height: 5)
+                    Text(String(author.dropFirst("agent:".count)))
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .foregroundColor(Self.ink.opacity(0.45))
+                }
+                .padding(.top, 2)
             }
         }
         .padding(12)
@@ -1242,15 +1323,50 @@ struct ProductBoardView: View {
     @EnvironmentObject private var threadStore: ThreadStore
 
     private var logoImage: NSImage? {
-        guard let url = Bundle.module.url(forResource: board.logoResource, withExtension: "png") else {
+        guard let url = ThrawnResources.url(forResource: board.logoResource, withExtension: "png") else {
             return nil
         }
         return NSImage(contentsOf: url)
     }
 
+    /// Which half of the panel is showing. Chat is the default: the board is
+    /// one click away above, so the space below is better spent on the
+    /// conversation than on a list of every thread in the system.
+    @State private var mode: PanelMode = .chat
+
+    enum PanelMode: String, CaseIterable {
+        case chat
+        case threads
+
+        var label: String {
+            switch self {
+            case .chat:    return "CHAT"
+            case .threads: return "THREADS"
+            }
+        }
+    }
+
     /// Most recently updated first — re-sorts live as threads change.
     private var sortedThreads: [ChatThread] {
         threadStore.threads.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Only this board's conversations, newest first.
+    private var boardThreads: [ChatThread] {
+        sortedThreads.filter(belongsToThisBoard)
+    }
+
+    /// A thread belongs to this board if it was stamped with it, and otherwise
+    /// if the keyword guess points here.
+    ///
+    /// The stamp wins outright when present — it records what was actually on
+    /// screen when the thread was started, where the guess only records what
+    /// words happened to appear. The guess still earns its place: every thread
+    /// from before the stamp existed has nothing else to go on, and dropping
+    /// them would empty this list of all the history worth reading.
+    private func belongsToThisBoard(_ thread: ChatThread) -> Bool {
+        if let stamped = thread.boardID { return stamped == board }
+        return Self.affiliation(for: thread)?.boardID == board
     }
 
     var body: some View {
@@ -1308,12 +1424,9 @@ struct ProductBoardView: View {
                 Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
             }
 
-            // Live thread feed
-            HStack {
-                Text("THREADS · MOST RECENT FIRST")
-                    .font(.system(size: 8.5, weight: .black, design: .monospaced))
-                    .tracking(1.8)
-                    .foregroundColor(.white.opacity(0.34))
+            // Chat by default; this board's own threads on demand.
+            HStack(spacing: 10) {
+                modeToggle
                 Spacer()
                 if threadStore.unreadThreadCount > 0 {
                     HStack(spacing: 5) {
@@ -1332,37 +1445,112 @@ struct ProductBoardView: View {
             .padding(.top, 12)
             .padding(.bottom, 6)
 
-            if sortedThreads.isEmpty {
-                VStack(spacing: 10) {
-                    Spacer()
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 26, weight: .medium))
-                        .foregroundColor(.white.opacity(0.22))
-                    Text("No threads yet. Hit Command to start one with Thrawn.")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundColor(.white.opacity(0.40))
-                    Spacer()
+            switch mode {
+            case .chat:
+                if sortedThreads.isEmpty {
+                    emptyState("No threads yet. Hit Command to start one with Thrawn.")
+                } else {
+                    ThreadCardFeed(threads: sortedThreads)
                 }
-                .frame(maxWidth: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(sortedThreads) { thread in
-                            BoardThreadRow(
-                                thread: thread,
-                                affiliation: Self.affiliation(for: thread)
-                            ) {
-                                openThread(thread)
+
+            case .threads:
+                if boardThreads.isEmpty {
+                    emptyState("Nothing on \(board.displayName) yet. Threads started while this board is open are filed here.")
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(boardThreads) { thread in
+                                BoardThreadRow(
+                                    thread: thread,
+                                    affiliation: Self.affiliation(for: thread)
+                                ) {
+                                    openThread(thread)
+                                }
                             }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.obsidian.opacity(0.55))
+        // Anything started from here is about this project, so record that on
+        // the thread rather than inferring it from the words later.
+        .onAppear { threadStore.activeBoardID = board }
+        .onChange(of: board) { threadStore.activeBoardID = $0 }
+        .onDisappear { threadStore.activeBoardID = nil }
+        .background(
+            // Command-T flips the panel. Zero-sized and hidden so it is a key
+            // binding and nothing else — the visible control is the toggle.
+            Button("") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    mode = mode == .chat ? .threads : .chat
+                }
+            }
+            .keyboardShortcut("t", modifiers: .command)
+            .buttonStyle(.plain)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        )
+    }
+
+    // MARK: Panel chrome
+
+    /// Chat | Threads. A segmented control rather than something on the board
+    /// card, because that card's click already means "open the board" and one
+    /// control should mean one thing.
+    private var modeToggle: some View {
+        HStack(spacing: 0) {
+            ForEach(PanelMode.allCases, id: \.self) { option in
+                let isOn = mode == option
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) { mode = option }
+                } label: {
+                    Text(option.label)
+                        .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                        .tracking(1.6)
+                        .foregroundColor(isOn ? .white.opacity(0.92) : .white.opacity(0.34))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(isOn ? board.accentColor.opacity(0.26) : Color.clear)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .stroke(isOn ? board.accentColor.opacity(0.55) : Color.clear,
+                                                lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(option == .chat
+                      ? "Every recent conversation (⌘T)"
+                      : "Only threads about \(board.displayName), newest first (⌘T)")
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+    }
+
+    private func emptyState(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundColor(.white.opacity(0.22))
+            Text(message)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.40))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func openThread(_ thread: ChatThread) {
@@ -1378,6 +1566,10 @@ struct ProductBoardView: View {
     struct Affiliation {
         let label: String
         let color: Color
+        /// The board this tag corresponds to, when it is one of ours. Some
+        /// tags name a project that has no board yet, so this stays optional
+        /// rather than comparing display names and hoping they match.
+        var boardID: ProductBoardID? = nil
     }
 
     /// Best-effort tag for which product / company / project a thread is
@@ -1390,13 +1582,13 @@ struct ProductBoardView: View {
             corpus.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         )
         if corpus.contains("spas") {
-            return Affiliation(label: "SPAS 360", color: ProductBoardID.spas360.accentColor)
+            return Affiliation(label: "SPAS 360", color: ProductBoardID.spas360.accentColor, boardID: .spas360)
         }
         if corpus.contains("hit zero") || corpus.contains("hitzero") {
-            return Affiliation(label: "HIT ZERO", color: ProductBoardID.hitZero.accentColor)
+            return Affiliation(label: "HIT ZERO", color: ProductBoardID.hitZero.accentColor, boardID: .hitZero)
         }
         if corpus.contains("sandpro") || words.contains("omp") || corpus.contains("objectivetracker") {
-            return Affiliation(label: "SANDPRO OMP", color: ProductBoardID.sandProOMP.accentColor)
+            return Affiliation(label: "SANDPRO OMP", color: ProductBoardID.sandProOMP.accentColor, boardID: .sandProOMP)
         }
         if words.contains("cyclops") {
             return Affiliation(label: "CYCLOPS", color: Color(red: 0.02, green: 0.71, blue: 0.83))
@@ -1508,6 +1700,9 @@ extension ProductBoardID {
         case .spas360:    return Color(red: 0.34, green: 0.72, blue: 0.96)
         case .hitZero:    return Color(red: 0.94, green: 0.28, blue: 0.42)
         case .sandProOMP: return Color.ndaiGreen
+        // Chrome — the substance of the NDAI logo itself. The client boards
+        // wear their own brand colour; the house board wears the house metal.
+        case .ndai:       return Color(red: 0.62, green: 0.64, blue: 0.68)
         }
     }
 }
