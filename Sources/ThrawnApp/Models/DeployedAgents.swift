@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 
 // MARK: - Deployed Agents
@@ -131,9 +132,78 @@ enum DeployedAgentPresence: Equatable {
 
 // MARK: - Client
 
-/// HTTP client for one deployed agent: Supabase password grant, the status
-/// card, and the agent run endpoint. Stateless besides the cached token.
-final class DeployedAgentClient {
+protocol DeployedAgentCredentialStore {
+    func password(for config: DeployedAgentConfig) -> String?
+    func refreshToken(for config: DeployedAgentConfig) -> String?
+    func saveRefreshToken(_ token: String, for config: DeployedAgentConfig) throws
+    func clearRefreshToken(for config: DeployedAgentConfig)
+}
+
+final class DeployedAgentKeychainStore: DeployedAgentCredentialStore {
+    private func read(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let value = String(data: data, encoding: .utf8),
+              !value.isEmpty
+        else { return nil }
+        return value
+    }
+
+    private func refreshService(for config: DeployedAgentConfig) -> String {
+        "\(config.keychainService).refresh-token"
+    }
+
+    func password(for config: DeployedAgentConfig) -> String? {
+        read(service: config.keychainService, account: config.email)
+    }
+
+    func refreshToken(for config: DeployedAgentConfig) -> String? {
+        read(service: refreshService(for: config), account: config.email)
+    }
+
+    func saveRefreshToken(_ token: String, for config: DeployedAgentConfig) throws {
+        guard let data = token.data(using: .utf8), !token.isEmpty else { return }
+        let key: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: refreshService(for: config),
+            kSecAttrAccount as String: config.email,
+        ]
+        let status = SecItemUpdate(key as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = key
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            let addStatus = SecItemAdd(item as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw NSError(domain: NSOSStatusErrorDomain, code: Int(addStatus))
+            }
+        } else if status != errSecSuccess {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
+    func clearRefreshToken(for config: DeployedAgentConfig) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: refreshService(for: config),
+            kSecAttrAccount as String: config.email,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// HTTP client for one deployed agent. The first connection uses the existing
+/// Keychain password once; every later renewal rotates a persisted Supabase
+/// refresh token, so presence polling cannot manufacture sessions all day.
+actor DeployedAgentClient {
 
     struct RunReply {
         let text: String
@@ -159,92 +229,131 @@ final class DeployedAgentClient {
         }
     }
 
-    private let config: DeployedAgentConfig
-    private var accessToken: String?
-    private var tokenAcquiredAt: Date?
-    /// Supabase access tokens live 60 minutes; refresh with headroom so a
-    /// long agent run never straddles an expiry.
-    private let tokenLifetime: TimeInterval = 50 * 60
-    private let lock = NSLock()
-
-    init(config: DeployedAgentConfig) {
-        self.config = config
+    private enum GrantError: Error {
+        case rejected(String)
+        case malformedResponse
     }
 
-    // MARK: Keychain
+    private struct AuthTokens: Decodable {
+        let accessToken: String
+        let refreshToken: String?
+        let expiresIn: TimeInterval?
 
-    private func keychainPassword() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: config.keychainService,
-            kSecAttrAccount as String: config.email,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let password = String(data: data, encoding: .utf8),
-              !password.isEmpty
-        else { return nil }
-        return password
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+        }
+    }
+
+    private let config: DeployedAgentConfig
+    private let session: URLSession
+    private let credentials: DeployedAgentCredentialStore
+    private var accessToken: String?
+    private var tokenExpiresAt: Date?
+    private var authTask: Task<String, Error>?
+    private let expiryHeadroom: TimeInterval = 5 * 60
+
+    init(
+        config: DeployedAgentConfig,
+        session: URLSession = .shared,
+        credentials: DeployedAgentCredentialStore = DeployedAgentKeychainStore()
+    ) {
+        self.config = config
+        self.session = session
+        self.credentials = credentials
     }
 
     // MARK: Auth
 
     private func cachedToken() -> String? {
-        lock.lock(); defer { lock.unlock() }
-        guard let accessToken, let tokenAcquiredAt,
-              Date().timeIntervalSince(tokenAcquiredAt) < tokenLifetime
+        guard let accessToken, let tokenExpiresAt,
+              tokenExpiresAt.timeIntervalSinceNow > expiryHeadroom
         else { return nil }
         return accessToken
     }
 
-    private func storeToken(_ token: String) {
-        lock.lock(); defer { lock.unlock() }
-        accessToken = token
-        tokenAcquiredAt = Date()
+    private func accept(_ tokens: AuthTokens) throws -> String {
+        accessToken = tokens.accessToken
+        tokenExpiresAt = Date().addingTimeInterval(max(tokens.expiresIn ?? 3600, 600))
+        if let refresh = tokens.refreshToken, !refresh.isEmpty {
+            try credentials.saveRefreshToken(refresh, for: config)
+        }
+        return tokens.accessToken
     }
 
-    /// Invalidate the cache so the next call re-authenticates — used after a
-    /// 401, which means the token died early (password change, session purge).
-    private func dropToken() {
-        lock.lock(); defer { lock.unlock() }
+    /// Keep the refresh credential on a 401. The next attempt rotates that
+    /// same session instead of creating a replacement session.
+    private func dropAccessToken() {
         accessToken = nil
-        tokenAcquiredAt = nil
+        tokenExpiresAt = nil
     }
 
-    private func login() async throws -> String {
-        guard let password = keychainPassword() else { throw ClientError.missingCredentials }
-
+    private func grant(kind: String, body: [String: String]) async throws -> AuthTokens {
         var request = URLRequest(
             url: config.supabaseURL.appendingPathComponent("auth/v1/token"),
             timeoutInterval: 15
         )
-        request.url = URL(string: request.url!.absoluteString + "?grant_type=password")
+        request.url = URL(string: request.url!.absoluteString + "?grant_type=\(kind)")
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(config.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "email": config.email,
-            "password": password,
-        ])
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["access_token"] as? String
-        else {
+        let (data, response) = try await session.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 400 || code == 401 {
             let detail = String(data: data, encoding: .utf8)?.prefix(200) ?? "no detail"
-            throw ClientError.authFailed(String(detail))
+            throw GrantError.rejected(String(detail))
         }
-        storeToken(token)
-        return token
+        guard code == 200 else { throw ClientError.authFailed("Auth endpoint returned HTTP \(code)") }
+        guard let tokens = try? JSONDecoder().decode(AuthTokens.self, from: data),
+              !tokens.accessToken.isEmpty
+        else { throw GrantError.malformedResponse }
+        return tokens
+    }
+
+    private func authenticate() async throws -> String {
+        if let refreshToken = credentials.refreshToken(for: config) {
+            do {
+                return try accept(await grant(kind: "refresh_token", body: ["refresh_token": refreshToken]))
+            } catch GrantError.rejected {
+                // A revoked/rotated-away refresh credential is the sole reason
+                // to fall back to password. Network and 5xx errors must not
+                // create a new session as a side effect of an outage.
+                credentials.clearRefreshToken(for: config)
+            }
+        }
+
+        guard let password = credentials.password(for: config) else {
+            throw ClientError.missingCredentials
+        }
+        do {
+            return try accept(await grant(kind: "password", body: [
+                "email": config.email,
+                "password": password,
+            ]))
+        } catch GrantError.rejected(let detail) {
+            throw ClientError.authFailed(detail)
+        } catch GrantError.malformedResponse {
+            throw ClientError.authFailed("Auth response was incomplete")
+        }
     }
 
     private func validToken() async throws -> String {
         if let token = cachedToken() { return token }
-        return try await login()
+        if let authTask { return try await authTask.value }
+
+        let task = Task { try await self.authenticate() }
+        authTask = task
+        do {
+            let token = try await task.value
+            authTask = nil
+            return token
+        } catch {
+            authTask = nil
+            throw error
+        }
     }
 
     // MARK: Endpoints
@@ -259,7 +368,7 @@ final class DeployedAgentClient {
         let providersAvailable: [String: Bool]
     }
 
-    func status() async throws -> StatusCard {
+    func status(retryAfterUnauthorized: Bool = true) async throws -> StatusCard {
         let token = try await validToken()
         var request = URLRequest(
             url: config.baseURL.appendingPathComponent("api/agent/status"),
@@ -267,14 +376,15 @@ final class DeployedAgentClient {
         )
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 {
-            // Token died early — one fresh login, one retry, then give up
-            // loudly. A silent retry loop would mask a real outage.
-            dropToken()
-            _ = try await login()
-            return try await status()
+            guard retryAfterUnauthorized else {
+                throw ClientError.authFailed("The deployed app rejected a refreshed session")
+            }
+            dropAccessToken()
+            _ = try await validToken()
+            return try await status(retryAfterUnauthorized: false)
         }
         guard code == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -302,7 +412,7 @@ final class DeployedAgentClient {
         var model: String?
     }
 
-    func fetchConfig() async throws -> ConfigRow? {
+    func fetchConfig(retryAfterUnauthorized: Bool = true) async throws -> ConfigRow? {
         let token = try await validToken()
         var request = URLRequest(
             url: config.supabaseURL.appendingPathComponent("rest/v1/agent_config"),
@@ -311,14 +421,20 @@ final class DeployedAgentClient {
         request.url = URL(string: request.url!.absoluteString + "?select=org_id,enabled,provider,model&limit=1")
         request.setValue(config.supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        let (data, response) = try await session.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401, retryAfterUnauthorized {
+            dropAccessToken()
+            _ = try await validToken()
+            return try await fetchConfig(retryAfterUnauthorized: false)
+        }
+        guard code == 200 else {
             throw ClientError.requestFailed("Config read failed")
         }
         return (try? JSONDecoder().decode([ConfigRow].self, from: data))?.first
     }
 
-    func updateConfig(orgID: String, enabled: Bool?, provider: String?, model: String?) async throws {
+    func updateConfig(orgID: String, enabled: Bool?, provider: String?, model: String?, retryAfterUnauthorized: Bool = true) async throws {
         let token = try await validToken()
         var request = URLRequest(
             url: config.supabaseURL.appendingPathComponent("rest/v1/agent_config"),
@@ -335,8 +451,19 @@ final class DeployedAgentClient {
         if let provider { body["provider"] = provider }
         if let model { body["model"] = model }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401, retryAfterUnauthorized {
+            dropAccessToken()
+            _ = try await validToken()
+            return try await updateConfig(
+                orgID: orgID,
+                enabled: enabled,
+                provider: provider,
+                model: model,
+                retryAfterUnauthorized: false
+            )
+        }
         // PostgREST returns the changed rows; zero rows back means RLS
         // silently filtered the write — surface that, never pretend it landed.
         guard code == 200,
@@ -347,7 +474,7 @@ final class DeployedAgentClient {
         }
     }
 
-    func run(message: String, threadID: String?) async throws -> RunReply {
+    func run(message: String, threadID: String?, retryAfterUnauthorized: Bool = true) async throws -> RunReply {
         let token = try await validToken()
         var request = URLRequest(
             url: config.baseURL.appendingPathComponent("api/agent/run"),
@@ -361,12 +488,15 @@ final class DeployedAgentClient {
         if let threadID { body["thread_id"] = threadID }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 {
-            dropToken()
-            _ = try await login()
-            return try await run(message: message, threadID: threadID)
+            guard retryAfterUnauthorized else {
+                throw ClientError.authFailed("The deployed app rejected a refreshed session")
+            }
+            dropAccessToken()
+            _ = try await validToken()
+            return try await run(message: message, threadID: threadID, retryAfterUnauthorized: false)
         }
         guard code == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
